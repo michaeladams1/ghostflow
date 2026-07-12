@@ -25,17 +25,10 @@
 import { callClaudeWithTools, callGPTWithTools, callGrokWithTools } from "./aiProviders.js";
 import { renderMultiBriefing } from "./compress.js";
 import { ruleVocabularyBlock } from "./vocabulary.js";
+import { extractJsonWithRepair } from "./jsonRepair.js";
 
 const PROVIDERS = { claude: callClaudeWithTools, gpt: callGPTWithTools, grok: callGrokWithTools };
 export const MODEL_IDS = ["claude", "gpt", "grok"];
-
-function extractJson(text) {
-  const cleaned = String(text).replace(/```json/gi, "").replace(/```/g, "").trim();
-  const start = cleaned.indexOf("{");
-  const end = cleaned.lastIndexOf("}");
-  if (start === -1 || end === -1) throw new Error("No JSON object in model response: " + cleaned.slice(0, 200));
-  return JSON.parse(cleaned.slice(start, end + 1));
-}
 
 function buildPrompt(briefing, userNotes) {
   const endpointIds = briefing.endpoints.map((e) => e.id);
@@ -179,7 +172,14 @@ export async function analyzeWithModel(modelId, briefing, userNotes) {
   const fn = PROVIDERS[modelId];
   const { system, user } = buildPrompt(briefing, userNotes);
   const raw = await fn(system, user, [], async () => "no tools");
-  const parsed = extractJson(raw);
+
+  // A 29-feed review is thousands of words of free text, and ONE stray character
+  // used to throw the whole thing away. The reasoning is already done and paid
+  // for — repair it rather than discard it.
+  const parsed = await extractJsonWithRepair(raw, {
+    modelId,
+    callModel: (sys, usr) => fn(sys, usr, [], async () => "no tools"),
+  });
 
   const { review, missing } = validateReview(parsed, briefing);
   const tradeable = parsed.verdict === "tradeable";

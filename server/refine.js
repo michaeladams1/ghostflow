@@ -35,6 +35,7 @@
 import { backtestRule, priorSessions } from "./backtest.js";
 import { callClaudeWithTools, callGPTWithTools, callGrokWithTools } from "./aiProviders.js";
 import { ruleVocabularyBlock } from "./vocabulary.js";
+import { extractJsonWithRepair } from "./jsonRepair.js";
 
 // The complete rule vocabulary — all 30 feeds, generated from metrics.js so it
 // can never drift out of sync with what the backtest can actually evaluate.
@@ -46,6 +47,8 @@ const FEED_VOCABULARY = ruleVocabularyBlock();
 const PROVIDERS = { claude: callClaudeWithTools, gpt: callGPTWithTools, grok: callGrokWithTools };
 
 function extractJson(text) {
+  // Kept as a thin sync wrapper for the simple cases; the refinement calls below
+  // use extractJsonWithRepair so a malformed brace can't kill a whole round.
   const cleaned = String(text).replace(/```json/gi, "").replace(/```/g, "").trim();
   const s = cleaned.indexOf("{"), e = cleaned.lastIndexOf("}");
   if (s === -1 || e === -1) throw new Error("No JSON in response: " + cleaned.slice(0, 200));
@@ -195,7 +198,7 @@ export async function refineRule({
       const fixUser = `${result.reason}\n\nYour rule was NOT run. Rewrite it using only the exact feed and metric names above, keeping your intent intact. Respond with only the JSON object.`;
       try {
         const raw = await fn(REFINE_SYSTEM, fixUser, [], async () => "no tools");
-        const rev = extractJson(raw);
+        const rev = await extractJsonWithRepair(raw, { modelId, callModel: (s, u) => fn(s, u, [], async () => "no tools") });
         entry.diagnosis = rev.diagnosis;
         entry.action = "fix_invalid_rule";
         currentRule = rev.revisedRule || null;
@@ -231,7 +234,7 @@ Respond with only the JSON object.`;
     let revision;
     try {
       const raw = await fn(REFINE_SYSTEM, user, [], async () => "no tools");
-      revision = extractJson(raw);
+      revision = await extractJsonWithRepair(raw, { modelId, callModel: (s, u) => fn(s, u, [], async () => "no tools") });
     } catch (err) {
       entry.stopReason = `Refinement call failed: ${err.message}`;
       break;
