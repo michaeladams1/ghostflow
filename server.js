@@ -7,6 +7,8 @@ import { fileURLToPath } from "node:url";
 import { readTrades, appendTrade } from "./server/store.js";
 import { buildTradeDataset } from "./server/tradeData.js";
 import { callClaude, callGPT, callGrok } from "./server/aiProviders.js";
+import { analyzeTradeAllModels } from "./server/analysis.js";
+import { runFridayTestAnalysis } from "./server/testAnalysis.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DIST_DIR = path.join(__dirname, "dist");
@@ -41,6 +43,13 @@ app.post("/api/trades", async (req, res) => {
   }
   try {
     const dataset = await buildTradeDataset({ symbol, entryDate, exitDate });
+    let analysis = null, analysisStatus = "failed";
+    try {
+      analysis = await analyzeTradeAllModels({ symbol: symbol.toUpperCase(), direction, entryDate, exitDate }, dataset);
+      analysisStatus = "complete";
+    } catch (err) {
+      console.error("AI analysis failed for", symbol, ":", err.message);
+    }
     const trade = {
       id: "t" + Date.now(),
       symbol: symbol.toUpperCase(),
@@ -48,8 +57,9 @@ app.post("/api/trades", async (req, res) => {
       outcome,
       entryDate, exitDate, entryPrice, exitPrice, notes,
       loggedAt: new Date().toISOString(),
-      ...dataset, // prices, entryIdx, exitIdx, rawFlow, dataFetchOk
-      analysisStatus: "pending", // AI orchestration not built yet — see docs/architecture.md
+      ...dataset, // prices, entryIdx, exitIdx, bars, rawFlow, dataFetchOk
+      analysis, // null if analysis failed — see analysisStatus
+      analysisStatus,
     };
     appendTrade(trade);
     res.status(201).json(trade);
@@ -65,7 +75,7 @@ app.get("*", (req, res) => res.sendFile(path.join(DIST_DIR, "index.html")));
 
 app.listen(PORT, () => {
   console.log(`GHOSTFLOW serving on port ${PORT}${!USER || !PASS ? " (WARNING: no auth configured)" : " (auth enabled)"}`);
-  runAIProviderHealthCheck(); // fire-and-forget, doesn't block startup
+  runAIProviderHealthCheck().then(() => runFridayTestAnalysis()); // TEMPORARY — remove after reviewing this test run
 });
 
 // One-time startup check confirming each AI provider key actually works.

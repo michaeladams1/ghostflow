@@ -27,8 +27,9 @@ function parseDatabentoOHLCV(jsonLinesText) {
     .filter((line) => line.trim())
     .map((line) => JSON.parse(line))
     .map((rec) => ({
+      // Header fields (including the timestamp) are nested under "hd".
       // ts_event is nanoseconds since epoch; convert to a plain date string.
-      date: new Date(Number(rec.ts_event) / 1e6).toISOString().slice(0, 10),
+      date: new Date(Number(rec.hd.ts_event) / 1e6).toISOString().slice(0, 10),
       close: descalePrice(rec.close),
       volume: rec.volume,
     }));
@@ -59,9 +60,9 @@ export async function buildTradeDataset({ symbol, entryDate, exitDate }) {
     }),
   ]);
 
-  let prices = [], entryIdx = 0, exitIdx = 0;
+  let prices = [], entryIdx = 0, exitIdx = 0, bars = null;
   if (ohlcvText) {
-    const bars = parseDatabentoOHLCV(ohlcvText);
+    bars = parseDatabentoOHLCV(ohlcvText);
     prices = bars.map((b) => b.close);
     entryIdx = closestIndex(bars, entryDate);
     exitIdx = exitDate ? closestIndex(bars, exitDate) : Math.min(entryIdx + 3, bars.length - 1);
@@ -71,7 +72,8 @@ export async function buildTradeDataset({ symbol, entryDate, exitDate }) {
     prices,
     entryIdx,
     exitIdx,
-    rawFlow: flowData, // kept for the future AI orchestration step, not used in the UI yet
+    bars, // full {date, close, volume} records — used by the AI analysis step
+    rawFlow: flowData,
     dataFetchOk: { databento: !!ohlcvText, quantData: !!flowData },
   };
 }
