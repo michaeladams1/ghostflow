@@ -39,8 +39,9 @@ Build a system where three AI models (Claude, GPT, Grok) each independently stud
 - [x] **Trade Log UI (prototype)** — mock data, filterable by win/near-miss/low-info
 - [x] **Trade Detail UI (prototype)** — 4 fully independent model tabs, each with its own chart, indicator overlay, verdict, and scoped chat
 - [x] **Data vendor integration** — Quant Data + Databento wired into a real `/api/trades` endpoint; logging a trade now pulls real price history + options flow (storage is a temporary JSON file — see note below)
+- [x] **AI provider connection layer** — `server/aiProviders.js` has working Claude/GPT/Grok client functions + a connectivity test script (`server/testAIProviders.js`). This is just "can we talk to each API" — the actual per-trade analysis prompts and structured-output parsing are still not built.
 - [ ] **Thesis document schema** — backing data structure (UI already assumes this shape)
-- [ ] **AI analyst orchestration** — real calls to Claude, GPT, Grok APIs, each with tool access to pull data and its own prior thesis as context
+- [ ] **AI analyst orchestration** — real per-trade analysis: call each model with the trade's pulled data + its own prior thesis, parse into the verdict/confidence/flags shape the UI expects
 - [ ] **Individual knowledge base storage** — one growing document/record per AI
 - [ ] **Merge/synthesis process** — job that compares the 3 theses and produces a shared version
 - [ ] **Real per-trade chat** — replace the mock keyword-matched responder with a live scoped API call per model

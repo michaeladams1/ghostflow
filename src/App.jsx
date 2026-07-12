@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import {
   Plus, X, CheckCircle2, XCircle, AlertTriangle, ChevronRight,
-  Users, FileText, LayoutDashboard, Minus, Send, MessageSquare, Clock, Copy
+  Users, FileText, LayoutDashboard, Minus, Send, MessageSquare, Clock, Copy, Settings, ExternalLink
 } from "lucide-react";
 
 // ---------- Design tokens ----------
@@ -12,6 +12,12 @@ const MODEL_META = {
   combined: { name: "Combined", accent: "text-zinc-200",    ring: "ring-zinc-300/30",    bg: "bg-zinc-300",    dot: "bg-zinc-300" },
 };
 const MODEL_ORDER = ["claude", "gpt", "grok", "combined"];
+
+const BILLING_LINKS = [
+  { name: "OpenAI (GPT)", url: "https://platform.openai.com/settings/organization/billing/overview", accent: "text-emerald-400", dot: "bg-emerald-400" },
+  { name: "Anthropic (Claude)", url: "https://platform.claude.com/dashboard", accent: "text-amber-400", dot: "bg-amber-400" },
+  { name: "xAI (Grok)", url: "https://console.x.ai/team/9213b43e-e5d1-46a8-a0f7-6e18f16e8fe1", accent: "text-violet-400", dot: "bg-violet-400" },
+];
 
 const INDICATOR_META = {
   volume:   { label: "Volume",         color: "#38bdf8" },
@@ -874,6 +880,30 @@ function ThesesTab({ trades, onOpen }) {
   );
 }
 
+// ---------- Tabs: Settings ----------
+function SettingsTab() {
+  return (
+    <div className="max-w-xl">
+      <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+        <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono mb-1">AI provider billing</div>
+        <p className="text-xs text-zinc-500 mb-3">Quick links to top up token balance for each model this system calls.</p>
+        <div className="space-y-2">
+          {BILLING_LINKS.map((l) => (
+            <a key={l.url} href={l.url} target="_blank" rel="noopener noreferrer"
+              className="flex items-center justify-between px-3 py-2.5 rounded bg-zinc-950 hover:bg-black border border-zinc-800">
+              <span className="flex items-center gap-2 text-sm">
+                <span className={`w-2 h-2 rounded-full ${l.dot}`} />
+                <span className={l.accent}>{l.name}</span>
+              </span>
+              <ExternalLink size={14} className="text-zinc-600" />
+            </a>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ---------- App ----------
 export default function App() {
   const [tab, setTab] = useState("log");
@@ -928,6 +958,7 @@ export default function App() {
     { id: "log", label: "Trade Log", Icon: FileText },
     { id: "performance", label: "Performance", Icon: LayoutDashboard },
     { id: "theses", label: "Theses", Icon: Users },
+    { id: "settings", label: "Settings", Icon: Settings },
   ];
 
   return (
@@ -954,6 +985,7 @@ export default function App() {
         {tab === "log" && <TradeLogTab trades={trades} onOpen={setOpenTradeId} onAdd={() => setShowForm(true)} />}
         {tab === "performance" && <PerformanceTab trades={trades} onOpen={setOpenTradeId} />}
         {tab === "theses" && <ThesesTab trades={trades} onOpen={setOpenTradeId} />}
+        {tab === "settings" && <SettingsTab />}
       </div>
 
       {openTrade && <TradeDetail trade={openTrade} onClose={() => setOpenTradeId(null)} />}
