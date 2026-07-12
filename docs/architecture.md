@@ -39,9 +39,11 @@ Build a system where three AI models (Claude, GPT, Grok) each independently stud
 - [x] **Trade Log UI (prototype)** — mock data, filterable by win/near-miss/low-info
 - [x] **Trade Detail UI (prototype)** — 4 fully independent model tabs, each with its own chart, indicator overlay, verdict, and scoped chat
 - [x] **Data vendor integration** — Quant Data + Databento wired into a real `/api/trades` endpoint; logging a trade now pulls real price history + options flow (storage is a temporary JSON file — see note below)
-- [x] **AI provider connection layer** — `server/aiProviders.js` has working Claude/GPT/Grok client functions + a connectivity test script (`server/testAIProviders.js`). This is just "can we talk to each API" — the actual per-trade analysis prompts and structured-output parsing are still not built.
-- [ ] **Thesis document schema** — backing data structure (UI already assumes this shape)
-- [ ] **AI analyst orchestration** — real per-trade analysis: call each model with the trade's pulled data + its own prior thesis, parse into the verdict/confidence/flags shape the UI expects
+- [x] **AI provider connection layer** — `server/aiProviders.js` has working Claude/GPT/Grok client functions + a connectivity test script (`server/testAIProviders.js`).
+- [x] **AI analyst orchestration (v1)** — `server/analysis.js` builds a real per-trade prompt (real price/volume bars + real options flow), calls all 3 models, and combines their views without treating a failed/crashed model as a real dissenting vote. First real test: META, 2026-06-25 to 2026-07-10 (+22.7%, verified against public reporting) — GPT returned signal/74%, Grok returned noise/0% with real grounded reasoning, Claude initially failed (empty response due to too-small max_tokens, now fixed). Mock example trades have been removed from the UI; the Trade Log now shows only real trades from `/api/trades`.
+- [x] **Real trade seeding** — `server/testAnalysis.js` seeds the verified META trade into the store on startup, idempotently (skips if already present, so restarts don't duplicate or re-spend API credits). This is a stopgap until real persistent storage exists — see limitation below.
+- [ ] **Thesis document schema** — persisted, evolving per-model thesis documents (Setup Conditions, Confidence, Counter-Examples) that accumulate across trades. Current analysis treats every trade independently with no memory of prior trades — this is the next real gap.
+- [ ] **Near-miss vs low-info distinction for losses** — requires the thesis document above to compare a loss against; not implemented in v1 of analysis.js.
 - [ ] **Individual knowledge base storage** — one growing document/record per AI
 - [ ] **Merge/synthesis process** — job that compares the 3 theses and produces a shared version
 - [ ] **Real per-trade chat** — replace the mock keyword-matched responder with a live scoped API call per model

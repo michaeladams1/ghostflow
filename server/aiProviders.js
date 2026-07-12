@@ -28,14 +28,20 @@ export async function callClaude(prompt, { system } = {}) {
     },
     body: JSON.stringify({
       model: ANTHROPIC_MODEL,
-      max_tokens: 1024,
+      max_tokens: 4096, // bumped from 1024 — with a reasoning-heavy model, a small
+      // budget can be entirely consumed before any final text is produced,
+      // yielding an empty response rather than a truncated one.
       ...(system ? { system } : {}),
       messages: [{ role: "user", content: prompt }],
     }),
   });
   if (!res.ok) throw new Error(`Claude error ${res.status}: ${await res.text()}`);
   const data = await res.json();
-  return data.content.map((b) => b.text || "").join("");
+  const text = data.content.map((b) => b.text || "").join("");
+  if (!text) {
+    throw new Error(`Claude returned no text content (stop_reason: ${data.stop_reason}, blocks: ${data.content.map((b) => b.type).join(",")})`);
+  }
+  return text;
 }
 
 export async function callGPT(prompt, { system } = {}) {

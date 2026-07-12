@@ -80,14 +80,18 @@ export async function analyzeTradeWithModel(modelId, trade, dataset) {
   };
 }
 
-// Combines the 3 individual views WITHOUT blending away disagreement.
-// A claim only appears in the combined flags if 2+ analysts independently
-// agree on the verdict; the text explicitly names any dissenting analyst.
+// Combines the 3 individual views WITHOUT blending away disagreement, and
+// WITHOUT treating a failed/crashed analyst as if it had cast a real "noise"
+// vote — a model that errored out has no opinion at all, and must be
+// excluded from the agreement count rather than silently counted as dissent.
 function computeCombinedAnalysis(results, dataset) {
-  const signalModels = MODEL_IDS.filter((m) => results[m].verdict === "signal");
-  const verdict = signalModels.length >= 2 ? "signal" : "noise";
-  const agreeingModels = MODEL_IDS.filter((m) => results[m].verdict === verdict);
-  const disagreeingModels = MODEL_IDS.filter((m) => results[m].verdict !== verdict);
+  const respondingModels = MODEL_IDS.filter((m) => !results[m].failed);
+  const failedModels = MODEL_IDS.filter((m) => results[m].failed);
+
+  const signalModels = respondingModels.filter((m) => results[m].verdict === "signal");
+  const verdict = signalModels.length * 2 >= respondingModels.length && signalModels.length > 0 ? "signal" : "noise";
+  const agreeingModels = respondingModels.filter((m) => results[m].verdict === verdict);
+  const disagreeingModels = respondingModels.filter((m) => results[m].verdict !== verdict);
 
   const confidence = agreeingModels.length
     ? Math.round(agreeingModels.reduce((sum, m) => sum + results[m].confidence, 0) / agreeingModels.length)
@@ -101,14 +105,19 @@ function computeCombinedAnalysis(results, dataset) {
     });
   });
 
-  const text = `${agreeingModels.length} of 3 analysts (${agreeingModels.join(", ") || "none"}) agree this trade shows ${verdict === "signal" ? "genuine supporting evidence" : "insufficient evidence to call it a real setup"}.`
-    + (disagreeingModels.length ? ` Disagreement preserved, not blended away: ${disagreeingModels.join(", ")} did not concur.` : " No disagreement on this trade.");
+  let text = respondingModels.length === 0
+    ? "All 3 analysts failed to return an analysis \u2014 no verdict can be formed."
+    : `${agreeingModels.length} of ${respondingModels.length} responding analysts (${agreeingModels.join(", ") || "none"}) agree this trade shows ${verdict === "signal" ? "genuine supporting evidence" : "insufficient evidence to call it a real setup"}.`
+      + (disagreeingModels.length ? ` Disagreement preserved, not blended away: ${disagreeingModels.join(", ")} did not concur.` : " No disagreement among responding analysts.");
+  if (failedModels.length) {
+    text += ` Note: ${failedModels.join(", ")} failed to return an analysis and ${failedModels.length > 1 ? "are" : "is"} excluded from this count, not counted as dissent.`;
+  }
 
   return {
     verdict, confidence, text,
     flags: Array.from(flagMap.values()),
     entryIdx: dataset.entryIdx, exitIdx: dataset.exitIdx,
-    agreement: `${agreeingModels.length}/3`,
+    agreement: `${agreeingModels.length}/${respondingModels.length}`,
   };
 }
 
@@ -117,10 +126,13 @@ export async function analyzeTradeAllModels(trade, dataset) {
   const results = {};
   settled.forEach((r, i) => {
     const m = MODEL_IDS[i];
-    results[m] = r.status === "fulfilled" ? r.value : {
-      verdict: "noise", confidence: 0, entryIdx: dataset.entryIdx, exitIdx: dataset.exitIdx, flags: [],
-      text: `Analysis failed: ${r.reason?.message || "unknown error"}`,
-    };
+    results[m] = r.status === "fulfilled"
+      ? { ...r.value, failed: false }
+      : {
+          verdict: "noise", confidence: 0, entryIdx: dataset.entryIdx, exitIdx: dataset.exitIdx, flags: [],
+          text: `Analysis failed: ${r.reason?.message || "unknown error"}`,
+          failed: true,
+        };
   });
   results.combined = computeCombinedAnalysis(results, dataset);
   return results;

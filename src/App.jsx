@@ -27,152 +27,9 @@ const INDICATOR_META = {
   iv:       { label: "IV",             color: "#4ade80" },
   rs:       { label: "Relative Strength", color: "#22d3ee" },
 };
-const MOCK_SOURCE_NOTE = "Illustrative example \u2014 not a real data pull. Real trades must cite an actual Databento/Quant Data query here.";
-
-// ---------- Mock data ----------
-function wave(base, points, drift, amp, noise = 1) {
-  const arr = [];
-  let v = base;
-  for (let i = 0; i < points; i++) {
-    v += drift + Math.sin(i / 2.3) * amp * 0.3 + (Math.random() - 0.5) * noise;
-    arr.push(Math.round(v * 100) / 100);
-  }
-  return arr;
-}
-
-const MOCK_TRADES = [
-  {
-    id: "t1", symbol: "AAPL", direction: "CALL", status: "win",
-    loggedAt: "Trade #18", entryDate: "2026-05-04", exitDate: "2026-05-22",
-    entryPrice: 187.2, exitPrice: 204.6,
-    prices: wave(184, 22, 0.9, 3), entryIdx: 5, exitIdx: 17,
-    volumeSeries: wave(0.9, 22, 0, 0.15, 0.1).map((v, i) => Math.max(0.3, i === 5 || i === 6 ? v + 1.1 : v)),
-    benchmarkSeries: wave(430, 22, 0.15, 2, 0.6),
-    agreement: "3/3",
-    analysis: {
-      claude: {
-        verdict: "signal", confidence: 82, entryIdx: 5, exitIdx: 17,
-        text: "Base n' Break off the 10/20 EMA on the daily, confirmed by a volume surge 40% above the 20-day average. IV was climbing into the move rather than collapsing, which matched three prior wins in the thesis.",
-        flags: [
-          { idx: 5, type: "volume", label: "Volume vs 20d avg", value: "1.42M shares", baseline: "1.01M shares (20d avg)", source: MOCK_SOURCE_NOTE },
-          { idx: 6, type: "iv", label: "IV expanding into move", value: "38.4% IV", baseline: "31.2% IV (5d prior)", source: MOCK_SOURCE_NOTE },
-        ],
-      },
-      gpt: {
-        verdict: "signal", confidence: 78, entryIdx: 6, exitIdx: 18,
-        text: "Options flow showed sustained call buying at the 190 strike two sessions before breakout, with open interest building rather than just volume — a pattern the thesis flags as high-conviction accumulation.",
-        flags: [
-          { idx: 4, type: "flow", label: "Call buying, 190 strike", value: "+2,140 contracts net", baseline: "vs 0 net prior session", source: MOCK_SOURCE_NOTE },
-          { idx: 5, type: "gex", label: "OI building at strike", value: "8,900 OI", baseline: "6,200 OI (prior day)", source: MOCK_SOURCE_NOTE },
-        ],
-      },
-      grok: {
-        verdict: "signal", confidence: 74, entryIdx: 5, exitIdx: 16,
-        text: "Relative strength vs. QQQ was positive through the prior pullback — AAPL held higher lows while the index chopped, consistent with the 'stubborn to the downside' setup condition.",
-        flags: [
-          { idx: 3, type: "rs", label: "RS divergence vs QQQ", value: "AAPL held higher low", baseline: "QQQ made a lower low, same window", source: MOCK_SOURCE_NOTE },
-        ],
-      },
-      combined: {
-        verdict: "signal", confidence: 80, entryIdx: 5, exitIdx: 17,
-        text: "All three analysts independently flagged the same base-and-break structure with confirming volume and flow. No material disagreement on this trade — high-confidence supporting evidence.",
-        flags: [
-          { idx: 5, type: "volume", label: "Volume vs 20d avg", value: "1.42M shares", baseline: "1.01M shares (20d avg)", source: MOCK_SOURCE_NOTE },
-          { idx: 4, type: "flow", label: "Call buying, 190 strike", value: "+2,140 contracts net", baseline: "vs 0 net prior session", source: MOCK_SOURCE_NOTE },
-          { idx: 6, type: "iv", label: "IV expanding", value: "38.4% IV", baseline: "31.2% IV (5d prior)", source: MOCK_SOURCE_NOTE },
-          { idx: 3, type: "rs", label: "RS divergence vs QQQ", value: "AAPL held higher low", baseline: "QQQ made a lower low, same window", source: MOCK_SOURCE_NOTE },
-        ],
-      },
-    },
-  },
-  {
-    id: "t2", symbol: "TSLA", direction: "CALL", status: "win",
-    loggedAt: "Trade #21", entryDate: "2026-05-19", exitDate: "2026-05-28",
-    entryPrice: 241.0, exitPrice: 268.5,
-    prices: wave(236, 20, 1.1, 4), entryIdx: 6, exitIdx: 16,
-    agreement: "2/3",
-    analysis: {
-      claude: {
-        verdict: "signal", confidence: 71, entryIdx: 6, exitIdx: 16,
-        text: "Wedge Pop back through the 10/20 EMA after a reversal extension off the 50-day. Entry timing lines up with two prior wins that also popped through tightened moving averages.",
-        flags: [{ idx: 6, type: "volume", label: "EMA reclaim" }],
-      },
-      gpt: {
-        verdict: "signal", confidence: 65, entryIdx: 7, exitIdx: 15,
-        text: "Elevated call skew and a jump in short-dated gamma exposure ahead of the move — flow was consistent with dealers being pushed to hedge upside.",
-        flags: [{ idx: 6, type: "gex", label: "Gamma exposure jump" }, { idx: 7, type: "flow", label: "Call skew elevated" }],
-      },
-      grok: {
-        verdict: "noise", confidence: 38, entryIdx: 6, exitIdx: 16,
-        text: "I'm less convinced here — the volume on the pop was only slightly above average, and this looks closer to a low-conviction bounce than the high-volume 'ignite bar' the thesis usually requires. Logged as a disagreement, not excluded.",
-        flags: [{ idx: 6, type: "volume", label: "Volume only slightly elevated" }],
-      },
-      combined: {
-        verdict: "signal", confidence: 62, entryIdx: 6, exitIdx: 16,
-        text: "2 of 3 analysts support this as a genuine setup. Grok's dissent is preserved: volume confirmation was weaker than the thesis' usual bar. Won't be promoted to a hard rule until this pattern repeats with clearer volume.",
-        flags: [{ idx: 6, type: "gex", label: "Gamma exposure jump" }, { idx: 7, type: "flow", label: "Call skew elevated" }],
-      },
-    },
-  },
-  {
-    id: "t3", symbol: "NVDA", direction: "PUT", status: "near-miss-loss",
-    loggedAt: "Trade #24", entryDate: "2026-06-02", exitDate: "2026-06-10",
-    entryPrice: 118.4, exitPrice: 121.9,
-    prices: wave(119, 18, -0.2, 3.5, 2.2), entryIdx: 5, exitIdx: 13,
-    agreement: "3/3",
-    analysis: {
-      claude: {
-        verdict: "contrast", confidence: 0, entryIdx: 5, exitIdx: 13,
-        text: "This looked like an Exhaustion Extension on paper — extended from the 10 EMA, similar shape to two winning shorts. The difference: no volume spike on the reversal bar. I'd avoid this one; capitulation volume is now a required condition, not optional.",
-        flags: [{ idx: 5, type: "volume", label: "No capitulation volume (missing)" }],
-      },
-      gpt: {
-        verdict: "contrast", confidence: 0, entryIdx: 5, exitIdx: 13,
-        text: "Flow read as distribution at first glance, but open interest at the nearby strikes was actually declining, not building — the opposite of the accumulation signature behind our winning puts. Would avoid on this data alone.",
-        flags: [{ idx: 5, type: "flow", label: "OI declining, not building" }],
-      },
-      grok: {
-        verdict: "contrast", confidence: 0, entryIdx: 5, exitIdx: 13,
-        text: "Relative weakness vs. SOXX was present, but it was already priced in — the underperformance had been going on for two weeks with no fresh trigger. Would avoid; nothing here was new information.",
-        flags: [{ idx: 3, type: "rs", label: "Stale RS divergence", value: "NVDA underperforming SOXX", baseline: "Same gap present 14 days prior", source: MOCK_SOURCE_NOTE }],
-      },
-      combined: {
-        verdict: "contrast", confidence: 0, entryIdx: 5, exitIdx: 13,
-        text: "Genuine near-miss: this matched the surface shape of the thesis but failed the volume/flow confirmation all three analysts independently require. Logged as a Counter-Example — this is exactly the kind of trade that keeps the thesis honest.",
-        flags: [{ idx: 5, type: "volume", label: "Missing volume confirmation" }, { idx: 5, type: "flow", label: "OI declining" }],
-      },
-    },
-  },
-  {
-    id: "t4", symbol: "MSFT", direction: "CALL", status: "low-info-loss",
-    loggedAt: "Trade #26", entryDate: "2026-06-15", exitDate: "2026-06-19",
-    entryPrice: 412.0, exitPrice: 405.1,
-    prices: wave(412, 15, -0.4, 1.5, 1.8), entryIdx: 4, exitIdx: 10,
-    agreement: "3/3",
-    analysis: {
-      claude: {
-        verdict: "low-info", confidence: 0, entryIdx: 4, exitIdx: 10,
-        text: "No basing pattern, no volume signature, no relative strength divergence — this doesn't resemble any setup condition currently in the thesis. Would avoid; flagged as low information value rather than a true counter-example.",
-        flags: [],
-      },
-      gpt: {
-        verdict: "low-info", confidence: 0, entryIdx: 4, exitIdx: 10,
-        text: "Flow was flat and unremarkable heading into entry. There's nothing here to learn from either direction — this trade doesn't stress-test the thesis, it just didn't have a setup.",
-        flags: [],
-      },
-      grok: {
-        verdict: "low-info", confidence: 0, entryIdx: 4, exitIdx: 10,
-        text: "Agreed — no divergence from the index, no volume tell. This is noise, not a near-miss.",
-        flags: [],
-      },
-      combined: {
-        verdict: "low-info", confidence: 0, entryIdx: 4, exitIdx: 10,
-        text: "Unanimous: this trade never looked like a real setup. Logged for completeness but excluded from Counter-Examples so it doesn't dilute the thesis with low-signal data.",
-        flags: [],
-      },
-    },
-  },
-];
+// Mock example trades have been removed now that the real pipeline (Trade
+// Log -> Databento + Quant Data -> Claude/GPT/Grok analysis) is working.
+// The Trade Log now loads real trades only via GET /api/trades.
 
 const THESES = {
   claude:   {
@@ -907,7 +764,7 @@ function SettingsTab() {
 // ---------- App ----------
 export default function App() {
   const [tab, setTab] = useState("log");
-  const [trades, setTrades] = useState(MOCK_TRADES);
+  const [trades, setTrades] = useState([]); // loaded from GET /api/trades — no mock data
   const [openTradeId, setOpenTradeId] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [submitError, setSubmitError] = useState(null);
@@ -969,7 +826,7 @@ export default function App() {
             <h1 className="text-xl font-semibold tracking-tight">GHOSTFLOW</h1>
             <p className="text-xs text-zinc-500 font-mono mt-0.5">options research · 3-analyst thesis engine</p>
           </div>
-          <span className="text-[11px] font-mono text-zinc-600 border border-zinc-800 rounded px-2 py-1">prototype · mock data</span>
+          <span className="text-[11px] font-mono text-zinc-600 border border-zinc-800 rounded px-2 py-1">live · real trades only</span>
         </div>
 
         <div className="flex gap-1 mb-6 border-b border-zinc-800">

@@ -1,46 +1,67 @@
-// TEMPORARY test hook — runs one real trade through the full pipeline
-// (Databento + Quant Data + all 3 AI analysts) once at startup, logging the
-// full result to the console so it shows up in Railway's Deploy Logs.
-// Remove the call to this from server.js after reviewing the first run —
-// this is not meant to run on every future deploy/restart (costs real API
-// credits each time).
+// Seeds one real, verified trade into the store on startup — this is how
+// GHOSTFLOW gets its first non-mock trade into the dashboard. Idempotent:
+// checks the store first and skips if this trade is already there, so
+// restarts don't create duplicates or re-spend API credits needlessly.
 //
-// Test case: META, a real trade from Friday July 10, 2026. Meta ran up
-// roughly 22% over the 10 trading days starting June 25, 2026, capped by a
-// ~6% jump on July 10 on real news (Bank of America report on Meta's AI
-// compute buildout / custom chip plans). Genuine, documented, catalyst-driven
-// move — not a hypothetical.
+// NOTE: because trade storage is currently an ephemeral JSON file (see
+// docs/architecture.md), a full REDEPLOY wipes the store and this will
+// re-seed on the next boot, re-spending API credits. A plain container
+// restart (no redeploy) does not wipe the file, so the idempotency check
+// still matters day-to-day. This whole mechanism goes away once real
+// persistent storage (a database or Railway volume) replaces the JSON file.
+//
+// Real trade: META, June 25 2026 (close $544.32) to July 10 2026 (close
+// $668.07), a genuine +22.7% move on real, documented news (Bank of America
+// report on Meta's AI compute buildout). Verified against public reporting.
 
 import { buildTradeDataset } from "./tradeData.js";
 import { analyzeTradeAllModels } from "./analysis.js";
+import { readTrades, appendTrade } from "./store.js";
 
-const TEST_TRADE = {
+const SEED_TRADE = {
   symbol: "META",
   direction: "CALL",
+  outcome: "win",
   entryDate: "2026-06-25",
   exitDate: "2026-07-10",
 };
 
 export async function runFridayTestAnalysis() {
-  console.log("\n=== TEST ANALYSIS RUN: META 2026-06-25 to 2026-07-10 ===");
-  try {
-    const dataset = await buildTradeDataset(TEST_TRADE);
-    console.log("Data fetch status:", JSON.stringify(dataset.dataFetchOk));
-    if (dataset.bars) {
-      console.log(`Fetched ${dataset.bars.length} daily bars.`);
-      console.log("Entry bar:", JSON.stringify(dataset.bars[dataset.entryIdx]));
-      console.log("Exit bar:", JSON.stringify(dataset.bars[dataset.exitIdx]));
-    } else {
-      console.log("No Databento bars returned — check DATABENTO_DATASET covers META and this date range.");
-    }
-
-    const results = await analyzeTradeAllModels(TEST_TRADE, dataset);
-    for (const modelId of ["claude", "gpt", "grok", "combined"]) {
-      console.log(`\n--- ${modelId.toUpperCase()} ---`);
-      console.log(JSON.stringify(results[modelId], null, 2));
-    }
-  } catch (err) {
-    console.error("Test analysis run failed:", err);
+  const already = readTrades().some(
+    (t) => t.symbol === SEED_TRADE.symbol && t.entryDate === SEED_TRADE.entryDate && t.exitDate === SEED_TRADE.exitDate
+  );
+  if (already) {
+    console.log("Seed trade (META 2026-06-25\u20132026-07-10) already present \u2014 skipping re-seed.");
+    return;
   }
-  console.log("=== END TEST ANALYSIS RUN ===\n");
+
+  console.log("Seeding real trade: META 2026-06-25 to 2026-07-10 ...");
+  try {
+    const dataset = await buildTradeDataset(SEED_TRADE);
+    if (!dataset.bars) {
+      console.error("Seed skipped \u2014 Databento fetch failed, no bars returned.");
+      return;
+    }
+    const analysis = await analyzeTradeAllModels(SEED_TRADE, dataset);
+    const trade = {
+      id: "t" + Date.now(),
+      symbol: SEED_TRADE.symbol,
+      direction: SEED_TRADE.direction,
+      outcome: SEED_TRADE.outcome,
+      status: SEED_TRADE.outcome === "win" ? "win" : "near-miss-loss",
+      entryDate: SEED_TRADE.entryDate,
+      exitDate: SEED_TRADE.exitDate,
+      entryPrice: dataset.bars[dataset.entryIdx]?.close ?? null,
+      exitPrice: dataset.bars[dataset.exitIdx]?.close ?? null,
+      loggedAt: new Date().toISOString(),
+      ...dataset,
+      analysis,
+      analysisStatus: "complete",
+      agreement: analysis.combined.agreement,
+    };
+    appendTrade(trade);
+    console.log(`Seed trade saved. Combined verdict: ${analysis.combined.verdict}, agreement ${analysis.combined.agreement}.`);
+  } catch (err) {
+    console.error("Seed trade failed:", err.message);
+  }
 }
