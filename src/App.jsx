@@ -14,12 +14,14 @@ const MODEL_META = {
 const MODEL_ORDER = ["claude", "gpt", "grok", "combined"];
 
 const INDICATOR_META = {
-  volume:   { label: "Volume",    color: "#38bdf8" },
-  gex:      { label: "GEX",       color: "#f472b6" },
-  darkpool: { label: "Dark Pool", color: "#a78bfa" },
-  flow:     { label: "Flow",      color: "#facc15" },
-  iv:       { label: "IV",        color: "#4ade80" },
+  volume:   { label: "Volume",         color: "#38bdf8" },
+  gex:      { label: "GEX",            color: "#f472b6" },
+  darkpool: { label: "Dark Pool",      color: "#a78bfa" },
+  flow:     { label: "Flow",           color: "#facc15" },
+  iv:       { label: "IV",             color: "#4ade80" },
+  rs:       { label: "Relative Strength", color: "#22d3ee" },
 };
+const MOCK_SOURCE_NOTE = "Illustrative example \u2014 not a real data pull. Real trades must cite an actual Databento/Quant Data query here.";
 
 // ---------- Mock data ----------
 function wave(base, points, drift, amp, noise = 1) {
@@ -38,27 +40,42 @@ const MOCK_TRADES = [
     loggedAt: "Trade #18", entryDate: "2026-05-04", exitDate: "2026-05-22",
     entryPrice: 187.2, exitPrice: 204.6,
     prices: wave(184, 22, 0.9, 3), entryIdx: 5, exitIdx: 17,
+    volumeSeries: wave(0.9, 22, 0, 0.15, 0.1).map((v, i) => Math.max(0.3, i === 5 || i === 6 ? v + 1.1 : v)),
+    benchmarkSeries: wave(430, 22, 0.15, 2, 0.6),
     agreement: "3/3",
     analysis: {
       claude: {
         verdict: "signal", confidence: 82, entryIdx: 5, exitIdx: 17,
         text: "Base n' Break off the 10/20 EMA on the daily, confirmed by a volume surge 40% above the 20-day average. IV was climbing into the move rather than collapsing, which matched three prior wins in the thesis.",
-        flags: [{ idx: 5, type: "volume", label: "Volume +40% vs 20d avg" }, { idx: 6, type: "iv", label: "IV expanding into move" }],
+        flags: [
+          { idx: 5, type: "volume", label: "Volume vs 20d avg", value: "1.42M shares", baseline: "1.01M shares (20d avg)", source: MOCK_SOURCE_NOTE },
+          { idx: 6, type: "iv", label: "IV expanding into move", value: "38.4% IV", baseline: "31.2% IV (5d prior)", source: MOCK_SOURCE_NOTE },
+        ],
       },
       gpt: {
         verdict: "signal", confidence: 78, entryIdx: 6, exitIdx: 18,
         text: "Options flow showed sustained call buying at the 190 strike two sessions before breakout, with open interest building rather than just volume — a pattern the thesis flags as high-conviction accumulation.",
-        flags: [{ idx: 4, type: "flow", label: "Call buying, 190 strike" }, { idx: 5, type: "gex", label: "OI building at strike" }],
+        flags: [
+          { idx: 4, type: "flow", label: "Call buying, 190 strike", value: "+2,140 contracts net", baseline: "vs 0 net prior session", source: MOCK_SOURCE_NOTE },
+          { idx: 5, type: "gex", label: "OI building at strike", value: "8,900 OI", baseline: "6,200 OI (prior day)", source: MOCK_SOURCE_NOTE },
+        ],
       },
       grok: {
         verdict: "signal", confidence: 74, entryIdx: 5, exitIdx: 16,
         text: "Relative strength vs. QQQ was positive through the prior pullback — AAPL held higher lows while the index chopped, consistent with the 'stubborn to the downside' setup condition.",
-        flags: [{ idx: 3, type: "volume", label: "RS divergence vs QQQ" }],
+        flags: [
+          { idx: 3, type: "rs", label: "RS divergence vs QQQ", value: "AAPL held higher low", baseline: "QQQ made a lower low, same window", source: MOCK_SOURCE_NOTE },
+        ],
       },
       combined: {
         verdict: "signal", confidence: 80, entryIdx: 5, exitIdx: 17,
         text: "All three analysts independently flagged the same base-and-break structure with confirming volume and flow. No material disagreement on this trade — high-confidence supporting evidence.",
-        flags: [{ idx: 5, type: "volume", label: "Volume +40%" }, { idx: 5, type: "flow", label: "Call buying, 190 strike" }, { idx: 6, type: "iv", label: "IV expanding" }],
+        flags: [
+          { idx: 5, type: "volume", label: "Volume vs 20d avg", value: "1.42M shares", baseline: "1.01M shares (20d avg)", source: MOCK_SOURCE_NOTE },
+          { idx: 4, type: "flow", label: "Call buying, 190 strike", value: "+2,140 contracts net", baseline: "vs 0 net prior session", source: MOCK_SOURCE_NOTE },
+          { idx: 6, type: "iv", label: "IV expanding", value: "38.4% IV", baseline: "31.2% IV (5d prior)", source: MOCK_SOURCE_NOTE },
+          { idx: 3, type: "rs", label: "RS divergence vs QQQ", value: "AAPL held higher low", baseline: "QQQ made a lower low, same window", source: MOCK_SOURCE_NOTE },
+        ],
       },
     },
   },
@@ -111,7 +128,7 @@ const MOCK_TRADES = [
       grok: {
         verdict: "contrast", confidence: 0, entryIdx: 5, exitIdx: 13,
         text: "Relative weakness vs. SOXX was present, but it was already priced in — the underperformance had been going on for two weeks with no fresh trigger. Would avoid; nothing here was new information.",
-        flags: [{ idx: 3, type: "volume", label: "Stale RS divergence" }],
+        flags: [{ idx: 3, type: "rs", label: "Stale RS divergence", value: "NVDA underperforming SOXX", baseline: "Same gap present 14 days prior", source: MOCK_SOURCE_NOTE }],
       },
       combined: {
         verdict: "contrast", confidence: 0, entryIdx: 5, exitIdx: 13,
@@ -195,18 +212,44 @@ function StatCard({ label, value, sub }) {
   );
 }
 
-// Price chart with indicator overlay markers along the bottom axis.
-// Each flag renders as a small colored tick + label so you can see WHICH
-// indicator(s) the model is pointing to, not just read about it in prose.
-function PriceChart({ prices, entryIdx, exitIdx, status, flags = [] }) {
-  const w = 640, h = 200, pad = 24, flagRowY = h - 6;
+// Price chart with type-specific indicator overlays: a volume flag renders
+// real volume bars (not just a tick), an "rs" (relative strength) flag
+// renders an actual overlaid benchmark line so the divergence is visible,
+// not just described in prose.
+function PriceChart({ prices, entryIdx, exitIdx, status, flags = [], volumeSeries, benchmarkSeries }) {
+  const hasVolume = Array.isArray(volumeSeries) && volumeSeries.length === prices.length && flags.some((f) => f.type === "volume");
+  const hasRS = Array.isArray(benchmarkSeries) && benchmarkSeries.length === prices.length && flags.some((f) => f.type === "rs");
+
+  const w = 640, pad = 24;
+  const H = hasVolume ? 260 : 200;
+  const priceBottom = hasVolume ? 150 : H - 34;
+  const volumeTop = 160, volumeBottom = 208;
+  const flagRowY = H - 6;
+
   const min = Math.min(...prices), max = Math.max(...prices);
   const x = (i) => pad + (i / (prices.length - 1)) * (w - pad * 2);
-  const y = (v) => (h - 34) - pad - ((v - min) / (max - min || 1)) * (h - 34 - pad * 2);
+  const y = (v) => priceBottom - ((v - min) / (max - min || 1)) * (priceBottom - pad);
   const pts = prices.map((v, i) => `${x(i)},${y(v)}`).join(" ");
   const lineColor = status === "win" ? "#34d399" : status === "near-miss-loss" ? "#fbbf24" : "#71717a";
+
+  let benchPts = null;
+  if (hasRS) {
+    const bMin = Math.min(...benchmarkSeries), bMax = Math.max(...benchmarkSeries);
+    const by = (v) => priceBottom - ((v - bMin) / (bMax - bMin || 1)) * (priceBottom - pad);
+    benchPts = benchmarkSeries.map((v, i) => `${x(i)},${by(v)}`).join(" ");
+  }
+
+  const volMax = hasVolume ? Math.max(...volumeSeries) : 1;
+  const flaggedVolumeIdx = new Set(flags.filter((f) => f.type === "volume").map((f) => f.idx));
+
   return (
-    <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-52">
+    <svg viewBox={`0 0 ${w} ${H}`} className="w-full" style={{ height: hasVolume ? 260 : 200 }}>
+      {hasRS && (
+        <>
+          <polyline points={benchPts} fill="none" stroke="#22d3ee" strokeWidth="1.5" strokeDasharray="4,3" opacity="0.7" />
+          <text x={w - pad} y={pad - 8} fontSize="10" fill="#22d3ee" fontFamily="monospace" textAnchor="end">- - - benchmark (normalized)</text>
+        </>
+      )}
       <polyline points={pts} fill="none" stroke={lineColor} strokeWidth="2" />
       <circle cx={x(entryIdx)} cy={y(prices[entryIdx])} r="4.5" fill="#e4e4e7" />
       <text x={x(entryIdx)} y={y(prices[entryIdx]) - 10} fontSize="10" fill="#a1a1aa" fontFamily="monospace" textAnchor="middle">ENTRY</text>
@@ -214,12 +257,28 @@ function PriceChart({ prices, entryIdx, exitIdx, status, flags = [] }) {
       <text x={x(exitIdx)} y={y(prices[exitIdx]) - 10} fontSize="10" fill={lineColor} fontFamily="monospace" textAnchor="middle">
         {status === "win" ? "EXIT (target)" : "EXIT (stop)"}
       </text>
-      {/* indicator overlay ticks */}
+
+      {hasVolume && (
+        <>
+          <text x={pad} y={volumeTop - 6} fontSize="9" fill="#71717a" fontFamily="monospace">VOLUME</text>
+          {volumeSeries.map((v, i) => {
+            const barW = Math.max(2, (w - pad * 2) / volumeSeries.length - 2);
+            const barH = (v / (volMax || 1)) * (volumeBottom - volumeTop);
+            const flagged = flaggedVolumeIdx.has(i);
+            return (
+              <rect key={i} x={x(i) - barW / 2} y={volumeBottom - barH} width={barW} height={barH}
+                fill={flagged ? "#38bdf8" : "#3f3f46"} opacity={flagged ? 1 : 0.7} />
+            );
+          })}
+        </>
+      )}
+
+      {/* indicator overlay ticks, connecting price/volume area down to a marker row */}
       {flags.map((f, i) => {
         const meta = INDICATOR_META[f.type] || { color: "#a1a1aa", label: f.type };
         return (
           <g key={i}>
-            <line x1={x(f.idx)} y1={pad} x2={x(f.idx)} y2={flagRowY} stroke={meta.color} strokeWidth="1" strokeDasharray="2,3" opacity="0.5" />
+            <line x1={x(f.idx)} y1={pad} x2={x(f.idx)} y2={flagRowY} stroke={meta.color} strokeWidth="1" strokeDasharray="2,3" opacity="0.4" />
             <rect x={x(f.idx) - 3} y={flagRowY} width="6" height="6" fill={meta.color} rx="1" />
           </g>
         );
@@ -233,20 +292,31 @@ function IndicatorLegend({ flags = [] }) {
     return <p className="text-xs text-zinc-600 italic">No indicator combination flagged — no real setup detected here.</p>;
   }
   return (
-    <div className="flex flex-wrap gap-2">
+    <div className="space-y-2">
       {flags.map((f, i) => {
         const meta = INDICATOR_META[f.type] || { color: "#a1a1aa", label: f.type };
         return (
-          <span key={i} className="inline-flex items-center gap-1.5 text-xs font-mono px-2 py-1 rounded bg-zinc-900 border border-zinc-800">
-            <span className="w-2 h-2 rounded-sm" style={{ background: meta.color }} />
-            <span className="text-zinc-400">{meta.label}:</span>
-            <span className="text-zinc-300">{f.label}</span>
-          </span>
+          <div key={i} className="text-xs font-mono px-2.5 py-2 rounded bg-zinc-900 border border-zinc-800">
+            <div className="flex items-center gap-1.5 mb-1">
+              <span className="w-2 h-2 rounded-sm flex-shrink-0" style={{ background: meta.color }} />
+              <span className="text-zinc-400">{meta.label}:</span>
+              <span className="text-zinc-200">{f.label}</span>
+            </div>
+            {(f.value || f.baseline) && (
+              <div className="text-zinc-500 pl-3.5">
+                {f.value && <span className="text-zinc-300">{f.value}</span>}
+                {f.value && f.baseline && <span> vs </span>}
+                {f.baseline && <span>{f.baseline}</span>}
+              </div>
+            )}
+            {f.source && <div className="text-zinc-600 pl-3.5 italic mt-0.5">Source: {f.source}</div>}
+          </div>
         );
       })}
     </div>
   );
 }
+
 
 // ---------- Per-trade, per-model Q&A ----------
 // Scoped ONLY to this trade + this model's analysis + this model's thesis excerpt.
@@ -422,7 +492,10 @@ function ModelPanel({ trade, modelId }) {
   const a = trade.analysis[modelId];
   return (
     <div>
-      <PriceChart prices={trade.prices} entryIdx={a.entryIdx} exitIdx={a.exitIdx} status={trade.status} flags={a.flags} />
+      <PriceChart
+        prices={trade.prices} entryIdx={a.entryIdx} exitIdx={a.exitIdx} status={trade.status} flags={a.flags}
+        volumeSeries={trade.volumeSeries} benchmarkSeries={trade.benchmarkSeries}
+      />
       <div className="flex justify-between text-xs font-mono text-zinc-500 mt-1 px-1 mb-3">
         <span>{trade.entryDate} · ${trade.entryPrice}</span>
         <span>{trade.exitDate} · ${trade.exitPrice}</span>
