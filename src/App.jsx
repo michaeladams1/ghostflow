@@ -438,9 +438,6 @@ function AnalysisDetails({ trade, modelId }) {
         {a.confidence > 0 && <span className="text-xs font-mono text-zinc-500">confidence {a.confidence}%</span>}
       </div>
       <p className="text-sm text-zinc-300 leading-relaxed mb-3">{a.text}</p>
-      {modelId === "grok" && (
-        <p className="text-[11px] text-zinc-600 italic mb-3">Grok's thesis is relative-strength based, but a real benchmark (QQQ) series isn't fetched yet — not shown here rather than faked.</p>
-      )}
       <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono mb-1.5">Indicator combination used</div>
       <IndicatorLegend flags={a.flags} />
       <ChatPanel trade={trade} modelId={modelId} />

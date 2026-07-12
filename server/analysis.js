@@ -9,9 +9,10 @@
 // accumulated thesis document, require a real persisted thesis store that
 // doesn't exist yet — that's a follow-up, not done here.
 
-import { callClaude, callGPT, callGrok } from "./aiProviders.js";
+import { callClaudeWithTools, callGPTWithTools, callGrokWithTools } from "./aiProviders.js";
+import { FETCH_TOOL, executeFetchTool } from "./tools.js";
 
-const PROVIDERS = { claude: callClaude, gpt: callGPT, grok: callGrok };
+const PROVIDERS = { claude: callClaudeWithTools, gpt: callGPTWithTools, grok: callGrokWithTools };
 const MODEL_IDS = ["claude", "gpt", "grok"];
 
 function extractJson(text) {
@@ -32,15 +33,16 @@ function buildPrompt(modelId, trade, dataset) {
 Your task: given the real historical price/volume data and options flow data below for one specific trade, determine whether the data shows a genuine, recognizable setup that plausibly explains the trade's outcome. You are reverse-engineering causes, not grading the outcome.
 
 HARD RULES:
-1. Every "flag" you report must cite a real numeric value and baseline that are literally present in the data provided below. If you cannot point to a specific number in the provided data, do not include that flag. Do not invent percentages, dates, or comparisons.
+1. Every "flag" you report must cite a real numeric value and baseline that are literally present in data you were given or that you fetched yourself with the fetch_market_data tool. If you cannot point to a specific number in real data, do not include that flag. Do not invent percentages, dates, or comparisons.
 2. You may use standard price-action vocabulary (e.g. Base n' Break, Wedge Pop, EMA reclaim, Exhaustion Extension) if it genuinely fits, but grounding in the actual numbers matters more than naming a pattern.
-3. Respond with ONLY a single valid JSON object — no markdown code fences, no commentary before or after it — matching exactly this shape:
+3. You have a fetch_market_data tool available. Use it whenever you'd genuinely want more data than what's provided below — a benchmark index (QQQ, SPY) to check relative strength, a sector peer, additional date range, or anything else that would make your analysis more grounded. There is no limit on how many times you can call it or which symbols you check. Only fall back to "no data" if a fetch genuinely fails.
+4. Respond with ONLY a single valid JSON object as your FINAL message (after any tool calls you make) — no markdown code fences, no commentary before or after it — matching exactly this shape:
 {
   "verdict": "signal" or "noise",
   "confidence": integer 0-100 (0 if verdict is "noise"),
   "text": "2-4 sentence justification in your own words",
   "flags": [
-    { "type": "volume" | "iv" | "flow" | "gex" | "darkpool" | "rs", "label": "short label", "value": "specific number/fact from the data", "baseline": "comparison point from the data", "source": "which data field this came from, e.g. Databento OHLCV close/volume on <date>, or Quant Data net-drift at <timestamp>" }
+    { "type": "volume" | "iv" | "flow" | "gex" | "darkpool" | "rs", "label": "short label", "value": "specific number/fact from the data", "baseline": "comparison point from the data", "source": "which data field this came from, e.g. Databento OHLCV close/volume on <date>, Quant Data net-drift at <timestamp>, or a value you fetched yourself for <symbol>" }
   ]
 }
 Use "signal" only if the data shows real supporting evidence. Use "noise" if the data is ambiguous, thin, or doesn't clearly explain the move.`;
@@ -61,7 +63,7 @@ Analyze this trade now and respond with only the JSON object described in your i
 export async function analyzeTradeWithModel(modelId, trade, dataset) {
   const fn = PROVIDERS[modelId];
   const { system, user } = buildPrompt(modelId, trade, dataset);
-  const raw = await fn(user, { system });
+  const raw = await fn(system, user, [FETCH_TOOL], executeFetchTool);
   const parsed = extractJson(raw);
   const verdict = parsed.verdict === "signal" ? "signal" : "noise";
   return {

@@ -22,7 +22,8 @@ function descalePrice(raw) {
 
 // Shared parser for both daily and minute OHLCV JSON-lines responses.
 // Header fields (including the timestamp) are nested under "hd".
-function parseOHLCV(jsonLinesText) {
+// Exported so server/tools.js can reuse it for arbitrary AI-requested fetches.
+export function parseOHLCV(jsonLinesText) {
   return jsonLinesText
     .split("\n")
     .filter((line) => line.trim())
@@ -39,8 +40,9 @@ function parseOHLCV(jsonLinesText) {
     }));
 }
 
-// Aggregates 1-minute bars into 15-minute OHLCV buckets.
-function aggregateTo15Min(minuteBars) {
+// Aggregates 1-minute bars into 15-minute OHLCV buckets. Exported for reuse
+// by server/tools.js.
+export function aggregateTo15Min(minuteBars) {
   const buckets = new Map();
   const bucketMs = 15 * 60 * 1000;
   for (const bar of minuteBars) {
