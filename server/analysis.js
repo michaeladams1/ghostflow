@@ -68,9 +68,20 @@ If you name 13:43 as the entry, every fact you cite must be timestamped 13:43 or
 
 === RULE 4: PROPOSE A TESTABLE RULE ===
 Your thesis must be a rule a computer could evaluate on any other day without you present. Concrete, with thresholds.
-  GOOD: "net_drift.netCallPremium z > 5 AND net_flow z > 3 within the same 2-minute window -> buy at that bucket's close."
+  GOOD: "net_drift.netCallPremium z > 20 AND net_flow.net_premium z > 10 in the same 2-minute window -> buy at that bucket's close."
   USELESS: "buy when flow looks strong and momentum builds." A computer cannot evaluate that, so it can never be backtested, so it can never be proven or disproven.
 If nothing was knowable, set "rule": null and explain why.
+
+=== RULE 5: IF YOUR REASONING NAMES A REGIME, YOU MUST ENCODE IT AS A GATE ===
+This is the most commonly botched part, so read it twice.
+
+If your rule DESCRIPTION says something like "in a positive-gamma session", or "when the term structure is inverted", or "on a call-dominant day", or "with open interest building" — then a corresponding SESSION GATE condition MUST appear in your "conditions" array.
+
+Writing "in a positive-gamma, eventful session, buy when premium spikes" and then submitting conditions that ONLY check the premium spike is a broken rule. The backtest will run it on every kind of day — positive gamma, negative gamma, dead sessions, event sessions — because you never actually told it to check. Your rule then tests something you did not mean, and whatever result comes back is meaningless.
+
+Prose is not a condition. If the regime matters to your thesis, it belongs in "conditions" with a number attached. If it does not matter enough to encode, then do not claim it in your description.
+
+The SESSION METRICS table above gives you the real magnitudes for this session, so you can pick a threshold that is neither impossible nor trivially always-true.
 
 === THE ONLY FEEDS AND METRICS A RULE MAY REFERENCE ===
 Rules are executed by code against these exact strings. Inventing a feed or metric name does NOT create a signal — it creates a rule that cannot run at all.

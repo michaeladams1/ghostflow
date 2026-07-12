@@ -106,6 +106,28 @@ export function validateRule(rule) {
   return { valid: errors.length === 0, errors };
 }
 
+// Session gates built on SAME-DAY CUMULATIVE totals. A gate like
+// "contract_statistics.call_put_premium_ratio > 3" uses the WHOLE day's flow to
+// decide whether to trade at 10:00am — which you could not possibly have known
+// at 10:00am. It is lookahead bias, it silently flatters a backtest, and GPT
+// reached for it even after being warned in the prompt. So it is also caught
+// here in code: the rule still runs, but the result carries a loud warning
+// rather than pretending to be tradeable.
+const LOOKAHEAD_GATE_FEEDS = new Set([
+  "contract_statistics", "contract_trade_side_statistics", "gainers_losers",
+  "order_flow_consolidated", "order_flow_unconsolidated", "equity_prints",
+  "heat_map", "market_share", "news_articles", "stock_price_over_time",
+  "volatility_drift", "dark_flow",
+]);
+
+export function auditGates(rule) {
+  const { gates } = splitConditions(rule);
+  const lookahead = gates
+    .filter((g) => LOOKAHEAD_GATE_FEEDS.has(g.feed))
+    .map((g) => `${g.feed}.${g.metric}`);
+  return { lookahead };
+}
+
 function cmp(subject, op, t) {
   switch (op) {
     case ">": return subject > t;
@@ -228,9 +250,12 @@ export async function backtestRule(rule, { ticker, sessions, holdMinutes = 15, o
   const direction = directionOf(rule);
   const { gates, triggers } = splitConditions(rule);
 
-  // Fetch ONLY the feeds this rule references (plus price). Pulling all 30 x 60
-  // sessions = ~1800 requests against a 240/min limit, which silently rate-
-  // limited sessions out and made results irreproducible.
+  // Tracks whether each gate ever actually BLOCKED a day. A gate that passes on
+  // every single session is doing nothing — it is decoration, not a filter, and
+  // the rule is not testing what the model thinks it is testing. This happened
+  // for real: a model set net_gamma > 50 against a raw value of 65,426,346.
+  const gateBlockCounts = Object.fromEntries(gates.map((g) => [`${g.feed}.${g.metric}`, 0]));
+
   const feedIds = [...new Set(rule.conditions.map((c) => c.feed))].filter((f) => f !== TIME_FEED);
 
   let gateBlockedDays = 0;
@@ -273,6 +298,12 @@ export async function backtestRule(rule, { ticker, sessions, holdMinutes = 15, o
 
       if (gateBlocked) {
         gateBlockedDays++;
+        // Record WHICH gate did the blocking, so a gate that never blocks
+        // anything can be exposed as the no-op it is.
+        if (gateReason) {
+          const key = gateReason.split("=")[0].split(" ")[0];
+          if (key in gateBlockCounts) gateBlockCounts[key]++;
+        }
         sessionResults.push({ sessionDate, firings: 0, trades: 0, gateBlocked: true, gateReason });
         onProgress?.({ sessionDate, firings: 0, gateBlocked: true, gateReason });
         continue;
@@ -309,6 +340,28 @@ export async function backtestRule(rule, { ticker, sessions, holdMinutes = 15, o
     ? "All requested sessions returned data."
     : `WARNING: ${errors.length}/${sessions.length} sessions returned no data (${errors.map((e) => e.sessionDate).join(", ")}). Based on ${sessionsActuallyTested} sessions, not ${sessions.length}.`;
 
+  // ---- Two warnings that would otherwise pass silently and corrupt the result ----
+
+  // (1) NO-OP GATES. A gate that never blocked a single day is not filtering
+  // anything. The model believes its rule only trades (say) positive-gamma days;
+  // in reality it trades every day, and the backtest is measuring something the
+  // model never intended.
+  const noOpGates = Object.entries(gateBlockCounts)
+    .filter(([, count]) => count === 0)
+    .map(([key]) => key);
+
+  // (2) LOOKAHEAD GATES. Same-day cumulative totals used to decide whether to
+  // trade earlier that same day. Not knowable at entry time; flatters results.
+  const { lookahead } = auditGates(rule);
+
+  const warnings = [];
+  if (noOpGates.length) {
+    warnings.push(`NO-OP GATE(S): ${noOpGates.join(", ")} never blocked a single one of the ${sessionsActuallyTested} sessions tested. These gates are doing NOTHING — check the threshold against the real magnitude of the metric (e.g. net_gamma is in the tens of millions, so "> 50" passes every day). Your rule is not testing what you think it is testing.`);
+  }
+  if (lookahead.length) {
+    warnings.push(`LOOKAHEAD BIAS: ${lookahead.join(", ")} are SAME-DAY CUMULATIVE totals. Gating on them uses the full day's data to decide whether to trade earlier that same day — information you would NOT have had at entry. These results are optimistic and NOT tradeable as-is.`);
+  }
+
   return {
     testable: true,
     rule: rule.description,
@@ -316,6 +369,9 @@ export async function backtestRule(rule, { ticker, sessions, holdMinutes = 15, o
     gateCount: gates.length,
     triggerCount: triggers.length,
     gateBlockedDays,
+    gateBlockCounts,
+    warnings,
+    hasLookahead: lookahead.length > 0,
     sessionsRequested: sessions.length,
     sessionsTested: sessionsActuallyTested,
     sessionsWithErrors: errors.length,

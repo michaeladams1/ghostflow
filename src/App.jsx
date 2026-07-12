@@ -143,6 +143,24 @@ function BacktestPanel({ analysisId, modelId, rule, existing, onDone }) {
           <div className={`text-sm font-medium mb-2 ${failed ? "text-red-400" : "text-emerald-400"}`}>
             {result.verdict}
           </div>
+
+          {/* Warnings that invalidate the numbers above them. Shown loudly and
+              never collapsed — a lookahead-biased 80% win rate is more dangerous
+              than an honest 45%, because it looks like it works. */}
+          {result.warnings?.map((w, i) => (
+            <div key={i} className="flex gap-1.5 mb-2 px-2.5 py-2 rounded border border-amber-500/40 bg-amber-500/10">
+              <AlertTriangle size={13} className="text-amber-400 flex-shrink-0 mt-0.5" />
+              <p className="text-xs text-amber-300 leading-relaxed">{w}</p>
+            </div>
+          ))}
+
+          {result.gateCount > 0 && (
+            <p className="text-[11px] font-mono text-zinc-500 mb-2">
+              {result.gateCount} session gate{result.gateCount > 1 ? "s" : ""} · {result.triggerCount} trigger{result.triggerCount > 1 ? "s" : ""}
+              {result.gateBlockedDays > 0 && ` · gates blocked ${result.gateBlockedDays}/${result.sessionsTested} days`}
+            </p>
+          )}
+
           {result.totalTrades > 0 && (
             <div className="grid grid-cols-4 gap-2 text-center">
               {[["Trades", result.totalTrades], ["Win rate", `${result.winRate}%`],

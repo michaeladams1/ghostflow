@@ -692,16 +692,19 @@ export function renderBriefing(b) {
   }
 
   lines.push(`\n=== SESSION METRICS (measured values — use these to choose realistic rule thresholds) ===`);
-  lines.push(`These are RAW numbers for this one session, computed from the feeds above. They are SESSION GATES: they describe the day's regime (is gamma positive? is skew favouring calls? is OI building?), not a moment in time. Seeing the actual magnitudes here is how you pick a threshold that is neither impossible nor trivially always-true.\n`);
+  lines.push(`These are RAW numbers for this session. They are SESSION GATES: they describe the day's regime (is gamma positive? is skew favouring calls? is OI building?), not a moment in time.`);
+  lines.push(`CRITICAL — THRESHOLDS MUST BE IN THESE EXACT UNITS. The numbers below are printed in FULL, unabbreviated, because that is exactly how the backtest compares them. If net_gamma reads 65426346, then a gate of "> 50" is TRUE ON EVERY DAY and does nothing at all; you would need something like "> 30000000" to mean "strongly positive gamma". Read the magnitude carefully before you pick a number.\n`);
   const sm = b.sessionMetrics || {};
   const smKeys = Object.keys(sm).sort();
   if (!smKeys.length) {
     lines.push(`(none computed)`);
   } else {
     smKeys.forEach((k) => {
-      const v = sm[k];
-      const shown = Math.abs(v) >= 1e6 ? `${(v / 1e6).toFixed(2)}M` : v.toFixed(2);
-      lines.push(`  ${k.padEnd(52)} = ${shown}`);
+      // Printed RAW and in full. Abbreviating to "65.43M" caused a model to set
+      // a gate of "> 50" against a raw value of 65,426,346 — a gate that passes
+      // every single day and silently does nothing. Display units and comparison
+      // units MUST be identical.
+      lines.push(`  ${k.padEnd(52)} = ${sm[k]}`);
     });
   }
 

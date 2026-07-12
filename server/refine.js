@@ -78,6 +78,12 @@ function renderBacktestFeedback(result, availableFeeds) {
     ``,
   ];
 
+  if (result.warnings?.length) {
+    lines.push(`!!! WARNINGS ABOUT YOUR RULE — READ THESE FIRST, THEY MAY INVALIDATE THE NUMBERS ABOVE:`);
+    result.warnings.forEach((w) => lines.push(`  * ${w}`));
+    lines.push(``);
+  }
+
   if (result.totalTrades > 0) {
     lines.push(`THE LOSING TRADES — study these. This is where your rule was wrong:`);
     losers.forEach((t) => lines.push(`  LOSS  ${t.sessionDate} ${t.entryClock}  entry $${t.entryPrice} -> exit $${t.exitPrice}   ${t.pctReturn}%`));
