@@ -221,6 +221,64 @@ app.post("/api/analyses/:id/confirmers", async (req, res) => {
   }
 });
 
+// RE-RUN an existing analysis against the CURRENT engine, in place (same id).
+// The engine keeps improving — new feeds, new metrics, fixed bugs — so old
+// records go stale and their conclusions can no longer be trusted. Rather than
+// leave misleading results sitting in the log, this re-pulls every feed and
+// re-runs all 3 analysts with today's code, overwriting the record.
+// Any backtests/refinements/confirmers attached to the OLD analysis are dropped,
+// because they were computed against a rule that no longer exists.
+app.post("/api/analyses/:id/rerun", async (req, res) => {
+  try {
+    const all = await readTrades();
+    const old = all.find((r) => r.id === req.params.id);
+    if (!old) return res.status(404).json({ error: `No analysis with id ${req.params.id}` });
+
+    const ticker = old.symbol;
+    const sessionDate = old.sessionDate;
+    const contract = old.contract || null;
+    const notes = req.body?.notes ?? old.notes ?? null;
+
+    const start = new Date(sessionDate + "T00:00:00Z");
+    start.setUTCDate(start.getUTCDate() - 15);
+    const startDate = start.toISOString().slice(0, 10);
+
+    console.log(`[rerun] ${ticker} ${sessionDate} with current engine...`);
+    const bundle = await fetchAllEndpoints({ ticker, sessionDate, startDate, endDate: sessionDate, contract });
+    const briefing = buildBriefing(bundle, { contract });
+    console.log(`[rerun] ${bundle.report.succeeded}/${bundle.report.attempted} feeds, ${briefing.timeline.priceThrusts.length} thrusts, ${briefing.timeline.totalSignalEvents} events`);
+
+    const analysis = await analyzeAllModels(briefing, notes);
+
+    const record = {
+      ...old,
+      notes,
+      rerunAt: new Date().toISOString(),
+      briefing: {
+        endpoints: briefing.endpoints,
+        timeline: briefing.timeline,
+        sessionMetrics: briefing.sessionMetrics,
+        fetchReport: briefing.fetchReport,
+      },
+      analysis,
+      agreement: analysis.combined.agreement,
+      // Stale derived work — computed from a rule this re-run just replaced.
+      backtests: undefined,
+      refinements: undefined,
+      confirmers: undefined,
+    };
+
+    let persisted = true;
+    try { await appendTrade(record); } catch (e) { persisted = false; console.error("[rerun] DB write failed:", e.message); }
+
+    console.log(`[rerun] done. ${analysis.combined.verdict} ${analysis.combined.agreement}`);
+    res.json({ ...record, persisted });
+  } catch (err) {
+    console.error("[rerun] FAILED:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.use(express.static(DIST_DIR));
 app.get("*", (req, res) => res.sendFile(path.join(DIST_DIR, "index.html")));
 

@@ -35,6 +35,38 @@ function RoleBadge({ role }) {
   return <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${s.cls}`}>{s.label}</span>;
 }
 
+// A record is STALE if it lacks fields the current engine always produces.
+// Old records were generated before gamma_proximity, session metrics, feed
+// roles, etc. existed — their conclusions were reached without that data and
+// should not be trusted or quietly displayed as if they were current.
+function isStale(record) {
+  const b = record.briefing;
+  if (!b) return true;
+  if (!b.sessionMetrics || !Object.keys(b.sessionMetrics).length) return true;
+  if (!b.fetchReport) return true;
+  // Feed roles (SIGNAL/CONFIRMATION/NOISE) only exist in the new schema.
+  const anyReview = MODEL_IDS.map((m) => record.analysis?.[m]?.endpointReview).find((r) => r?.length);
+  if (anyReview && !anyReview[0].role) return true;
+  return false;
+}
+
+function RerunBanner({ record, onRerun, running }) {
+  return (
+    <div className="px-3 py-2.5 rounded-lg border border-amber-500/40 bg-amber-500/10 flex items-start gap-2">
+      <AlertTriangle size={14} className="text-amber-500 flex-shrink-0 mt-0.5" />
+      <div className="flex-1">
+        <p className="text-xs text-amber-800 dark:text-amber-300 leading-relaxed">
+          <strong>This analysis is stale.</strong> It was produced by an older engine — before intraday gamma, the full 77-metric vocabulary, session metrics, and feed roles existed. Its conclusions were reached without that data.
+        </p>
+      </div>
+      <button onClick={onRerun} disabled={running}
+        className="flex-shrink-0 text-xs px-2.5 py-1 rounded bg-amber-600 text-white hover:bg-amber-500 disabled:opacity-50">
+        {running ? "Re-running…" : "Re-run"}
+      </button>
+    </div>
+  );
+}
+
 function Verdict({ v }) {
   const map = {
     tradeable: { label: "TRADEABLE", cls: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30", Icon: CheckCircle2 },
@@ -572,9 +604,10 @@ function SessionMetrics({ metrics }) {
   );
 }
 
-function AnalysisDetail({ record, onClose, cb }) {
+function AnalysisDetail({ record, onClose, cb, onRerun, rerunning }) {
   const [tab, setTab] = useState("claude");
   const combined = record.analysis?.combined;
+  const stale = isStale(record);
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -586,8 +619,22 @@ function AnalysisDetail({ record, onClose, cb }) {
             {combined && <Verdict v={combined.verdict} />}
             <span className={`text-xs font-mono ${faint}`}>agreement {record.agreement}</span>
           </div>
-          <button onClick={onClose} className={faint}><X size={18} /></button>
+          <div className="flex items-center gap-2">
+            {!stale && (
+              <button onClick={onRerun} disabled={rerunning} title="Re-run with the current engine"
+                className={`flex items-center gap-1 text-xs px-2 py-1 rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 disabled:opacity-50 ${faint}`}>
+                <RefreshCw size={12} className={rerunning ? "animate-spin" : ""} /> {rerunning ? "Re-running…" : "Re-run"}
+              </button>
+            )}
+            <button onClick={onClose} className={faint}><X size={18} /></button>
+          </div>
         </div>
+
+        {stale && (
+          <div className="px-5 pt-4">
+            <RerunBanner record={record} onRerun={onRerun} running={rerunning} />
+          </div>
+        )}
 
         {record.notes && (
           <div className="px-5 pt-4">
@@ -722,14 +769,22 @@ function AnalysisCard({ record, onOpen }) {
   const c = record.analysis?.combined;
   const thrusts = record.briefing?.timeline?.priceThrusts?.length ?? 0;
   const entries = c?.entries ? Object.values(c.entries).filter((e) => e?.timestamp) : [];
+  const stale = isStale(record);
 
   return (
-    <div className={`${card} rounded-lg p-4 flex flex-col`}>
+    <div className={`${card} rounded-lg p-4 flex flex-col ${stale ? "opacity-70" : ""}`}>
       <div className="flex items-center justify-between mb-3">
         {c ? <Verdict v={c.verdict} /> : <span className={`text-xs font-mono ${faint}`}>pending</span>}
         <span className={`text-[11px] font-mono ${faint}`}>agreement {record.agreement}</span>
       </div>
-      <div className="text-base font-semibold">{record.symbol}</div>
+      <div className="flex items-center gap-2">
+        <span className="text-base font-semibold">{record.symbol}</span>
+        {stale && (
+          <span className="text-[10px] font-mono px-1.5 py-0.5 rounded border border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400">
+            STALE
+          </span>
+        )}
+      </div>
       <div className={`text-xs font-mono mb-3 ${faint}`}>{record.sessionDate}</div>
 
       <div className="border-t border-zinc-200 dark:border-zinc-800 pt-3 grid grid-cols-3 gap-2">
@@ -743,7 +798,7 @@ function AnalysisCard({ record, onOpen }) {
 
       <button onClick={() => onOpen(record.id)}
         className="mt-4 w-full flex items-center justify-center gap-1.5 border border-zinc-300 dark:border-zinc-700 text-sm font-medium py-2 rounded-md hover:bg-zinc-100 dark:hover:bg-zinc-800">
-        View full analysis <ChevronRight size={14} />
+        {stale ? "Open & re-run" : "View full analysis"} <ChevronRight size={14} />
       </button>
     </div>
   );
@@ -793,6 +848,21 @@ export default function App() {
       ? { ...r, [field]: { ...(r[field] || {}), [modelId]: result } } : r));
   };
   const cb = { backtest: patch("backtests"), refine: patch("refinements"), confirm: patch("confirmers") };
+
+  const [rerunning, setRerunning] = useState(false);
+  const rerun = async () => {
+    if (!openId) return;
+    setRerunning(true); setError(null);
+    try {
+      const res = await fetch(`/api/analyses/${openId}/rerun`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Re-run failed");
+      setRecords((prev) => prev.map((r) => (r.id === openId ? data : r)));
+    } catch (e) { setError(e.message); }
+    setRerunning(false);
+  };
 
   return (
     <div className="min-h-screen bg-white dark:bg-black text-zinc-900 dark:text-zinc-100 font-sans transition-colors">
@@ -864,7 +934,7 @@ export default function App() {
       </div>
 
       {showForm && <AnalyzeForm onClose={() => setShowForm(false)} onSubmit={analyze} error={error} running={running} />}
-      {open && <AnalysisDetail record={open} onClose={() => setOpenId(null)} cb={cb} />}
+      {open && <AnalysisDetail record={open} onClose={() => setOpenId(null)} cb={cb} onRerun={rerun} rerunning={rerunning} />}
     </div>
   );
 }
