@@ -169,10 +169,30 @@ const MOCK_TRADES = [
 ];
 
 const THESES = {
-  claude:   { setup: ["Base n' Break or Wedge Pop off the 10/20 EMA", "Volume \u2265 30-40% above 20-day average on the trigger bar", "IV expanding into the move, not collapsing"], confidence: "Medium \u2014 14 supporting trades, 3 counter-examples", lastUpdated: "Trade #26", evidence: 14, counters: 3 },
-  gpt:      { setup: ["Sustained call/put buying with rising open interest (not just volume)", "Skew shift consistent with dealer hedging pressure", "Flow precedes price, not the reverse"], confidence: "Medium \u2014 12 supporting trades, 4 counter-examples", lastUpdated: "Trade #26", evidence: 12, counters: 4 },
-  grok:     { setup: ["Relative strength/weakness vs. sector ETF, especially during a pullback", "Divergence must be fresh, not already priced in for 2+ weeks", "\"Stubborn to the downside\" price action on lower timeframes"], confidence: "Low-Medium \u2014 9 supporting trades, 5 counter-examples", lastUpdated: "Trade #26", evidence: 9, counters: 5 },
-  combined: { setup: ["High-confidence: Base/Wedge structure + confirming volume + confirming flow, all three agree", "Open disagreement: volume threshold for a valid 'pop' (Grok wants a higher bar than Claude/GPT \u2014 tracked, not resolved)"], confidence: "26 trades logged \u2014 14 wins, 5 near-miss losses, 7 low-info losses", lastUpdated: "Trade #26", evidence: 14, counters: 8 },
+  claude:   {
+    setup: ["Base n' Break or Wedge Pop off the 10/20 EMA", "Volume \u2265 30-40% above 20-day average on the trigger bar", "IV expanding into the move, not collapsing"],
+    confidence: "Medium \u2014 see Supporting Evidence / Counter-Examples below for the trades this is based on right now.",
+    notes: "Volume threshold is the main open question \u2014 I currently require +30-40% vs the 20-day average, but Grok's bar is stricter and hasn't converged with mine yet.",
+    lastUpdated: "Trade #26",
+  },
+  gpt:      {
+    setup: ["Sustained call/put buying with rising open interest (not just volume)", "Skew shift consistent with dealer hedging pressure", "Flow precedes price, not the reverse"],
+    confidence: "Medium \u2014 see Supporting Evidence / Counter-Examples below for the trades this is based on right now.",
+    notes: "Open interest building (not just volume) is the key discriminator I use \u2014 several near-misses had normal volume but declining OI, which is why that distinction is now a hard requirement.",
+    lastUpdated: "Trade #26",
+  },
+  grok:     {
+    setup: ["Relative strength/weakness vs. sector ETF, especially during a pullback", "Divergence must be fresh, not already priced in for 2+ weeks", "\"Stubborn to the downside\" price action on lower timeframes"],
+    confidence: "Low-Medium \u2014 see Supporting Evidence / Counter-Examples below for the trades this is based on right now.",
+    notes: "I'm the most conservative of the three on volume confirmation, which is why I sometimes dissent from Claude/GPT on the same trade (see Points of Disagreement on individual trades). Not yet resolved into a shared rule.",
+    lastUpdated: "Trade #26",
+  },
+  combined: {
+    setup: ["High-confidence: Base/Wedge structure + confirming volume + confirming flow, all three agree", "Open disagreement: volume threshold for a valid 'pop' (Grok wants a higher bar than Claude/GPT \u2014 tracked, not resolved)"],
+    confidence: "Reflects only trades where at least 2 of 3 analysts agree \u2014 see below for exactly which ones.",
+    notes: "This view merges the 3 individual theses but preserves disagreement rather than averaging it away. A claim only appears here once 2 of 3 analysts independently support it.",
+    lastUpdated: "Trade #26",
+  },
 };
 
 // ---------- Small building blocks ----------
@@ -672,40 +692,114 @@ function TradeLogTab({ trades, onOpen, onAdd }) {
   );
 }
 
+// A clickable list of trades used to back up a stat — every number in
+// Performance/Theses should be traceable to this kind of list, not a bare figure.
+function TradeMiniList({ trades, onOpen, emptyText = "No trades match." }) {
+  if (trades.length === 0) return <p className="text-xs text-zinc-600 italic px-1">{emptyText}</p>;
+  return (
+    <div className="space-y-1">
+      {trades.map((t) => (
+        <button key={t.id} onClick={() => onOpen(t.id)}
+          className="w-full flex items-center justify-between px-2.5 py-1.5 rounded bg-zinc-950 hover:bg-black border border-zinc-800 text-left">
+          <span className="font-mono text-xs text-zinc-200">{t.symbol} <span className="text-zinc-600">{t.direction}</span></span>
+          <span className="flex items-center gap-2">
+            <StatusPill status={t.status} />
+            <ChevronRight size={12} className="text-zinc-600" />
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// A stat card that expands in place to show the underlying trades behind the number.
+function ExpandableStat({ label, value, sub, isOpen, onToggle, children }) {
+  return (
+    <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
+      <button onClick={onToggle} className="w-full text-left px-4 py-3 hover:bg-zinc-900/60">
+        <div className="flex items-start justify-between">
+          <div>
+            <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono">{label}</div>
+            <div className="text-2xl font-mono text-zinc-100 mt-1">{value}</div>
+            {sub && <div className="text-xs text-zinc-500 mt-0.5">{sub}</div>}
+          </div>
+          <ChevronRight size={16} className={`text-zinc-600 mt-1 transition-transform ${isOpen ? "rotate-90" : ""}`} />
+        </div>
+      </button>
+      {isOpen && <div className="px-3 pb-3 pt-1 border-t border-zinc-800">{children}</div>}
+    </div>
+  );
+}
+
 // ---------- Tabs: Performance ----------
-function PerformanceTab({ trades }) {
-  const wins = trades.filter((t) => t.status === "win").length;
-  const nearMiss = trades.filter((t) => t.status === "near-miss-loss").length;
-  const lowInfo = trades.filter((t) => t.status === "low-info-loss").length;
+function PerformanceTab({ trades, onOpen }) {
+  const [expanded, setExpanded] = useState(null);
+  const toggle = (key) => setExpanded((cur) => (cur === key ? null : key));
+
+  const wins = trades.filter((t) => t.status === "win");
+  const nearMiss = trades.filter((t) => t.status === "near-miss-loss");
+  const lowInfo = trades.filter((t) => t.status === "low-info-loss");
   const total = trades.length;
-  const winRate = total ? Math.round((wins / total) * 100) : 0;
-  const fullAgreement = trades.filter((t) => t.agreement === "3/3").length;
-  const agreementRate = total ? Math.round((fullAgreement / total) * 100) : 0;
+  const winRate = total ? Math.round((wins.length / total) * 100) : 0;
+  const fullAgreementTrades = trades.filter((t) => t.agreement === "3/3");
+  const agreementRate = total ? Math.round((fullAgreementTrades.length / total) * 100) : 0;
+  const counterTrades = trades.filter((t) => t.analysis?.combined?.verdict === "contrast");
 
   return (
     <div>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-        <StatCard label="Trades logged" value={total} sub={`${wins} win / ${nearMiss} near-miss / ${lowInfo} low-info`} />
-        <StatCard label="Win rate" value={`${winRate}%`} sub="of logged trades" />
-        <StatCard label="Full agreement" value={`${agreementRate}%`} sub="all 3 analysts aligned" />
-        <StatCard label="Counter-examples" value={THESES.combined.counters} sub="feeding the shared thesis" />
+        <ExpandableStat label="Trades logged" value={total} sub={`${wins.length} win / ${nearMiss.length} near-miss / ${lowInfo.length} low-info`}
+          isOpen={expanded === "total"} onToggle={() => toggle("total")}>
+          <TradeMiniList trades={trades} onOpen={onOpen} />
+        </ExpandableStat>
+        <ExpandableStat label="Win rate" value={`${winRate}%`} sub="of logged trades"
+          isOpen={expanded === "winrate"} onToggle={() => toggle("winrate")}>
+          <TradeMiniList trades={wins} onOpen={onOpen} emptyText="No wins logged yet." />
+        </ExpandableStat>
+        <ExpandableStat label="Full agreement" value={`${agreementRate}%`} sub="all 3 analysts aligned"
+          isOpen={expanded === "agreement"} onToggle={() => toggle("agreement")}>
+          <TradeMiniList trades={fullAgreementTrades} onOpen={onOpen} emptyText="No trades with full 3/3 agreement yet." />
+        </ExpandableStat>
+        <ExpandableStat label="Counter-examples" value={counterTrades.length} sub="feeding the shared thesis"
+          isOpen={expanded === "counters"} onToggle={() => toggle("counters")}>
+          <TradeMiniList trades={counterTrades} onOpen={onOpen} emptyText="No counter-examples yet." />
+        </ExpandableStat>
       </div>
 
       <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
-        <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono mb-3">Thesis confidence by model</div>
+        <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono mb-3">
+          Thesis confidence by model <span className="text-zinc-600 normal-case">(computed from the trades below \u2014 click a model to see them)</span>
+        </div>
         <div className="space-y-3">
           {MODEL_ORDER.filter((m) => m !== "combined").map((m) => {
-            const t = THESES[m];
-            const pct = Math.min(100, Math.round((t.evidence / (t.evidence + t.counters)) * 100));
+            const supporting = trades.filter((t) => t.analysis?.[m]?.verdict === "signal");
+            const counter = trades.filter((t) => t.analysis?.[m]?.verdict === "contrast");
+            const denom = supporting.length + counter.length;
+            const pct = denom ? Math.round((supporting.length / denom) * 100) : 0;
+            const key = "model-" + m;
             return (
               <div key={m}>
-                <div className="flex justify-between text-xs font-mono mb-1">
-                  <span className={MODEL_META[m].accent}>{MODEL_META[m].name}</span>
-                  <span className="text-zinc-500">{t.evidence} supporting · {t.counters} counter</span>
-                </div>
-                <div className="h-2 rounded-full bg-zinc-800 overflow-hidden">
-                  <div className={`h-full ${MODEL_META[m].bg}`} style={{ width: `${pct}%` }} />
-                </div>
+                <button onClick={() => toggle(key)} className="w-full text-left">
+                  <div className="flex justify-between text-xs font-mono mb-1">
+                    <span className={MODEL_META[m].accent}>{MODEL_META[m].name}</span>
+                    <span className="text-zinc-500">{supporting.length} supporting · {counter.length} counter</span>
+                  </div>
+                  <div className="h-2 rounded-full bg-zinc-800 overflow-hidden">
+                    <div className={`h-full ${MODEL_META[m].bg}`} style={{ width: `${pct}%` }} />
+                  </div>
+                </button>
+                {expanded === key && (
+                  <div className="mt-2 grid sm:grid-cols-2 gap-2">
+                    <div>
+                      <div className="text-[10px] uppercase tracking-wider text-zinc-600 font-mono mb-1">Supporting</div>
+                      <TradeMiniList trades={supporting} onOpen={onOpen} emptyText="None yet." />
+                    </div>
+                    <div>
+                      <div className="text-[10px] uppercase tracking-wider text-zinc-600 font-mono mb-1">Counter-examples</div>
+                      <TradeMiniList trades={counter} onOpen={onOpen} emptyText="None yet." />
+                    </div>
+                  </div>
+                )}
               </div>
             );
           })}
@@ -716,31 +810,66 @@ function PerformanceTab({ trades }) {
 }
 
 // ---------- Tabs: Theses ----------
-function ThesesTab() {
+// 4 fully independent sub-tabs (Claude/GPT/Grok/Combined), each with the same
+// structure: Setup Conditions, Confidence, Supporting Evidence, Counter-Examples,
+// Notes \u2014 all traceable back to the actual logged trades, not static numbers.
+function ThesesTab({ trades, onOpen }) {
+  const [tab, setTab] = useState("combined");
+  const t = THESES[tab];
+  const supporting = trades.filter((tr) => tr.analysis?.[tab]?.verdict === "signal");
+  const counter = trades.filter((tr) => tr.analysis?.[tab]?.verdict === "contrast");
+
   return (
-    <div className="grid md:grid-cols-2 gap-4">
-      {MODEL_ORDER.map((m) => {
-        const t = THESES[m];
-        return (
-          <div key={m} className={`bg-zinc-900 border border-zinc-800 rounded-lg p-4 ${m === "combined" ? "md:col-span-2 ring-1 " + MODEL_META[m].ring : ""}`}>
-            <div className="flex items-center gap-2 mb-3">
-              <span className={`w-2 h-2 rounded-full ${MODEL_META[m].dot}`} />
-              <h4 className={`font-semibold ${MODEL_META[m].accent}`}>{MODEL_META[m].name} thesis</h4>
-              <span className="text-[11px] text-zinc-600 font-mono ml-auto">updated {t.lastUpdated}</span>
-            </div>
+    <div>
+      <div className="flex gap-1 mb-4 border-b border-zinc-800">
+        {MODEL_ORDER.map((m) => (
+          <button key={m} onClick={() => setTab(m)}
+            className={`flex items-center gap-1.5 px-3 py-2 -mb-px border-b-2 text-sm font-medium transition
+              ${tab === m ? "border-current " + MODEL_META[m].accent : "border-transparent text-zinc-500 hover:text-zinc-300"}`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${MODEL_META[m].dot}`} />
+            {MODEL_META[m].name}
+          </button>
+        ))}
+      </div>
+
+      <div className={`bg-zinc-900 border border-zinc-800 rounded-lg p-4 ${tab === "combined" ? "ring-1 " + MODEL_META[tab].ring : ""}`}>
+        <div className="flex items-center gap-2 mb-4">
+          <span className={`w-2 h-2 rounded-full ${MODEL_META[tab].dot}`} />
+          <h4 className={`font-semibold ${MODEL_META[tab].accent}`}>{MODEL_META[tab].name} thesis</h4>
+          <span className="text-[11px] text-zinc-600 font-mono ml-auto">updated {t.lastUpdated}</span>
+        </div>
+
+        <div className="grid md:grid-cols-2 gap-6">
+          <div>
             <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono mb-1.5">Setup conditions</div>
-            <ul className="space-y-1 mb-3">
+            <ul className="space-y-1 mb-4">
               {t.setup.map((s, i) => (
                 <li key={i} className="text-sm text-zinc-300 flex gap-2">
                   <span className="text-zinc-600">·</span>{s}
                 </li>
               ))}
             </ul>
+
             <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono mb-1">Confidence</div>
-            <p className="text-sm text-zinc-400">{t.confidence}</p>
+            <p className="text-sm text-zinc-400 mb-4">{t.confidence}</p>
+
+            <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono mb-1">Notes</div>
+            <p className="text-sm text-zinc-400">{t.notes}</p>
           </div>
-        );
-      })}
+
+          <div>
+            <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono mb-1.5">
+              Supporting evidence <span className="text-zinc-600 normal-case">({supporting.length})</span>
+            </div>
+            <TradeMiniList trades={supporting} onOpen={onOpen} emptyText="No supporting trades logged yet." />
+
+            <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono mb-1.5 mt-4">
+              Counter-examples <span className="text-zinc-600 normal-case">({counter.length})</span>
+            </div>
+            <TradeMiniList trades={counter} onOpen={onOpen} emptyText="No counter-examples logged yet." />
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -823,8 +952,8 @@ export default function App() {
         </div>
 
         {tab === "log" && <TradeLogTab trades={trades} onOpen={setOpenTradeId} onAdd={() => setShowForm(true)} />}
-        {tab === "performance" && <PerformanceTab trades={trades} />}
-        {tab === "theses" && <ThesesTab />}
+        {tab === "performance" && <PerformanceTab trades={trades} onOpen={setOpenTradeId} />}
+        {tab === "theses" && <ThesesTab trades={trades} onOpen={setOpenTradeId} />}
       </div>
 
       {openTrade && <TradeDetail trade={openTrade} onClose={() => setOpenTradeId(null)} />}
