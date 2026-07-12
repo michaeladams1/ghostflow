@@ -40,6 +40,25 @@ export async function getDatabentoOHLCV(symbol, start, end) {
   return res.text(); // JSON-lines format, one record per line
 }
 
+// 1-minute OHLCV bars. Databento has no native 15-minute schema — this is the
+// raw material we aggregate into 15-min bars ourselves (see tradeData.js).
+// start/end accept full ISO datetimes (not just dates) for intraday ranges.
+export async function getDatabentoIntraday(symbol, startISO, endISO) {
+  const params = new URLSearchParams({
+    dataset: DATABENTO_DATASET,
+    symbols: symbol,
+    schema: "ohlcv-1m",
+    start: startISO,
+    end: endISO,
+    encoding: "json",
+  });
+  const res = await fetch(`https://hist.databento.com/v0/timeseries.get_range?${params}`, {
+    headers: { Authorization: databentoAuthHeader() },
+  });
+  if (!res.ok) throw new Error(`Databento intraday error ${res.status}: ${await res.text()}`);
+  return res.text();
+}
+
 // --- Quant Data: Bearer token, POST + JSON body ---
 export async function getQuantDataNetDrift(ticker, sessionDate) {
   const res = await fetch("https://api.quantdata.us/v1/options/tool/net-drift", {

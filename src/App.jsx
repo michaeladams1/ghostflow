@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import {
   Plus, X, CheckCircle2, XCircle, AlertTriangle, ChevronRight,
-  Users, FileText, LayoutDashboard, Minus, Send, MessageSquare, Clock, Copy, Settings, ExternalLink
+  Users, FileText, LayoutDashboard, Minus, Send, MessageSquare, Clock, Copy, Settings, ExternalLink, Maximize2
 } from "lucide-react";
 
 // ---------- Design tokens ----------
@@ -95,78 +95,113 @@ function StatCard({ label, value, sub }) {
   );
 }
 
-// Price chart with type-specific indicator overlays: a volume flag renders
-// real volume bars (not just a tick), an "rs" (relative strength) flag
-// renders an actual overlaid benchmark line so the divergence is visible,
-// not just described in prose.
-function PriceChart({ prices, entryIdx, exitIdx, status, flags = [], volumeSeries, benchmarkSeries }) {
-  const hasVolume = Array.isArray(volumeSeries) && volumeSeries.length === prices.length && flags.some((f) => f.type === "volume");
-  const hasRS = Array.isArray(benchmarkSeries) && benchmarkSeries.length === prices.length && flags.some((f) => f.type === "rs");
+// Simple EMA calculation, used for Claude's chart overlay (its thesis is
+// EMA-based, so its tab always shows the EMAs it actually reasons about).
+function computeEMA(closes, period) {
+  const k = 2 / (period + 1);
+  const out = [];
+  let prev = closes[0];
+  closes.forEach((c, i) => {
+    if (i === 0) { out.push(c); prev = c; return; }
+    prev = c * k + prev * (1 - k);
+    out.push(prev);
+  });
+  return out;
+}
 
-  const w = 640, pad = 24;
-  const H = hasVolume ? 260 : 200;
-  const priceBottom = hasVolume ? 150 : H - 34;
-  const volumeTop = 160, volumeBottom = 208;
-  const flagRowY = H - 6;
+// Interactive candlestick chart with a real crosshair + hover tooltip
+// (TradingView-style), a volume subplot, entry/exit markers, and an optional
+// EMA overlay. Renders whatever bar series it's given — 15-min intraday by
+// default, daily as a fallback when intraday data wasn't available.
+function CandlestickChart({ bars, entryIdx, exitIdx, status, overlay = {}, height = 320 }) {
+  const [hover, setHover] = useState(null);
+  const svgRef = useRef(null);
 
-  const min = Math.min(...prices), max = Math.max(...prices);
-  const x = (i) => pad + (i / (prices.length - 1)) * (w - pad * 2);
-  const y = (v) => priceBottom - ((v - min) / (max - min || 1)) * (priceBottom - pad);
-  const pts = prices.map((v, i) => `${x(i)},${y(v)}`).join(" ");
-  const lineColor = status === "win" ? "#34d399" : status === "near-miss-loss" ? "#fbbf24" : "#71717a";
-
-  let benchPts = null;
-  if (hasRS) {
-    const bMin = Math.min(...benchmarkSeries), bMax = Math.max(...benchmarkSeries);
-    const by = (v) => priceBottom - ((v - bMin) / (bMax - bMin || 1)) * (priceBottom - pad);
-    benchPts = benchmarkSeries.map((v, i) => `${x(i)},${by(v)}`).join(" ");
+  if (!bars || bars.length === 0) {
+    return <div className="text-xs text-zinc-600 italic py-10 text-center border border-zinc-800 rounded-lg">No chart data available.</div>;
   }
 
-  const volMax = hasVolume ? Math.max(...volumeSeries) : 1;
-  const flaggedVolumeIdx = new Set(flags.filter((f) => f.type === "volume").map((f) => f.idx));
+  const w = 900, pad = 30;
+  const priceBottom = height - 74;
+  const volumeTop = priceBottom + 16;
+  const volumeBottom = height - 22;
+
+  const highs = bars.map((b) => b.high), lows = bars.map((b) => b.low);
+  const min = Math.min(...lows), max = Math.max(...highs);
+  const x = (i) => pad + (i / Math.max(1, bars.length - 1)) * (w - pad * 2);
+  const yScale = (v) => priceBottom - ((v - min) / (max - min || 1)) * (priceBottom - pad);
+  const candleW = Math.max(1.5, ((w - pad * 2) / bars.length) * 0.6);
+  const volMax = Math.max(...bars.map((b) => b.volume), 1);
+  const emaSeries = overlay.ema || [];
+
+  const handleMove = (e) => {
+    if (!svgRef.current) return;
+    const rect = svgRef.current.getBoundingClientRect();
+    const relX = ((e.clientX - rect.left) / rect.width) * w;
+    const idx = Math.max(0, Math.min(bars.length - 1, Math.round(((relX - pad) / (w - pad * 2)) * (bars.length - 1))));
+    setHover(idx);
+  };
+
+  const hoveredBar = hover != null ? bars[hover] : null;
+  const safeEntryIdx = Math.min(entryIdx ?? 0, bars.length - 1);
+  const safeExitIdx = Math.min(exitIdx ?? bars.length - 1, bars.length - 1);
 
   return (
-    <svg viewBox={`0 0 ${w} ${H}`} className="w-full" style={{ height: hasVolume ? 260 : 200 }}>
-      {hasRS && (
-        <>
-          <polyline points={benchPts} fill="none" stroke="#22d3ee" strokeWidth="1.5" strokeDasharray="4,3" opacity="0.7" />
-          <text x={w - pad} y={pad - 8} fontSize="10" fill="#22d3ee" fontFamily="monospace" textAnchor="end">- - - benchmark (normalized)</text>
-        </>
-      )}
-      <polyline points={pts} fill="none" stroke={lineColor} strokeWidth="2" />
-      <circle cx={x(entryIdx)} cy={y(prices[entryIdx])} r="4.5" fill="#e4e4e7" />
-      <text x={x(entryIdx)} y={y(prices[entryIdx]) - 10} fontSize="10" fill="#a1a1aa" fontFamily="monospace" textAnchor="middle">ENTRY</text>
-      <circle cx={x(exitIdx)} cy={y(prices[exitIdx])} r="4.5" fill={lineColor} />
-      <text x={x(exitIdx)} y={y(prices[exitIdx]) - 10} fontSize="10" fill={lineColor} fontFamily="monospace" textAnchor="middle">
-        {status === "win" ? "EXIT (target)" : "EXIT (stop)"}
-      </text>
+    <div className="relative">
+      <svg ref={svgRef} viewBox={`0 0 ${w} ${height}`} className="w-full cursor-crosshair" style={{ height }}
+        onMouseMove={handleMove} onMouseLeave={() => setHover(null)}>
+        {bars.map((b, i) => {
+          const up = b.close >= b.open;
+          const color = up ? "#34d399" : "#f87171";
+          const cx = x(i);
+          const bodyTop = yScale(Math.max(b.open, b.close));
+          const bodyH = Math.max(1, Math.abs(yScale(b.open) - yScale(b.close)));
+          return (
+            <g key={i}>
+              <line x1={cx} y1={yScale(b.high)} x2={cx} y2={yScale(b.low)} stroke={color} strokeWidth="1" />
+              <rect x={cx - candleW / 2} y={bodyTop} width={candleW} height={bodyH} fill={color} />
+            </g>
+          );
+        })}
 
-      {hasVolume && (
-        <>
-          <text x={pad} y={volumeTop - 6} fontSize="9" fill="#71717a" fontFamily="monospace">VOLUME</text>
-          {volumeSeries.map((v, i) => {
-            const barW = Math.max(2, (w - pad * 2) / volumeSeries.length - 2);
-            const barH = (v / (volMax || 1)) * (volumeBottom - volumeTop);
-            const flagged = flaggedVolumeIdx.has(i);
-            return (
-              <rect key={i} x={x(i) - barW / 2} y={volumeBottom - barH} width={barW} height={barH}
-                fill={flagged ? "#38bdf8" : "#3f3f46"} opacity={flagged ? 1 : 0.7} />
-            );
-          })}
-        </>
-      )}
+        {emaSeries.map((s, si) => (
+          <polyline key={si} points={s.data.map((v, i) => `${x(i)},${yScale(v)}`).join(" ")} fill="none" stroke={s.color} strokeWidth="1.5" opacity="0.85" />
+        ))}
+        {emaSeries.length > 0 && (
+          <text x={w - pad} y={pad - 8} fontSize="10" fontFamily="monospace" textAnchor="end" fill="#a1a1aa">
+            {emaSeries.map((s) => `EMA${s.period}`).join("  ")}
+          </text>
+        )}
 
-      {/* indicator overlay ticks, connecting price/volume area down to a marker row */}
-      {flags.map((f, i) => {
-        const meta = INDICATOR_META[f.type] || { color: "#a1a1aa", label: f.type };
-        return (
-          <g key={i}>
-            <line x1={x(f.idx)} y1={pad} x2={x(f.idx)} y2={flagRowY} stroke={meta.color} strokeWidth="1" strokeDasharray="2,3" opacity="0.4" />
-            <rect x={x(f.idx) - 3} y={flagRowY} width="6" height="6" fill={meta.color} rx="1" />
-          </g>
-        );
-      })}
-    </svg>
+        <circle cx={x(safeEntryIdx)} cy={yScale(bars[safeEntryIdx].close)} r="4.5" fill="#e4e4e7" />
+        <text x={x(safeEntryIdx)} y={yScale(bars[safeEntryIdx].close) - 10} fontSize="10" fill="#a1a1aa" fontFamily="monospace" textAnchor="middle">ENTRY</text>
+        <circle cx={x(safeExitIdx)} cy={yScale(bars[safeExitIdx].close)} r="4.5" fill={status === "win" ? "#34d399" : "#fbbf24"} />
+        <text x={x(safeExitIdx)} y={yScale(bars[safeExitIdx].close) - 10} fontSize="10" fill={status === "win" ? "#34d399" : "#fbbf24"} fontFamily="monospace" textAnchor="middle">
+          {status === "win" ? "EXIT" : "EXIT (stop)"}
+        </text>
+
+        <text x={pad} y={volumeTop - 4} fontSize="9" fill="#71717a" fontFamily="monospace">VOLUME</text>
+        {bars.map((b, i) => {
+          const barW = Math.max(1, (w - pad * 2) / bars.length - 1);
+          const barH = (b.volume / volMax) * (volumeBottom - volumeTop);
+          const up = b.close >= b.open;
+          return <rect key={i} x={x(i) - barW / 2} y={volumeBottom - barH} width={barW} height={barH}
+            fill={up ? "#34d399" : "#f87171"} opacity={overlay.emphasizeVolume ? 0.95 : 0.5} />;
+        })}
+
+        {hover != null && (
+          <line x1={x(hover)} y1={pad} x2={x(hover)} y2={volumeBottom} stroke="#a1a1aa" strokeWidth="1" strokeDasharray="3,3" />
+        )}
+      </svg>
+
+      {hoveredBar && (
+        <div className="absolute top-1 left-1 bg-zinc-950/95 border border-zinc-800 rounded px-2 py-1 text-[10px] font-mono text-zinc-300 pointer-events-none">
+          <div className="text-zinc-500">{new Date(hoveredBar.date).toLocaleString()}</div>
+          <div>O {hoveredBar.open.toFixed(2)} H {hoveredBar.high.toFixed(2)} L {hoveredBar.low.toFixed(2)} C {hoveredBar.close.toFixed(2)}</div>
+          <div className="text-zinc-500">Vol {Math.round(hoveredBar.volume).toLocaleString()}</div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -370,36 +405,103 @@ function LogTradeForm({ onClose, onSubmit, error }) {
 // ---------- Trade detail: 4 fully independent panels ----------
 // Each model tab is self-contained: its own chart + indicator overlay + verdict +
 // justification + its own scoped chat. Nothing is shared between tabs except the
-// underlying trade record (symbol/dates/prices) \u2014 each model's read is independent.
-function ModelPanel({ trade, modelId }) {
+// underlying trade record (symbol/dates/prices) — each model's read is independent.
+
+// Picks which bar series + entry/exit indices to chart, and which overlay to
+// apply for the given model. Claude's thesis is EMA-based, so its tab always
+// shows the EMAs it actually reasons about. GPT's thesis is flow/volume-based,
+// so its tab emphasizes the volume subplot. Grok's thesis is relative-strength
+// based, but we don't have a real benchmark (QQQ) series fetched yet — flagged
+// honestly rather than faked.
+function useChartConfig(trade, modelId) {
+  const bars = trade.intradayBars?.length ? trade.intradayBars : trade.bars;
+  const entryIdx = trade.intradayBars?.length ? trade.intradayEntryIdx : trade.entryIdx;
+  const exitIdx = trade.intradayBars?.length ? trade.intradayExitIdx : trade.exitIdx;
+  const overlay = {};
+  if (bars && modelId === "claude") {
+    const closes = bars.map((b) => b.close);
+    overlay.ema = [
+      { period: 10, color: "#fbbf24", data: computeEMA(closes, 10) },
+      { period: 20, color: "#f59e0b", data: computeEMA(closes, 20) },
+    ];
+  }
+  if (modelId === "gpt") overlay.emphasizeVolume = true;
+  return { bars, entryIdx, exitIdx, overlay };
+}
+
+function AnalysisDetails({ trade, modelId }) {
   const a = trade.analysis[modelId];
   return (
     <div>
-      <PriceChart
-        prices={trade.prices} entryIdx={a.entryIdx} exitIdx={a.exitIdx} status={trade.status} flags={a.flags}
-        volumeSeries={trade.volumeSeries} benchmarkSeries={trade.benchmarkSeries}
-      />
-      <div className="flex justify-between text-xs font-mono text-zinc-500 mt-1 px-1 mb-3">
-        <span>{trade.entryDate} · ${trade.entryPrice}</span>
-        <span>{trade.exitDate} · ${trade.exitPrice}</span>
-      </div>
-
       <div className="flex items-center justify-between mb-2">
         <VerdictBadge verdict={a.verdict} />
         {a.confidence > 0 && <span className="text-xs font-mono text-zinc-500">confidence {a.confidence}%</span>}
       </div>
       <p className="text-sm text-zinc-300 leading-relaxed mb-3">{a.text}</p>
-
+      {modelId === "grok" && (
+        <p className="text-[11px] text-zinc-600 italic mb-3">Grok's thesis is relative-strength based, but a real benchmark (QQQ) series isn't fetched yet — not shown here rather than faked.</p>
+      )}
       <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono mb-1.5">Indicator combination used</div>
       <IndicatorLegend flags={a.flags} />
-
       <ChatPanel trade={trade} modelId={modelId} />
+    </div>
+  );
+}
+
+function ModelPanel({ trade, modelId, onExpand }) {
+  const { bars, entryIdx, exitIdx, overlay } = useChartConfig(trade, modelId);
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-[11px] font-mono text-zinc-600">{trade.intradayBars?.length ? "15-min bars" : "daily bars"}</span>
+        <button onClick={onExpand} className="flex items-center gap-1 text-[11px] font-mono text-zinc-500 hover:text-zinc-300 px-2 py-1 rounded border border-zinc-800 hover:bg-zinc-900">
+          <Maximize2 size={12} /> Expand
+        </button>
+      </div>
+      <CandlestickChart bars={bars} entryIdx={entryIdx} exitIdx={exitIdx} status={trade.status} overlay={overlay} height={280} />
+      <div className="flex justify-between text-xs font-mono text-zinc-500 mt-1 px-1 mb-3">
+        <span>{trade.entryDate} · ${trade.entryPrice}</span>
+        <span>{trade.exitDate} · ${trade.exitPrice}</span>
+      </div>
+      <AnalysisDetails trade={trade} modelId={modelId} />
+    </div>
+  );
+}
+
+// Full-screen expanded view: chart takes 70% of the width, commentary 30%,
+// per your request to make the chart big and interactive like a real
+// trading terminal rather than squeezed into a small modal panel.
+function ExpandedChartView({ trade, modelId, onClose }) {
+  const { bars, entryIdx, exitIdx, overlay } = useChartConfig(trade, modelId);
+  return (
+    <div className="fixed inset-0 bg-black z-[60] flex flex-col">
+      <div className="flex items-center justify-between px-5 py-3 border-b border-zinc-800">
+        <div className="flex items-center gap-2">
+          <span className={`w-2 h-2 rounded-full ${MODEL_META[modelId].dot}`} />
+          <span className={`font-semibold ${MODEL_META[modelId].accent}`}>{MODEL_META[modelId].name}</span>
+          <span className="text-zinc-500 font-mono text-sm">{trade.symbol} {trade.direction}</span>
+        </div>
+        <button onClick={onClose} className="text-zinc-500 hover:text-zinc-300"><X size={20} /></button>
+      </div>
+      <div className="grid grid-cols-10 flex-1 overflow-hidden">
+        <div className="col-span-7 p-5 overflow-y-auto border-r border-zinc-800">
+          <CandlestickChart bars={bars} entryIdx={entryIdx} exitIdx={exitIdx} status={trade.status} overlay={overlay} height={560} />
+          <div className="flex justify-between text-xs font-mono text-zinc-500 mt-2 px-1">
+            <span>{trade.entryDate} · ${trade.entryPrice}</span>
+            <span>{trade.exitDate} · ${trade.exitPrice}</span>
+          </div>
+        </div>
+        <div className="col-span-3 p-5 overflow-y-auto">
+          <AnalysisDetails trade={trade} modelId={modelId} />
+        </div>
+      </div>
     </div>
   );
 }
 
 function TradeDetail({ trade, onClose }) {
   const [tab, setTab] = useState("combined");
+  const [expanded, setExpanded] = useState(false);
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
       <div className="bg-zinc-950 border border-zinc-800 rounded-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
@@ -424,9 +526,10 @@ function TradeDetail({ trade, onClose }) {
         </div>
 
         <div className="p-5">
-          <ModelPanel trade={trade} modelId={tab} />
+          <ModelPanel trade={trade} modelId={tab} onExpand={() => setExpanded(true)} />
         </div>
       </div>
+      {expanded && <ExpandedChartView trade={trade} modelId={tab} onClose={() => setExpanded(false)} />}
     </div>
   );
 }
