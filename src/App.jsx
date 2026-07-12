@@ -121,16 +121,17 @@ function CandlestickChart({ bars, entryIdx, exitIdx, status, overlay = {}, heigh
     return <div className="text-xs text-zinc-600 italic py-10 text-center border border-zinc-800 rounded-lg">No chart data available.</div>;
   }
 
-  const w = 900, pad = 30;
+  const w = 900, pad = 30, axisW = 56, axisH = 20;
   const priceBottom = height - 74;
   const volumeTop = priceBottom + 16;
   const volumeBottom = height - 22;
+  const plotRight = w - axisW; // leave room for the right-side price axis
 
   const highs = bars.map((b) => b.high), lows = bars.map((b) => b.low);
   const min = Math.min(...lows), max = Math.max(...highs);
-  const x = (i) => pad + (i / Math.max(1, bars.length - 1)) * (w - pad * 2);
+  const x = (i) => pad + (i / Math.max(1, bars.length - 1)) * (plotRight - pad);
   const yScale = (v) => priceBottom - ((v - min) / (max - min || 1)) * (priceBottom - pad);
-  const candleW = Math.max(1.5, ((w - pad * 2) / bars.length) * 0.6);
+  const candleW = Math.max(2, ((plotRight - pad) / bars.length) * 0.7);
   const volMax = Math.max(...bars.map((b) => b.volume), 1);
   const emaSeries = overlay.ema || [];
 
@@ -151,11 +152,35 @@ function CandlestickChart({ bars, entryIdx, exitIdx, status, overlay = {}, heigh
     }
   }
 
+  // Session (day) bands, alternating so each calendar day is visually distinct.
+  const dayBands = [];
+  {
+    let start = 0, curDay = bars[0].date.slice(0, 10);
+    for (let i = 1; i <= bars.length; i++) {
+      const day = i < bars.length ? bars[i].date.slice(0, 10) : null;
+      if (day !== curDay) {
+        dayBands.push({ start, end: i - 1, day: curDay });
+        start = i;
+        curDay = day;
+      }
+    }
+  }
+
+  // Right-side price axis: 5 evenly spaced levels.
+  const priceTicks = Array.from({ length: 5 }, (_, i) => min + ((max - min) * i) / 4);
+
+  // Bottom date/time axis: ~6 evenly spaced bar indices.
+  const timeTickCount = Math.min(6, bars.length);
+  const timeTicks = Array.from({ length: timeTickCount }, (_, i) => Math.round((i / Math.max(1, timeTickCount - 1)) * (bars.length - 1)));
+  const spansMultipleDays = dayBands.length > 1;
+
   const handleMove = (e) => {
     if (!svgRef.current) return;
     const rect = svgRef.current.getBoundingClientRect();
+    // preserveAspectRatio="none" below means rect.width maps 1:1 to the
+    // viewBox width with no letterboxing, so this stays accurate at any size.
     const relX = ((e.clientX - rect.left) / rect.width) * w;
-    const idx = Math.max(0, Math.min(bars.length - 1, Math.round(((relX - pad) / (w - pad * 2)) * (bars.length - 1))));
+    const idx = Math.max(0, Math.min(bars.length - 1, Math.round(((relX - pad) / (plotRight - pad)) * (bars.length - 1))));
     setHover(idx);
   };
 
@@ -165,8 +190,20 @@ function CandlestickChart({ bars, entryIdx, exitIdx, status, overlay = {}, heigh
 
   return (
     <div className="relative">
-      <svg ref={svgRef} viewBox={`0 0 ${w} ${height}`} className="w-full cursor-crosshair" style={{ height }}
+      <svg ref={svgRef} viewBox={`0 0 ${w} ${height}`} preserveAspectRatio="none" className="w-full cursor-crosshair" style={{ height }}
         onMouseMove={handleMove} onMouseLeave={() => setHover(null)}>
+        {dayBands.map((band, i) => (
+          i % 2 === 1 ? <rect key={i} x={x(band.start) - candleW} y={pad} width={x(band.end) - x(band.start) + candleW * 2} height={volumeBottom - pad}
+            fill="#888888" opacity="0.06" /> : null
+        ))}
+
+        {priceTicks.map((p, i) => (
+          <g key={i}>
+            <line x1={pad} y1={yScale(p)} x2={plotRight} y2={yScale(p)} stroke="#888888" strokeWidth="1" strokeDasharray="2,3" opacity="0.25" />
+            <text x={plotRight + 6} y={yScale(p)} fontSize="10" fill="#71717a" fontFamily="monospace" dominantBaseline="central">{p.toFixed(2)}</text>
+          </g>
+        ))}
+
         {cloudSegments.map((seg, si) => {
           const idxs = [];
           for (let i = seg.start; i <= seg.end; i++) idxs.push(i);
@@ -197,7 +234,7 @@ function CandlestickChart({ bars, entryIdx, exitIdx, status, overlay = {}, heigh
           <polyline key={si} points={s.data.map((v, i) => `${x(i)},${yScale(v)}`).join(" ")} fill="none" stroke={s.color} strokeWidth="1.5" opacity="0.85" />
         ))}
         {emaSeries.length > 0 && (
-          <text x={w - pad} y={pad - 8} fontSize="10" fontFamily="monospace" textAnchor="end" fill="#a1a1aa">
+          <text x={plotRight} y={pad - 8} fontSize="10" fontFamily="monospace" textAnchor="end" fill="#a1a1aa">
             {emaSeries.map((s) => `EMA${s.period}`).join("  ")}
           </text>
         )}
@@ -224,15 +261,31 @@ function CandlestickChart({ bars, entryIdx, exitIdx, status, overlay = {}, heigh
 
         <text x={pad} y={volumeTop - 4} fontSize="9" fill="#71717a" fontFamily="monospace">VOLUME</text>
         {bars.map((b, i) => {
-          const barW = Math.max(1, (w - pad * 2) / bars.length - 1);
+          const barW = candleW;
           const barH = (b.volume / volMax) * (volumeBottom - volumeTop);
           const up = b.close >= b.open;
           return <rect key={i} x={x(i) - barW / 2} y={volumeBottom - barH} width={barW} height={barH}
             fill={up ? "#34d399" : "#f87171"} opacity={overlay.emphasizeVolume ? 0.95 : 0.5} />;
         })}
 
+        {timeTicks.map((idx, i) => {
+          const bar = bars[idx];
+          const label = spansMultipleDays
+            ? new Date(bar.date).toLocaleDateString(undefined, { month: "short", day: "numeric" })
+            : new Date(bar.date).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+          return (
+            <g key={i}>
+              <line x1={x(idx)} y1={pad} x2={x(idx)} y2={volumeBottom} stroke="#888888" strokeWidth="1" strokeDasharray="2,3" opacity="0.15" />
+              <text x={x(idx)} y={height - 6} fontSize="9" fill="#71717a" fontFamily="monospace" textAnchor="middle">{label}</text>
+            </g>
+          );
+        })}
+
         {hover != null && (
-          <line x1={x(hover)} y1={pad} x2={x(hover)} y2={volumeBottom} stroke="#a1a1aa" strokeWidth="1" strokeDasharray="3,3" />
+          <>
+            <line x1={x(hover)} y1={pad} x2={x(hover)} y2={volumeBottom} stroke="#a1a1aa" strokeWidth="1" strokeDasharray="3,3" />
+            <line x1={pad} y1={yScale(bars[hover].close)} x2={plotRight} y2={yScale(bars[hover].close)} stroke="#a1a1aa" strokeWidth="1" strokeDasharray="3,3" opacity="0.5" />
+          </>
         )}
       </svg>
 
