@@ -3,12 +3,9 @@
 // checks the store first and skips if this trade is already there, so
 // restarts don't create duplicates or re-spend API credits needlessly.
 //
-// NOTE: because trade storage is currently an ephemeral JSON file (see
-// docs/architecture.md), a full REDEPLOY wipes the store and this will
-// re-seed on the next boot, re-spending API credits. A plain container
-// restart (no redeploy) does not wipe the file, so the idempotency check
-// still matters day-to-day. This whole mechanism goes away once real
-// persistent storage (a database or Railway volume) replaces the JSON file.
+// Trade storage is now PostgreSQL (Railway), so this only actually re-seeds
+// once, ever — not on every redeploy like it used to when storage was an
+// ephemeral JSON file. Safe to leave running.
 //
 // Real trade: META, June 25 2026 (close $544.32) to July 10 2026 (close
 // $668.07), a genuine +22.7% move on real, documented news (Bank of America
@@ -27,16 +24,17 @@ const SEED_TRADE = {
 };
 
 export async function runFridayTestAnalysis() {
-  const already = readTrades().some(
-    (t) => t.symbol === SEED_TRADE.symbol && t.entryDate === SEED_TRADE.entryDate && t.exitDate === SEED_TRADE.exitDate
-  );
-  if (already) {
-    console.log("Seed trade (META 2026-06-25\u20132026-07-10) already present \u2014 skipping re-seed.");
-    return;
-  }
-
-  console.log("Seeding real trade: META 2026-06-25 to 2026-07-10 ...");
   try {
+    const existing = await readTrades();
+    const already = existing.some(
+      (t) => t.symbol === SEED_TRADE.symbol && t.entryDate === SEED_TRADE.entryDate && t.exitDate === SEED_TRADE.exitDate
+    );
+    if (already) {
+      console.log("Seed trade (META 2026-06-25\u20132026-07-10) already present \u2014 skipping re-seed.");
+      return;
+    }
+
+    console.log("Seeding real trade: META 2026-06-25 to 2026-07-10 ...");
     const dataset = await buildTradeDataset(SEED_TRADE);
     if (!dataset.bars) {
       console.error("Seed skipped \u2014 Databento fetch failed, no bars returned.");
@@ -59,9 +57,12 @@ export async function runFridayTestAnalysis() {
       analysisStatus: "complete",
       agreement: analysis.combined.agreement,
     };
-    appendTrade(trade);
+    await appendTrade(trade);
     console.log(`Seed trade saved. Combined verdict: ${analysis.combined.verdict}, agreement ${analysis.combined.agreement}.`);
   } catch (err) {
-    console.error("Seed trade failed:", err.message);
+    // Whatever goes wrong here (DB unreachable, data fetch failure, etc.)
+    // must never take down the whole server — this is a nice-to-have
+    // startup step, not a required one.
+    console.error("Seed trade step failed (server continues normally):", err.message);
   }
 }

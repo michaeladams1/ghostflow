@@ -32,8 +32,13 @@ app.use((req, res, next) => {
 });
 
 // --- Trade API ---
-app.get("/api/trades", (req, res) => {
-  res.json(readTrades());
+app.get("/api/trades", async (req, res) => {
+  try {
+    res.json(await readTrades());
+  } catch (err) {
+    console.error("Failed to read trades:", err.message);
+    res.status(500).json({ error: "Database read failed: " + err.message });
+  }
 });
 
 app.post("/api/trades", async (req, res) => {
@@ -61,7 +66,7 @@ app.post("/api/trades", async (req, res) => {
       analysis, // null if analysis failed — see analysisStatus
       analysisStatus,
     };
-    appendTrade(trade);
+    await appendTrade(trade);
     res.status(201).json(trade);
   } catch (err) {
     console.error("Trade dataset build failed:", err);

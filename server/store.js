@@ -1,31 +1,31 @@
-// Simple JSON-file trade storage.
-//
-// IMPORTANT: Railway's default filesystem is EPHEMERAL. This file gets wiped
-// on every redeploy. This is fine for now (testing the data pipeline) but
-// before relying on this for real, ongoing trade logging, this needs to move
-// to a real database (or a Railway volume) so trades survive a redeploy.
+// Trade storage — PostgreSQL (Railway), replacing the old ephemeral JSON
+// file. Each trade is stored as a single JSONB blob (the exact same shape
+// the UI/analysis code already expects — no other file had to change),
+// plus a few plain columns (symbol, dates) for future querying once we
+// build things like "all trades for this symbol" or thesis aggregation.
 
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { pool, ensureSchema } from "./db.js";
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = path.join(__dirname, "data");
-const TRADES_FILE = path.join(DATA_DIR, "trades.json");
-
-function ensureStore() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-  if (!fs.existsSync(TRADES_FILE)) fs.writeFileSync(TRADES_FILE, "[]");
+export async function readTrades() {
+  await ensureSchema();
+  const { rows } = await pool.query("SELECT data FROM trades ORDER BY logged_at DESC");
+  return rows.map((r) => r.data);
 }
 
-export function readTrades() {
-  ensureStore();
-  return JSON.parse(fs.readFileSync(TRADES_FILE, "utf8"));
-}
-
-export function appendTrade(trade) {
-  const trades = readTrades();
-  trades.unshift(trade); // newest first
-  fs.writeFileSync(TRADES_FILE, JSON.stringify(trades, null, 2));
+export async function appendTrade(trade) {
+  await ensureSchema();
+  await pool.query(
+    `INSERT INTO trades (id, symbol, entry_date, exit_date, logged_at, data)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     ON CONFLICT (id) DO UPDATE SET data = EXCLUDED.data`,
+    [
+      trade.id,
+      trade.symbol,
+      trade.entryDate || null,
+      trade.exitDate || null,
+      trade.loggedAt || new Date().toISOString(),
+      JSON.stringify(trade),
+    ]
+  );
   return trade;
 }
