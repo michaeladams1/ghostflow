@@ -38,12 +38,13 @@ Build a system where three AI models (Claude, GPT, Grok) each independently stud
 
 - [x] **Trade Log UI (prototype)** — mock data, filterable by win/near-miss/low-info
 - [x] **Trade Detail UI (prototype)** — 4 fully independent model tabs, each with its own chart, indicator overlay, verdict, and scoped chat
-- [ ] **Data vendor integration** — Quant Data (MCP) + Databento API calls per logged trade
+- [x] **Data vendor integration** — Quant Data + Databento wired into a real `/api/trades` endpoint; logging a trade now pulls real price history + options flow (storage is a temporary JSON file — see note below)
 - [ ] **Thesis document schema** — backing data structure (UI already assumes this shape)
 - [ ] **AI analyst orchestration** — real calls to Claude, GPT, Grok APIs, each with tool access to pull data and its own prior thesis as context
 - [ ] **Individual knowledge base storage** — one growing document/record per AI
 - [ ] **Merge/synthesis process** — job that compares the 3 theses and produces a shared version
 - [ ] **Real per-trade chat** — replace the mock keyword-matched responder with a live scoped API call per model
+- [ ] **Persistent trade storage** — current storage is a JSON file on Railway's ephemeral filesystem; trades do NOT survive a redeploy yet. Needs a real database (or a Railway volume) before relying on this for real trade logging.
 
 ## 5. Future Phase 3 — Live Daily Screening (Not Yet Started, Depends on Mature Thesis)
 

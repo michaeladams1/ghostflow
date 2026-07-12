@@ -1,11 +1,11 @@
-// Minimal static file server with HTTP Basic Auth in front of it.
-// Credentials come from Railway environment variables (GHOSTFLOW_USER / GHOSTFLOW_PASS)
-// and are never sent to the client — this is server-side gating, not a client-side
-// password screen (which could be extracted from the shipped JS bundle).
-import http from "node:http";
-import fs from "node:fs";
+// GHOSTFLOW server: serves the built frontend, gates everything behind
+// HTTP Basic Auth (Railway env vars), and exposes a small trade API that
+// fetches real market data from Databento + Quant Data per logged trade.
+import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { readTrades, appendTrade } from "./server/store.js";
+import { buildTradeDataset } from "./server/tradeData.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DIST_DIR = path.join(__dirname, "dist");
@@ -13,38 +13,55 @@ const PORT = process.env.PORT || 3000;
 const USER = process.env.GHOSTFLOW_USER;
 const PASS = process.env.GHOSTFLOW_PASS;
 
-const MIME = {
-  ".html": "text/html", ".js": "text/javascript", ".css": "text/css",
-  ".svg": "image/svg+xml", ".png": "image/png", ".json": "application/json",
-};
+const app = express();
+app.use(express.json());
 
-function checkAuth(req) {
-  if (!USER || !PASS) return true; // no credentials configured — see README warning
+// --- Basic Auth gate (applies to everything, including the API) ---
+app.use((req, res, next) => {
+  if (!USER || !PASS) return next(); // no creds configured — see README warning
   const header = req.headers.authorization || "";
-  if (!header.startsWith("Basic ")) return false;
-  const decoded = Buffer.from(header.slice(6), "base64").toString("utf8");
-  const [u, p] = decoded.split(":");
-  return u === USER && p === PASS;
-}
-
-const server = http.createServer((req, res) => {
-  if (!checkAuth(req)) {
-    res.writeHead(401, { "WWW-Authenticate": 'Basic realm="GHOSTFLOW"' });
-    res.end("Authentication required");
-    return;
+  if (header.startsWith("Basic ")) {
+    const [u, p] = Buffer.from(header.slice(6), "base64").toString("utf8").split(":");
+    if (u === USER && p === PASS) return next();
   }
-
-  let filePath = path.join(DIST_DIR, req.url === "/" ? "index.html" : req.url);
-  if (!filePath.startsWith(DIST_DIR)) { res.writeHead(403); res.end("Forbidden"); return; }
-  if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
-    filePath = path.join(DIST_DIR, "index.html"); // SPA fallback
-  }
-
-  const ext = path.extname(filePath);
-  res.writeHead(200, { "Content-Type": MIME[ext] || "application/octet-stream" });
-  fs.createReadStream(filePath).pipe(res);
+  res.set("WWW-Authenticate", 'Basic realm="GHOSTFLOW"');
+  res.status(401).send("Authentication required");
 });
 
-server.listen(PORT, () => {
-  console.log(`GHOSTFLOW serving on port ${PORT}${!USER || !PASS ? " (WARNING: no auth configured — set GHOSTFLOW_USER/GHOSTFLOW_PASS)" : " (auth enabled)"}`);
+// --- Trade API ---
+app.get("/api/trades", (req, res) => {
+  res.json(readTrades());
+});
+
+app.post("/api/trades", async (req, res) => {
+  const { symbol, direction, outcome, entryDate, exitDate, entryPrice, exitPrice, notes } = req.body;
+  if (!symbol || !entryDate) {
+    return res.status(400).json({ error: "symbol and entryDate are required" });
+  }
+  try {
+    const dataset = await buildTradeDataset({ symbol, entryDate, exitDate });
+    const trade = {
+      id: "t" + Date.now(),
+      symbol: symbol.toUpperCase(),
+      direction,
+      outcome,
+      entryDate, exitDate, entryPrice, exitPrice, notes,
+      loggedAt: new Date().toISOString(),
+      ...dataset, // prices, entryIdx, exitIdx, rawFlow, dataFetchOk
+      analysisStatus: "pending", // AI orchestration not built yet — see docs/architecture.md
+    };
+    appendTrade(trade);
+    res.status(201).json(trade);
+  } catch (err) {
+    console.error("Trade dataset build failed:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// --- Static frontend ---
+app.use(express.static(DIST_DIR));
+app.get("*", (req, res) => res.sendFile(path.join(DIST_DIR, "index.html")));
+
+app.listen(PORT, () => {
+  console.log(`GHOSTFLOW serving on port ${PORT}${!USER || !PASS ? " (WARNING: no auth configured)" : " (auth enabled)"}`);
 });

@@ -332,7 +332,7 @@ function ChatPanel({ trade, modelId }) {
 }
 
 // ---------- Log Trade form ----------
-function LogTradeForm({ onClose, onSubmit }) {
+function LogTradeForm({ onClose, onSubmit, error }) {
   const [form, setForm] = useState({ symbol: "", direction: "CALL", outcome: "win", entryDate: "", exitDate: "", entryPrice: "", exitPrice: "", notes: "" });
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
   return (
@@ -398,15 +398,16 @@ function LogTradeForm({ onClose, onSubmit }) {
         <div className="flex gap-2 mt-5">
           <button onClick={onClose} className="flex-1 py-2 rounded border border-zinc-800 text-zinc-400 text-sm hover:bg-zinc-900">Cancel</button>
           <button
-            onClick={() => { onSubmit(form); onClose(); }}
+            onClick={async () => { const ok = await onSubmit(form); if (ok) onClose(); }}
             disabled={!form.symbol}
             className="flex-1 py-2 rounded bg-emerald-600 text-zinc-950 text-sm font-medium hover:bg-emerald-500 disabled:opacity-40 disabled:hover:bg-emerald-600">
             Log trade
           </button>
         </div>
+        {error && <p className="text-xs text-red-400 mt-2">{error}</p>}
         <p className="text-[11px] text-zinc-600 mt-3 leading-relaxed">
-          In the full system this triggers the 3 analysts to pull historical data and run their analysis.
-          In this prototype, new trades are logged as <span className="text-zinc-400 font-mono">Pending analysis</span> — no live data pull is wired up yet.
+          Logging a trade now pulls real historical price data (Databento) and options flow (Quant Data) for this symbol.
+          AI thesis analysis isn't wired up yet — that's the next build phase.
         </p>
       </div>
     </div>
@@ -601,26 +602,48 @@ export default function App() {
   const [trades, setTrades] = useState(MOCK_TRADES);
   const [openTradeId, setOpenTradeId] = useState(null);
   const [showForm, setShowForm] = useState(false);
+  const [submitError, setSubmitError] = useState(null);
+
+  useEffect(() => {
+    fetch("/api/trades")
+      .then((r) => r.json())
+      .then((realTrades) => {
+        if (realTrades.length) setTrades((prev) => [...realTrades, ...prev]);
+      })
+      .catch(() => {}); // fine if this fails locally without the server running
+  }, []);
 
   const openTrade = useMemo(() => trades.find((t) => t.id === openTradeId), [trades, openTradeId]);
 
-  const addTrade = (form) => {
-    const id = "t" + (trades.length + 1);
-    const status = form.outcome === "win" ? "win" : "near-miss-loss"; // demo default
-    const prices = wave(Number(form.entryPrice) || 100, 16, status === "win" ? 0.8 : -0.3, 2.5);
-    setTrades((prev) => [
-      {
-        id, symbol: (form.symbol || "NEW").toUpperCase(), direction: form.direction, status,
-        loggedAt: `Trade #${prev.length + 1}`, entryDate: form.entryDate || "\u2014", exitDate: form.exitDate || "\u2014",
-        entryPrice: form.entryPrice || "\u2014", exitPrice: form.exitPrice || "\u2014",
-        prices, entryIdx: 3, exitIdx: 12, agreement: "\u2014",
-        analysis: Object.fromEntries(MODEL_ORDER.map((m) => [m, {
-          verdict: "pending", confidence: 0, entryIdx: 3, exitIdx: 12, flags: [],
-          text: "Pending analysis \u2014 this prototype doesn't have live data pulls wired up yet. In the full system, the 3 analysts would pull historical data now and produce this section automatically.",
-        }])),
-      },
-      ...prev,
-    ]);
+  const addTrade = async (form) => {
+    setSubmitError(null);
+    try {
+      const res = await fetch("/api/trades", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(form),
+      });
+      if (!res.ok) throw new Error((await res.json()).error || "Failed to log trade");
+      const trade = await res.json();
+      setTrades((prev) => [
+        {
+          ...trade,
+          status: trade.outcome === "win" ? "win" : "near-miss-loss",
+          agreement: "\u2014",
+          analysis: Object.fromEntries(MODEL_ORDER.map((m) => [m, {
+            verdict: "pending", confidence: 0, entryIdx: trade.entryIdx, exitIdx: trade.exitIdx, flags: [],
+            text: trade.dataFetchOk && trade.dataFetchOk.databento
+              ? "Real price data pulled successfully. AI analysis isn't wired up yet \u2014 this trade is stored and ready for the next build phase."
+              : "Data pull had an issue (check server logs) \u2014 this trade is stored but the chart may be incomplete.",
+          }])),
+        },
+        ...prev,
+      ]);
+      return true;
+    } catch (err) {
+      setSubmitError(err.message);
+      return false;
+    }
   };
 
   const NAV = [
@@ -656,7 +679,7 @@ export default function App() {
       </div>
 
       {openTrade && <TradeDetail trade={openTrade} onClose={() => setOpenTradeId(null)} />}
-      {showForm && <LogTradeForm onClose={() => setShowForm(false)} onSubmit={addTrade} />}
+      {showForm && <LogTradeForm onClose={() => setShowForm(false)} onSubmit={addTrade} error={submitError} />}
     </div>
   );
 }
