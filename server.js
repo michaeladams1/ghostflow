@@ -1,14 +1,19 @@
-// GHOSTFLOW server: serves the built frontend, gates everything behind
-// HTTP Basic Auth (Railway env vars), and exposes a small trade API that
-// fetches real market data from Databento + Quant Data per logged trade.
+// GHOSTFLOW server: serves the built frontend, gates everything behind HTTP
+// Basic Auth, and exposes the session-analysis API.
+//
+// THE CORE ENDPOINT IS NOW /api/analyze. You give it a SYMBOL and a SESSION
+// DATE — not a trade. There is no entry, no exit, no win/loss anywhere in this
+// API, because Michael never enters a trade before the system runs. The system
+// finds the moves itself and asks whether they were knowable in advance.
+
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readTrades, appendTrade } from "./server/store.js";
-import { buildTradeDataset } from "./server/tradeData.js";
+import { fetchAllEndpoints } from "./server/quantDataClient.js";
+import { buildBriefing } from "./server/compress.js";
+import { analyzeAllModels } from "./server/analysis.js";
 import { callClaude, callGPT, callGrok } from "./server/aiProviders.js";
-import { analyzeTradeAllModels } from "./server/analysis.js";
-import { runFridayTestAnalysis } from "./server/testAnalysis.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DIST_DIR = path.join(__dirname, "dist");
@@ -19,9 +24,8 @@ const PASS = process.env.GHOSTFLOW_PASS;
 const app = express();
 app.use(express.json());
 
-// --- Basic Auth gate (applies to everything, including the API) ---
 app.use((req, res, next) => {
-  if (!USER || !PASS) return next(); // no creds configured — see README warning
+  if (!USER || !PASS) return next();
   const header = req.headers.authorization || "";
   if (header.startsWith("Basic ")) {
     const [u, p] = Buffer.from(header.slice(6), "base64").toString("utf8").split(":");
@@ -31,106 +35,84 @@ app.use((req, res, next) => {
   res.status(401).send("Authentication required");
 });
 
-// --- Trade API ---
-app.get("/api/trades", async (req, res) => {
+// Past analyses (stored in the same Postgres table; the JSONB column doesn't
+// care that the shape changed).
+app.get("/api/analyses", async (req, res) => {
   try {
     res.json(await readTrades());
   } catch (err) {
-    console.error("Failed to read trades:", err.message);
+    console.error("DB read failed:", err.message);
     res.status(500).json({ error: "Database read failed: " + err.message });
   }
 });
 
-app.post("/api/trades", async (req, res) => {
-  const { symbol, direction, outcome, entryDate, exitDate, entryPrice, exitPrice, notes } = req.body;
-  if (!symbol || !entryDate) {
-    return res.status(400).json({ error: "symbol and entryDate are required" });
+// THE MAIN EVENT.
+// Input: { symbol, sessionDate, contract? }  — that is ALL Michael types.
+// Steps: fetch all 30 feeds -> compress into a timeline + lead/lag ->
+//        3 models independently review every feed and propose a testable rule.
+app.post("/api/analyze", async (req, res) => {
+  const { symbol, sessionDate, lookbackDays = 15, contract } = req.body;
+  if (!symbol || !sessionDate) {
+    return res.status(400).json({ error: "symbol and sessionDate are required" });
   }
+
+  const ticker = String(symbol).toUpperCase();
+  const start = new Date(sessionDate + "T00:00:00Z");
+  start.setUTCDate(start.getUTCDate() - lookbackDays);
+  const startDate = start.toISOString().slice(0, 10);
+
   try {
-    const dataset = await buildTradeDataset({ symbol, entryDate, exitDate });
-    let analysis = null, analysisStatus = "failed";
-    try {
-      analysis = await analyzeTradeAllModels({ symbol: symbol.toUpperCase(), direction, entryDate, exitDate }, dataset);
-      analysisStatus = "complete";
-    } catch (err) {
-      console.error("AI analysis failed for", symbol, ":", err.message);
-    }
-    const trade = {
-      id: "t" + Date.now(),
-      symbol: symbol.toUpperCase(),
-      direction,
-      outcome,
-      entryDate, exitDate, entryPrice, exitPrice, notes,
+    console.log(`[analyze] ${ticker} ${sessionDate} — fetching all feeds...`);
+    const bundle = await fetchAllEndpoints({ ticker, sessionDate, startDate, endDate: sessionDate, contract });
+    console.log(`[analyze] fetched ${bundle.report.succeeded}/${bundle.report.attempted} feeds`);
+
+    const briefing = buildBriefing(bundle, { contract });
+    console.log(`[analyze] ${briefing.timeline.priceThrusts.length} price thrusts detected; running 3 analysts...`);
+
+    const analysis = await analyzeAllModels(briefing);
+    console.log(`[analyze] done. combined=${analysis.combined.verdict} agreement=${analysis.combined.agreement}`);
+
+    const record = {
+      id: "a" + Date.now(),
+      symbol: ticker,
+      sessionDate,
+      contract: contract || null,
       loggedAt: new Date().toISOString(),
-      ...dataset, // prices, entryIdx, exitIdx, bars, rawFlow, dataFetchOk
-      analysis, // null if analysis failed — see analysisStatus
-      analysisStatus,
-    };
-    await appendTrade(trade);
-    res.status(201).json(trade);
-  } catch (err) {
-    console.error("Trade dataset build failed:", err);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Re-runs the 3-model analysis for an already-logged trade against its
-// original symbol/entry/exit, and OVERWRITES that trade's stored analysis
-// in place (same id \u2014 no duplicate row). Exists because prompt logic keeps
-// improving; this lets any past trade be re-scored against the current
-// prompt without re-logging it from scratch.
-app.post("/api/trades/:id/reanalyze", async (req, res) => {
-  try {
-    const trades = await readTrades();
-    const existing = trades.find((t) => t.id === req.params.id);
-    if (!existing) return res.status(404).json({ error: `No trade with id ${req.params.id}` });
-
-    const dataset = await buildTradeDataset({ symbol: existing.symbol, entryDate: existing.entryDate, exitDate: existing.exitDate });
-    const analysis = await analyzeTradeAllModels(
-      { symbol: existing.symbol, direction: existing.direction, entryDate: existing.entryDate, exitDate: existing.exitDate },
-      dataset
-    );
-    const updated = {
-      ...existing,
-      ...dataset, // fresh prices/entryIdx/exitIdx/bars/intradayBars/rawFlow/dataFetchOk
-      entryPrice: dataset.bars?.[dataset.entryIdx]?.close ?? existing.entryPrice,
-      exitPrice: dataset.bars?.[dataset.exitIdx]?.close ?? existing.exitPrice,
+      // The briefing is stored WITHOUT the giant raw bundle — the compressed
+      // per-feed readings and timeline are what the UI needs, and the raw
+      // payloads would bloat the row for no benefit.
+      briefing: {
+        endpoints: briefing.endpoints,
+        timeline: briefing.timeline,
+        fetchReport: briefing.fetchReport,
+      },
       analysis,
-      analysisStatus: "complete",
       agreement: analysis.combined.agreement,
     };
-    await appendTrade(updated);
-    res.json(updated);
+
+    await appendTrade(record);
+    res.status(201).json(record);
   } catch (err) {
-    console.error("Reanalyze failed for", req.params.id, ":", err.message);
+    console.error("[analyze] FAILED:", err);
     res.status(500).json({ error: err.message });
   }
 });
 
-// --- Static frontend ---
 app.use(express.static(DIST_DIR));
 app.get("*", (req, res) => res.sendFile(path.join(DIST_DIR, "index.html")));
 
 app.listen(PORT, () => {
-  console.log(`GHOSTFLOW serving on port ${PORT}${!USER || !PASS ? " (WARNING: no auth configured)" : " (auth enabled)"}`);
-  runAIProviderHealthCheck().then(() => runFridayTestAnalysis()); // TEMPORARY — remove after reviewing this test run
+  console.log(`GHOSTFLOW on port ${PORT}${!USER || !PASS ? " (WARNING: no auth)" : " (auth enabled)"}`);
+  runAIProviderHealthCheck();
 });
 
-// One-time startup check confirming each AI provider key actually works.
-// Logs pass/fail only — never logs key values. Not on the request path;
-// just a startup diagnostic so this shows up in Deploy Logs automatically.
 async function runAIProviderHealthCheck() {
-  const checks = [
-    ["Claude", callClaude],
-    ["GPT", callGPT],
-    ["Grok", callGrok],
-  ];
-  for (const [name, fn] of checks) {
+  for (const [name, fn] of [["Claude", callClaude], ["GPT", callGPT], ["Grok", callGrok]]) {
     try {
       await fn("Reply with exactly one word: OK");
-      console.log(`AI provider check \u2014 ${name}: OK`);
+      console.log(`AI provider check — ${name}: OK`);
     } catch (err) {
-      console.error(`AI provider check \u2014 ${name}: FAILED (${err.message})`);
+      console.error(`AI provider check — ${name}: FAILED (${err.message})`);
     }
   }
 }
