@@ -11,7 +11,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readTrades, appendTrade, deleteTrade } from "./server/store.js";
 import { fetchAllEndpoints } from "./server/quantDataClient.js";
-import { buildBriefing } from "./server/compress.js";
+import { buildBriefing, buildMultiBriefing } from "./server/compress.js";
 import { analyzeAllModels } from "./server/analysis.js";
 import { backtestRule, priorSessions } from "./server/backtest.js";
 import { refineRule } from "./server/refine.js";
@@ -53,32 +53,67 @@ app.get("/api/analyses", async (req, res) => {
 // Input: { symbol, sessionDate, contract? }  — that is ALL Michael types.
 // Steps: fetch all 30 feeds -> compress into a timeline + lead/lag ->
 //        3 models independently review every feed and propose a testable rule.
+// Fetches the target session PLUS the N prior TRADING sessions. Weekends and
+// market holidays simply return no data and get skipped, so "3 sessions" always
+// means 3 real sessions of tape — not 3 calendar days. Run on a Tuesday, this
+// pulls Tuesday + Monday + Friday, exactly as a human would look at the tape.
+async function fetchSessionWindow({ ticker, sessionDate, contract, sessionCount = 3 }) {
+  const bundles = [];
+  const d = new Date(sessionDate + "T00:00:00Z");
+  let guard = 0;
+
+  while (bundles.length < sessionCount && guard < 15) {
+    guard++;
+    const iso = d.toISOString().slice(0, 10);
+    const dow = d.getUTCDay();
+
+    if (dow !== 0 && dow !== 6) {
+      const start = new Date(d);
+      start.setUTCDate(start.getUTCDate() - 15); // lookback for OI history etc.
+      const b = await fetchAllEndpoints({
+        ticker, sessionDate: iso,
+        startDate: start.toISOString().slice(0, 10),
+        endDate: iso,
+        contract,
+      });
+      // A holiday returns no price bars — not a real session, so it doesn't
+      // count toward the window and we keep walking back.
+      const hasPrice = b.results.stock_price_over_time?.ok
+        && Object.keys(b.results.stock_price_over_time.data?.data || {}).length > 0;
+      if (hasPrice) bundles.push(b);
+      else console.log(`[window] ${iso} has no price data (holiday?) — skipping`);
+    }
+    d.setUTCDate(d.getUTCDate() - 1);
+  }
+  return bundles;
+}
+
 app.post("/api/analyze", async (req, res) => {
-  const { symbol, sessionDate, lookbackDays = 15, contract, notes } = req.body;
+  const { symbol, sessionDate, contract, notes, sessionCount = 3, autoBacktest = true } = req.body;
   if (!symbol || !sessionDate) {
     return res.status(400).json({ error: "symbol and sessionDate are required" });
   }
 
   const ticker = String(symbol).toUpperCase();
-  const start = new Date(sessionDate + "T00:00:00Z");
-  start.setUTCDate(start.getUTCDate() - lookbackDays);
-  const startDate = start.toISOString().slice(0, 10);
 
   try {
-    console.log(`[analyze] ${ticker} ${sessionDate} — fetching all feeds...`);
-    const bundle = await fetchAllEndpoints({ ticker, sessionDate, startDate, endDate: sessionDate, contract });
-    console.log(`[analyze] fetched ${bundle.report.succeeded}/${bundle.report.attempted} feeds`);
+    console.log(`[analyze] ${ticker} ${sessionDate} — fetching ${sessionCount}-session window...`);
+    const bundles = await fetchSessionWindow({ ticker, sessionDate, contract, sessionCount });
+    if (!bundles.length) {
+      return res.status(400).json({ error: `No trading data found for ${ticker} on or before ${sessionDate}.` });
+    }
 
-    const briefing = buildBriefing(bundle, { contract });
-    console.log(`[analyze] ${briefing.timeline.priceThrusts.length} price thrusts detected; running 3 analysts...`);
+    const briefing = buildMultiBriefing(bundles, { contract });
+    console.log(`[analyze] window ${briefing.window.join(", ")} | ${briefing.timeline.priceThrusts.length} thrusts | ${briefing.timeline.totalSignalEvents} events`);
 
     const analysis = await analyzeAllModels(briefing, notes);
-    console.log(`[analyze] done. combined=${analysis.combined.verdict} agreement=${analysis.combined.agreement}`);
+    console.log(`[analyze] ${analysis.combined.verdict} ${analysis.combined.agreement}`);
 
     const record = {
       id: "a" + Date.now(),
       symbol: ticker,
-      sessionDate,
+      sessionDate: briefing.sessionDate,
+      window: briefing.window,
       contract: contract || null,
       notes: notes || null,
       loggedAt: new Date().toISOString(),
@@ -86,16 +121,41 @@ app.post("/api/analyze", async (req, res) => {
         endpoints: briefing.endpoints,
         timeline: briefing.timeline,
         sessionMetrics: briefing.sessionMetrics,
+        priceSeries: briefing.priceSeries,
         fetchReport: briefing.fetchReport,
+        window: briefing.window,
+        // Compact per-session summary so the UI can show the window honestly.
+        sessions: briefing.sessions.map((s) => ({
+          sessionDate: s.sessionDate,
+          thrusts: s.timeline.priceThrusts.length,
+          events: s.timeline.totalSignalEvents,
+          feeds: s.fetchReport.succeeded,
+        })),
       },
       analysis,
       agreement: analysis.combined.agreement,
     };
 
-    // Persistence must NEVER destroy a completed analysis. This run cost ~2
-    // minutes, 30 API pulls, and 3 LLM calls of real money — if the database
-    // is unreachable, the right move is to hand the result back with a warning,
-    // not to 500 and throw the whole thing away.
+    // AUTO-BACKTEST. A rule with no backtest is just a story — and asking the
+    // user to click a button to find out whether the rule loses money made the
+    // most important step optional. It now runs automatically for every model
+    // that proposed a rule.
+    if (autoBacktest) {
+      record.backtests = {};
+      const sessionList = priorSessions(briefing.sessionDate, 40);
+      for (const m of ["claude", "gpt", "grok"]) {
+        const rule = analysis[m]?.rule;
+        if (!rule) continue;
+        try {
+          console.log(`[analyze] auto-backtesting ${m}'s rule...`);
+          record.backtests[m] = await backtestRule(rule, { ticker, sessions: sessionList, holdMinutes: 15 });
+          console.log(`[analyze] ${m}: ${record.backtests[m].verdict}`);
+        } catch (e) {
+          console.error(`[analyze] backtest ${m} failed:`, e.message);
+        }
+      }
+    }
+
     let persisted = true, persistError = null;
     try {
       await appendTrade(record);
@@ -257,23 +317,20 @@ app.post("/api/analyses/:id/rerun", async (req, res) => {
     const contract = old.contract || null;
     const notes = req.body?.notes ?? old.notes ?? null;
 
-    const start = new Date(sessionDate + "T00:00:00Z");
-    start.setUTCDate(start.getUTCDate() - 15);
-    const startDate = start.toISOString().slice(0, 10);
+    console.log(`[rerun] ${ticker} ${sessionDate} with current engine (3-session window)...`);
+    const bundles = await fetchSessionWindow({ ticker, sessionDate, contract, sessionCount: 3 });
+    if (!bundles.length) return res.status(400).json({ error: `No trading data for ${ticker} on or before ${sessionDate}.` });
 
-    console.log(`[rerun] ${ticker} ${sessionDate} with current engine...`);
-    const bundle = await fetchAllEndpoints({ ticker, sessionDate, startDate, endDate: sessionDate, contract });
-    const briefing = buildBriefing(bundle, { contract });
-    console.log(`[rerun] ${bundle.report.succeeded}/${bundle.report.attempted} feeds, ${briefing.timeline.priceThrusts.length} thrusts, ${briefing.timeline.totalSignalEvents} events`);
+    const briefing = buildMultiBriefing(bundles, { contract });
+    console.log(`[rerun] window ${briefing.window.join(", ")} | ${briefing.timeline.priceThrusts.length} thrusts`);
 
     const analysis = await analyzeAllModels(briefing, notes);
 
     const record = {
       ...old,
-      // Normalize a legacy trade record onto the current schema, and drop the
-      // dead trade-era fields so it stops looking like something it isn't.
       symbol: ticker,
-      sessionDate,
+      sessionDate: briefing.sessionDate,
+      window: briefing.window,
       notes,
       entryDate: undefined,
       exitDate: undefined,
@@ -283,15 +340,34 @@ app.post("/api/analyses/:id/rerun", async (req, res) => {
         endpoints: briefing.endpoints,
         timeline: briefing.timeline,
         sessionMetrics: briefing.sessionMetrics,
+        priceSeries: briefing.priceSeries,
         fetchReport: briefing.fetchReport,
+        window: briefing.window,
+        sessions: briefing.sessions.map((s) => ({
+          sessionDate: s.sessionDate,
+          thrusts: s.timeline.priceThrusts.length,
+          events: s.timeline.totalSignalEvents,
+          feeds: s.fetchReport.succeeded,
+        })),
       },
       analysis,
       agreement: analysis.combined.agreement,
-      // Stale derived work — computed from a rule this re-run just replaced.
-      backtests: undefined,
       refinements: undefined,
       confirmers: undefined,
     };
+
+    // Auto-backtest on re-run too — same reasoning: an untested rule is a story.
+    record.backtests = {};
+    const sessionList = priorSessions(briefing.sessionDate, 40);
+    for (const m of ["claude", "gpt", "grok"]) {
+      const rule = analysis[m]?.rule;
+      if (!rule) continue;
+      try {
+        record.backtests[m] = await backtestRule(rule, { ticker, sessions: sessionList, holdMinutes: 15 });
+      } catch (e) {
+        console.error(`[rerun] backtest ${m} failed:`, e.message);
+      }
+    }
 
     let persisted = true;
     try { await appendTrade(record); } catch (e) { persisted = false; console.error("[rerun] DB write failed:", e.message); }

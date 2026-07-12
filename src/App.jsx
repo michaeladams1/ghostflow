@@ -2,8 +2,9 @@ import { useState, useEffect, useMemo } from "react";
 import {
   X, CheckCircle2, XCircle, Minus, ChevronRight, Search, Sun, Moon,
   FileText, Settings, ExternalLink, AlertTriangle, Zap, FlaskConical,
-  RefreshCw, Target, ListFilter, Table2
+  RefreshCw, Target, ListFilter, Table2, LineChart, Users, CalendarDays
 } from "lucide-react";
+import ChartView from "./ChartView.jsx";
 
 const MODEL_META = {
   claude: { name: "Claude", accent: "text-amber-500", dot: "bg-amber-500", hex: "#f59e0b" },
@@ -481,7 +482,107 @@ function RefinePanel({ analysisId, modelId, rule, existing, onDone }) {
   );
 }
 
-function ModelPanel({ record, modelId, cb }) {
+// COMBINED — the three models side by side. Deliberately NOT a merged verdict.
+// Entry timings are never averaged: averaging two models' entries produces a
+// moment neither of them endorsed. Disagreement is preserved and displayed,
+// because a 2-1 split is information, not a problem to be smoothed away.
+function CombinedPanel({ record, onChart }) {
+  const c = record.analysis?.combined;
+  if (!c) return <p className={`text-sm ${sub}`}>No combined view.</p>;
+
+  const responding = c.respondingModels || [];
+  const failed = c.failedModels || [];
+
+  return (
+    <div>
+      <div className="flex items-center gap-3 mb-4">
+        <Verdict v={c.verdict} />
+        <span className={`text-sm font-mono ${sub}`}>{c.agreement} models say tradeable</span>
+      </div>
+
+      {failed.length > 0 && (
+        <div className="mb-4 px-3 py-2 rounded-lg border border-red-500/40 bg-red-500/10">
+          <p className="text-xs text-red-700 dark:text-red-300">
+            {failed.map((m) => MODEL_META[m].name).join(", ")} failed and {failed.length > 1 ? "are" : "is"} excluded from the count entirely — NOT counted as a silent "no" vote.
+          </p>
+        </div>
+      )}
+
+      <div className={`${heading} mb-2`}>Entry timings (side by side — never averaged)</div>
+      <div className="space-y-2 mb-5">
+        {responding.map((m) => {
+          const a = record.analysis[m];
+          const bt = record.backtests?.[m];
+          return (
+            <div key={m} className="px-3 py-2.5 rounded-lg border border-zinc-200 dark:border-zinc-800">
+              <div className="flex items-center gap-2 mb-1">
+                <span className={`w-2 h-2 rounded-full ${MODEL_META[m].dot}`} />
+                <span className={`text-sm font-medium ${MODEL_META[m].accent}`}>{MODEL_META[m].name}</span>
+                <span className={`text-xs font-mono ml-auto ${sub}`}>
+                  {a.entry?.timestamp || "no entry — passed"}
+                </span>
+                <button onClick={() => onChart(m)} title="Open chart"
+                  className={`p-1 rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 ${faint}`}>
+                  <LineChart size={12} />
+                </button>
+              </div>
+              {a.rule && <p className={`text-xs font-mono ${faint} mb-1`}>{a.rule.description}</p>}
+              {bt?.testable && (
+                <p className={`text-xs font-mono ${bt.winRate >= 55 && bt.avgReturnPct > 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>
+                  backtest: {bt.totalTrades} trades · {bt.winRate}% win · {bt.avgReturnPct}%/trade
+                </p>
+              )}
+              {bt && !bt.testable && <p className={`text-xs ${faint}`}>rule not testable</p>}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Where the models agreed vs diverged on WHICH feeds mattered. */}
+      <div className={`${heading} mb-2`}>Feed roles — where they agreed and where they didn't</div>
+      <FeedRoleMatrix record={record} responding={responding} />
+    </div>
+  );
+}
+
+// Shows, per feed, what role EACH model gave it. Rows where the three disagree
+// are the interesting ones — that's a genuine difference of interpretation over
+// identical data, and it's exactly what you'd lose by merging them.
+function FeedRoleMatrix({ record, responding }) {
+  const feeds = record.analysis?.[responding[0]]?.endpointReview?.map((r) => r.id) || [];
+  const roleOf = (m, id) => record.analysis?.[m]?.endpointReview?.find((r) => r.id === id)?.role;
+
+  const rows = feeds.map((id) => {
+    const roles = responding.map((m) => roleOf(m, id));
+    const disagree = new Set(roles).size > 1;
+    return { id, roles, disagree };
+  });
+  // Disagreements first — they're the signal in this table.
+  rows.sort((a, b) => (b.disagree ? 1 : 0) - (a.disagree ? 1 : 0));
+
+  const dot = (role) => role === "SIGNAL" ? "bg-emerald-500"
+    : role === "CONFIRMATION" ? "bg-sky-500"
+    : role === "NOISE" ? "bg-zinc-300 dark:bg-zinc-700"
+    : "bg-red-500";
+
+  return (
+    <div className="space-y-1">
+      {rows.map((r) => (
+        <div key={r.id} className={`flex items-center gap-2 text-xs px-2.5 py-1.5 rounded border ${
+          r.disagree ? "border-amber-500/40 bg-amber-500/5" : "border-zinc-200 dark:border-zinc-800"}`}>
+          <span className="font-mono flex-1 truncate">{r.id}</span>
+          {r.roles.map((role, i) => (
+            <span key={i} title={`${MODEL_META[responding[i]].name}: ${role}`}
+              className={`w-3 h-3 rounded-sm ${dot(role)}`} />
+          ))}
+          {r.disagree && <span className="text-[10px] font-mono text-amber-600 dark:text-amber-400 ml-1">split</span>}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ModelPanel({ record, modelId, cb, onChart }) {
   const a = record.analysis?.[modelId];
   if (!a) return <p className={`text-sm ${sub}`}>No analysis.</p>;
   if (a.failed) {
@@ -497,9 +598,12 @@ function ModelPanel({ record, modelId, cb }) {
     <div>
       <div className="flex items-center justify-between mb-3">
         <Verdict v={a.verdict} />
-        <div className={`text-xs font-mono ${faint}`}>
-          {a.confidence > 0 && <span className="mr-3">confidence {a.confidence}%</span>}
-          <span>{a.reviewedCount}/{a.endpointReview?.length} feeds reviewed</span>
+        <div className="flex items-center gap-2">
+          {a.confidence > 0 && <span className={`text-xs font-mono ${faint}`}>confidence {a.confidence}%</span>}
+          <button onClick={() => onChart(modelId)}
+            className="flex items-center gap-1.5 text-xs px-2.5 py-1 rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800">
+            <LineChart size={13} /> Chart
+          </button>
         </div>
       </div>
 
@@ -617,7 +721,7 @@ function SessionMetrics({ metrics }) {
   );
 }
 
-function AnalysisDetail({ record, onClose, cb, onRerun, rerunning, rerunError, onDelete }) {
+function AnalysisDetail({ record, onClose, cb, onRerun, rerunning, rerunError, onDelete, onChart }) {
   const [tab, setTab] = useState("claude");
   const combined = record.analysis?.combined;
   const stale = isStale(record);
@@ -681,33 +785,75 @@ function AnalysisDetail({ record, onClose, cb, onRerun, rerunning, rerunError, o
         )}
 
         <div className="px-5 py-4 border-b border-zinc-200 dark:border-zinc-800">
-          <div className={`${heading} mb-2`}>Price moves detected (computed, not opinion)</div>
+          {/* THE DATA WINDOW, stated plainly. It is NOT "the last 24 hours" — it
+              is the target session plus the two prior TRADING sessions, so a
+              Tuesday run covers Tue + Mon + Fri. */}
+          {record.briefing?.sessions?.length > 0 && (
+            <div className="mb-4 px-3 py-2.5 rounded-lg border border-zinc-200 dark:border-zinc-800">
+              <div className="flex items-center gap-1.5 mb-2">
+                <CalendarDays size={13} className={faint} />
+                <span className={heading}>Data window — {record.briefing.sessions.length} trading sessions analyzed</span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {record.briefing.sessions.map((s) => {
+                  const isTarget = s.sessionDate === record.sessionDate;
+                  return (
+                    <div key={s.sessionDate}
+                      className={`px-2.5 py-1.5 rounded border text-xs font-mono ${
+                        isTarget ? "border-emerald-500/50 bg-emerald-500/10" : "border-zinc-200 dark:border-zinc-800"}`}>
+                      <div className={isTarget ? "text-emerald-600 dark:text-emerald-400 font-medium" : sub}>
+                        {s.sessionDate}{isTarget && " ← target"}
+                      </div>
+                      <div className={faint}>{s.thrusts} moves · {s.events} events</div>
+                    </div>
+                  );
+                })}
+              </div>
+              <p className={`text-[11px] mt-2 ${faint}`}>
+                Prior sessions exist to FALSIFY: if a signal also fired there without a move following, it's noise. Weekends and market holidays are skipped automatically.
+              </p>
+            </div>
+          )}
+
+          <div className={`${heading} mb-2`}>Price moves on the target session (computed, not opinion)</div>
           <Timeline timeline={record.briefing?.timeline} />
           {record.briefing?.fetchReport && (
             <p className={`text-[11px] font-mono mt-2 ${faint}`}>
-              {record.briefing.fetchReport.succeeded}/{record.briefing.fetchReport.attempted} feeds fetched · {record.briefing.timeline?.totalSignalEvents ?? 0} signal events detected
+              {record.briefing.fetchReport.succeeded}/{record.briefing.fetchReport.attempted} feeds fetched · {record.briefing.timeline?.totalSignalEvents ?? 0} signal events
+              {!record.contract && " · (the 30th feed, option_price_over_time, applies only in options mode)"}
             </p>
           )}
           <SessionMetrics metrics={record.briefing?.sessionMetrics} />
         </div>
 
-        <div className="flex gap-1 px-5 pt-4 border-b border-zinc-200 dark:border-zinc-800">
+        <div className="flex gap-1 px-5 pt-4 border-b border-zinc-200 dark:border-zinc-800 overflow-x-auto">
           {MODEL_IDS.map((m) => {
             const a = record.analysis?.[m];
             return (
               <button key={m} onClick={() => setTab(m)}
-                className={`flex items-center gap-1.5 px-3 py-2 -mb-px border-b-2 text-sm font-medium
+                className={`flex items-center gap-1.5 px-3 py-2 -mb-px border-b-2 text-sm font-medium whitespace-nowrap
                   ${tab === m ? "border-current " + MODEL_META[m].accent : "border-transparent " + faint}`}>
                 <span className={`w-1.5 h-1.5 rounded-full ${MODEL_META[m].dot}`} />
                 {MODEL_META[m].name}
-                {a && !a.failed && <span className={`text-[10px] ${faint}`}>{a.usedCount}/{a.endpointReview?.length}</span>}
+                {a && !a.failed && (
+                  <span className={`text-[10px] font-mono ${faint}`} title="feeds this model chose to USE (out of all reviewed)">
+                    {a.usedCount} used
+                  </span>
+                )}
               </button>
             );
           })}
+          <button onClick={() => setTab("combined")}
+            className={`flex items-center gap-1.5 px-3 py-2 -mb-px border-b-2 text-sm font-medium whitespace-nowrap
+              ${tab === "combined" ? "border-current text-zinc-900 dark:text-zinc-100" : "border-transparent " + faint}`}>
+            <Users size={13} /> Combined
+          </button>
         </div>
 
         <div className="p-5">
-          <ModelPanel record={record} modelId={tab} cb={cb} />
+          {tab === "combined"
+            ? <CombinedPanel record={record} onChart={onChart} />
+            : <ModelPanel record={record} modelId={tab} cb={cb} onChart={onChart} />}
         </div>
       </div>
     </div>
@@ -846,6 +992,7 @@ export default function App() {
   const [tab, setTab] = useState("log");
   const [records, setRecords] = useState([]);
   const [openId, setOpenId] = useState(null);
+  const [chartModel, setChartModel] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState(null);
   const [running, setRunning] = useState(false);
@@ -1008,7 +1155,10 @@ export default function App() {
       </div>
 
       {showForm && <AnalyzeForm onClose={() => setShowForm(false)} onSubmit={analyze} error={error} running={running} />}
-      {open && <AnalysisDetail record={open} onClose={() => setOpenId(null)} cb={cb} onRerun={rerun} rerunning={rerunning} rerunError={rerunError} onDelete={del} />}
+      {open && <AnalysisDetail record={open} onClose={() => setOpenId(null)} cb={cb} onRerun={rerun} rerunning={rerunning} rerunError={rerunError} onDelete={del} onChart={setChartModel} />}
+      {open && chartModel && (
+        <ChartView record={open} modelId={chartModel} meta={MODEL_META[chartModel]} onClose={() => setChartModel(null)} />
+      )}
     </div>
   );
 }

@@ -23,7 +23,7 @@
 //    compress.js, not by asking a model to be careful.
 
 import { callClaudeWithTools, callGPTWithTools, callGrokWithTools } from "./aiProviders.js";
-import { renderBriefing } from "./compress.js";
+import { renderMultiBriefing } from "./compress.js";
 import { ruleVocabularyBlock } from "./vocabulary.js";
 
 const PROVIDERS = { claude: callClaudeWithTools, gpt: callGPTWithTools, grok: callGrokWithTools };
@@ -39,24 +39,6 @@ function extractJson(text) {
 
 function buildPrompt(briefing, userNotes) {
   const endpointIds = briefing.endpoints.map((e) => e.id);
-
-  // Michael's optional hint. Deliberately framed as something to CONSIDER and
-  // to CHECK AGAINST THE DATA — never as an instruction to confirm. A hint that
-  // gets treated as a conclusion turns the system into a yes-man, which is the
-  // exact failure mode this whole project exists to avoid.
-  const notesBlock = userNotes?.trim()
-    ? `
-
-=== ANALYST'S NOTE FROM MICHAEL (a hunch to CHECK, not a rule to obey) ===
-"${userNotes.trim()}"
-
-This is a hypothesis he wants you to LOOK AT. It is NOT a conclusion, NOT a constraint, and NOT something to confirm.
-Test it against the actual data and report honestly:
-  - If the data supports it, say so and use it.
-  - If the data CONTRADICTS it, say so plainly and explain why. That is the most valuable possible response to a hunch.
-  - If the data is silent on it, say that.
-Agreeing with him when the data does not support him is the single worst thing you can do here. He is asking you to check, not to agree.`
-    : "";
 
   const system = `You are one of three independent AI analysts in a research system called GHOSTFLOW. You do not know what the other two conclude, and you must not try to match them or to differ from them. Reason from the data and land where it takes you.
 
@@ -83,6 +65,16 @@ Then challenge yourself: did those same signals fire at OTHER times without a mo
 
 === RULE 3: NO LOOKAHEAD, EVER ===
 If you name 13:43 as the entry, every fact you cite must be timestamped 13:43 or earlier. Citing the 13:53 move itself, or the day's close, to justify a 13:43 entry is lookahead bias. It invalidates the whole exercise even though it reads convincingly. The lead/lag table is already filtered to pre-move signals — stay inside it.
+
+=== RULE 3b: FALSIFY YOUR OWN SIGNAL AGAINST THE PRIOR SESSIONS ===
+You are given the TWO PRIOR TRADING SESSIONS alongside the target session, and they exist for exactly one purpose: to kill bad signals before they reach a backtest.
+
+Whatever pattern you think you found, go look at the prior sessions and ask: DID IT ALSO FIRE THERE? What followed?
+  - If it fired 6 times yesterday and price did nothing, it is NOISE that got lucky once on the target day. Say so.
+  - If it fired twice before and a move followed both times, that is real corroboration. Say so.
+  - If it never fired before, that is genuine rarity — a point in its favour, but only one session of evidence.
+
+The prior sessions include a FIRING COUNT table per feed. Use it. A model that finds a "signal" on the target day without checking whether it fires constantly on the other days has done half the job, and the half it skipped is the half that keeps you from losing money.
 
 === RULE 4: PROPOSE A TESTABLE RULE ===
 Your thesis must be a rule a computer could evaluate on any other day without you present. Concrete, with thresholds.
@@ -149,9 +141,15 @@ Respond with ONLY one JSON object. No code fences, no prose around it:
   "falsification": "What would have to be true for this rule to be WRONG? What would kill it?"
 }`;
 
-  const user = `${renderBriefing(briefing)}${notesBlock}
+  const user = `${renderMultiBriefing(briefing, { userNotes })}
 
-Analyze this session now. Review all ${endpointIds.length} feeds honestly — including the ones that told you nothing, and SHOW THE DEAD ENDS. Classify each used feed as SIGNAL, CONFIRMATION, or NOISE. Identify whether any move was knowable in advance and at exactly what minute. Propose a testable rule, or state plainly that none exists. Respond with only the JSON object.`;
+Analyze the TARGET session now (${briefing.sessionDate}).
+- Review all ${endpointIds.length} feeds honestly — including the ones that told you nothing. SHOW THE DEAD ENDS.
+- Classify each feed as SIGNAL, CONFIRMATION, or NOISE.
+- CROSS-CHECK any pattern you find against the prior sessions: did it also fire there without a move following? If so, say so and downgrade it.
+- Identify whether any move was knowable in advance and at exactly what minute.
+- Propose a testable rule, or state plainly that none exists.
+Respond with only the JSON object.`;
 
   return { system, user };
 }

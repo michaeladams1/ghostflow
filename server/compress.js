@@ -655,6 +655,9 @@ export function buildBriefing(bundle, { contract } = {}) {
     fetchReport: bundle.report,
     endpoints,
     sessionMetrics,
+    // Kept so the UI can draw a real chart with the signal events overlaid.
+    // Downsampled to 1-minute closes, which is all the chart needs.
+    priceSeries: priceSeries.map((p) => ({ ts: p.ts, clock: toClock(p.ts), price: +p.value.toFixed(2) })),
     timeline: {
       priceThrusts: thrusts,
       totalSignalEvents: allEvents.length,
@@ -672,10 +675,85 @@ export function buildBriefing(bundle, { contract } = {}) {
   };
 }
 
-// Renders the briefing as the text block a model sees. Kept separate from
-// buildBriefing so the same structured briefing can also feed the UI (which
-// renders the per-endpoint checklist) without re-deriving anything.
-export function renderBriefing(b) {
+// ---------------------------------------------------------------------------
+// MULTI-SESSION BRIEFING.
+//
+// A single session is not enough context, and the old single-day briefing was a
+// real limitation: a signal that looks unique on Tuesday might fire five times
+// on Monday with nothing following. You cannot see that from one day.
+//
+// So the analysis window is now the target session PLUS the two prior TRADING
+// sessions (skipping weekends/holidays automatically, because a market holiday
+// simply returns no data and gets dropped).
+//
+// CRITICALLY: each session keeps its OWN z-score baseline. A 5-sigma move is
+// "5 sigma relative to that day's own noise" — merging three days into one
+// baseline would let a quiet Friday make an ordinary Tuesday spike look
+// enormous, or vice versa. Sessions are analyzed separately and then presented
+// together, which is exactly how a human would look at three days of tape.
+// ---------------------------------------------------------------------------
+export function buildMultiBriefing(bundles, { contract } = {}) {
+  const sessions = bundles
+    .map((b) => buildBriefing(b, { contract }))
+    .filter((s) => s.endpoints.length)
+    .sort((a, b) => String(a.sessionDate).localeCompare(String(b.sessionDate)));
+
+  const target = sessions[sessions.length - 1] || null; // the session being analyzed
+  const priors = sessions.slice(0, -1);                  // context sessions
+
+  return {
+    ticker: target?.ticker,
+    sessionDate: target?.sessionDate,
+    window: sessions.map((s) => s.sessionDate),
+    sessions,
+    target,
+    priors,
+    // The target session's data stays the primary surface, so everything
+    // downstream (UI, charts, entry timing) keeps working unchanged.
+    endpoints: target?.endpoints || [],
+    timeline: target?.timeline || { priceThrusts: [], events: [], leadLag: [], totalSignalEvents: 0 },
+    sessionMetrics: target?.sessionMetrics || {},
+    priceSeries: target?.priceSeries || [],
+    fetchReport: target?.fetchReport || { attempted: 0, succeeded: 0, failed: [] },
+  };
+}
+
+// Renders the full multi-session briefing the models see.
+export function renderMultiBriefing(mb, { userNotes } = {}) {
+  const lines = [];
+
+  lines.push(`ANALYSIS WINDOW: ${mb.window.join("  ->  ")}   (target session = ${mb.sessionDate})`);
+  lines.push(`You are given ${mb.sessions.length} consecutive TRADING sessions. The last one is the session you must reach a conclusion about. The earlier ones are CONTEXT — use them to sanity-check any pattern you think you have found.`);
+  lines.push(``);
+  lines.push(`WHY THE PRIOR SESSIONS MATTER, AND HOW TO USE THEM:`);
+  lines.push(`If you find a signal on the target session, GO LOOK AT THE PRIOR SESSIONS. Did the same signal fire there? What followed it? A signal that fires once before a move on Tuesday, but also fired four times on Monday with nothing following, is NOT a signal — it is noise that got lucky once. Checking this is the single most valuable thing the extra sessions give you, and you are expected to do it explicitly.`);
+  lines.push(``);
+  lines.push(`Note on sigma: each session is z-scored against ITS OWN baseline. A 5-sigma reading means "5 sigma relative to that day's own noise", so readings are comparable across days.`);
+
+  for (const s of mb.sessions) {
+    const isTarget = s.sessionDate === mb.sessionDate;
+    lines.push(`\n${"#".repeat(70)}`);
+    lines.push(`# SESSION ${s.sessionDate}${isTarget ? "   <<< TARGET SESSION — your conclusion is about THIS day" : "   (prior session — context / cross-check)"}`);
+    lines.push(`${"#".repeat(70)}`);
+    lines.push(renderBriefing(s, { full: isTarget }));
+  }
+
+  if (userNotes?.trim()) {
+    lines.push(`\n${"=".repeat(70)}`);
+    lines.push(`ANALYST'S NOTE FROM MICHAEL (a hunch to CHECK, not a rule to obey)`);
+    lines.push(`"${userNotes.trim()}"`);
+    lines.push(`This is a hypothesis to TEST against the data, not a conclusion to confirm. If the data contradicts it, say so plainly — that is the most valuable possible response. Agreeing with him when the data does not support him is the worst thing you can do.`);
+  }
+
+  return lines.join("\n");
+}
+
+// Renders one session. `full` = the target session (everything). For PRIOR
+// sessions we render a condensed view: the models need those days to
+// cross-check whether a signal also fired without a move following, and the
+// full 29-feed prose for three days would bloat the prompt without adding
+// anything to that specific question.
+export function renderBriefing(b, { full = true } = {}) {
   const lines = [];
 
   lines.push(`TICKER: ${b.ticker}   SESSION: ${b.sessionDate}`);
@@ -684,13 +762,15 @@ export function renderBriefing(b) {
     lines.push(`FAILED FEEDS (treat as UNKNOWN, not as "no signal"): ${b.fetchReport.failed.map((f) => f.id).join(", ")}`);
   }
 
-  lines.push(`\n=== ALL ${b.endpoints.length} DATA FEEDS ===`);
-  lines.push(`You must review every one of these and report a note on each. "I looked at it and it was irrelevant / uncorrelated / showed nothing" is a completely acceptable and useful finding — do NOT invent a signal to justify an endpoint.\n`);
+  if (full) {
+    lines.push(`\n=== ALL ${b.endpoints.length} DATA FEEDS ===`);
+    lines.push(`You must review every one of these and report a note on each. "I looked at it and it was irrelevant / uncorrelated / showed nothing" is a completely acceptable and useful finding — do NOT invent a signal to justify an endpoint.\n`);
   b.endpoints.forEach((e, i) => {
-    lines.push(`[${i + 1}] ${e.id} (${e.status})`);
-    lines.push(`    what it is: ${e.describes}`);
-    lines.push(`    reading:    ${e.summary}`);
-  });
+      lines.push(`[${i + 1}] ${e.id} (${e.status})`);
+      lines.push(`    what it is: ${e.describes}`);
+      lines.push(`    reading:    ${e.summary}`);
+    });
+  }
 
   lines.push(`\n=== PRICE MOVES TO EXPLAIN (computed from real data, not opinion) ===`);
   if (!b.timeline.priceThrusts.length) {
@@ -701,21 +781,19 @@ export function renderBriefing(b) {
     });
   }
 
-  lines.push(`\n=== SESSION METRICS (measured values — use these to choose realistic rule thresholds) ===`);
-  lines.push(`These are RAW numbers for this session. They are SESSION GATES: they describe the day's regime (is gamma positive? is skew favouring calls? is OI building?), not a moment in time.`);
-  lines.push(`CRITICAL — THRESHOLDS MUST BE IN THESE EXACT UNITS. The numbers below are printed in FULL, unabbreviated, because that is exactly how the backtest compares them. If net_gamma reads 65426346, then a gate of "> 50" is TRUE ON EVERY DAY and does nothing at all; you would need something like "> 30000000" to mean "strongly positive gamma". Read the magnitude carefully before you pick a number.\n`);
-  const sm = b.sessionMetrics || {};
-  const smKeys = Object.keys(sm).sort();
-  if (!smKeys.length) {
-    lines.push(`(none computed)`);
-  } else {
-    smKeys.forEach((k) => {
-      // Printed RAW and in full. Abbreviating to "65.43M" caused a model to set
-      // a gate of "> 50" against a raw value of 65,426,346 — a gate that passes
-      // every single day and silently does nothing. Display units and comparison
-      // units MUST be identical.
-      lines.push(`  ${k.padEnd(52)} = ${sm[k]}`);
-    });
+  if (full) {
+    lines.push(`\n=== SESSION METRICS (measured values — use these to choose realistic rule thresholds) ===`);
+    lines.push(`These are RAW numbers for this session. They are SESSION GATES: they describe the day's regime (is gamma positive? is skew favouring calls? is OI building?), not a moment in time.`);
+    lines.push(`CRITICAL — THRESHOLDS MUST BE IN THESE EXACT UNITS. The numbers below are printed in FULL, unabbreviated, because that is exactly how the backtest compares them. If net_gamma reads 65426346, then a gate of "> 50" is TRUE ON EVERY DAY and does nothing at all; you would need something like "> 30000000" to mean "strongly positive gamma". Read the magnitude carefully before you pick a number.\n`);
+    const sm = b.sessionMetrics || {};
+    const smKeys = Object.keys(sm).sort();
+    if (!smKeys.length) {
+      lines.push(`(none computed)`);
+    } else {
+      smKeys.forEach((k) => {
+        lines.push(`  ${k.padEnd(52)} = ${sm[k]}`);
+      });
+    }
   }
 
   lines.push(`\n=== SIGNAL EVENTS DETECTED: ${b.timeline.totalSignalEvents} total across all feeds ===`);
@@ -733,6 +811,25 @@ export function renderBriefing(b) {
       ll.precursors.slice(0, 15).forEach((p) => {
         lines.push(`    ${p.clock}  (${p.leadMinutes} min before)  ${p.endpoint}.${p.metric} = ${p.value}  [${p.z} sigma, ${p.direction}]`);
       });
+    });
+  }
+
+  // For a PRIOR session this is the payload that matters: how often did each
+  // feed fire, and did anything follow? "Your signal fired 6 times yesterday
+  // and price did nothing" is the single most useful falsification the extra
+  // days can supply, and it is the whole reason they are fetched.
+  if (!full) {
+    const byFeed = {};
+    for (const e of b.timeline.events) {
+      const k = `${e.endpoint}.${e.metric}`;
+      byFeed[k] = byFeed[k] || { count: 0, maxZ: 0 };
+      byFeed[k].count++;
+      byFeed[k].maxZ = Math.max(byFeed[k].maxZ, Math.abs(e.z));
+    }
+    lines.push(`\n=== SIGNAL FIRING COUNTS ON THIS PRIOR SESSION (use these to FALSIFY) ===`);
+    lines.push(`This session had ${b.timeline.priceThrusts.length} significant price move(s). If a feed fired many times here but price barely moved, that feed is NOISY — and any rule built on it will over-trade and lose.\n`);
+    Object.entries(byFeed).sort((a, b2) => b2[1].count - a[1].count).slice(0, 20).forEach(([k, v]) => {
+      lines.push(`  ${k.padEnd(46)} fired ${String(v.count).padStart(3)}x   (max ${v.maxZ.toFixed(1)} sigma)`);
     });
   }
 
