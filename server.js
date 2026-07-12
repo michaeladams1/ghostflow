@@ -74,6 +74,39 @@ app.post("/api/trades", async (req, res) => {
   }
 });
 
+// Re-runs the 3-model analysis for an already-logged trade against its
+// original symbol/entry/exit, and OVERWRITES that trade's stored analysis
+// in place (same id \u2014 no duplicate row). Exists because prompt logic keeps
+// improving; this lets any past trade be re-scored against the current
+// prompt without re-logging it from scratch.
+app.post("/api/trades/:id/reanalyze", async (req, res) => {
+  try {
+    const trades = await readTrades();
+    const existing = trades.find((t) => t.id === req.params.id);
+    if (!existing) return res.status(404).json({ error: `No trade with id ${req.params.id}` });
+
+    const dataset = await buildTradeDataset({ symbol: existing.symbol, entryDate: existing.entryDate, exitDate: existing.exitDate });
+    const analysis = await analyzeTradeAllModels(
+      { symbol: existing.symbol, direction: existing.direction, entryDate: existing.entryDate, exitDate: existing.exitDate },
+      dataset
+    );
+    const updated = {
+      ...existing,
+      ...dataset, // fresh prices/entryIdx/exitIdx/bars/intradayBars/rawFlow/dataFetchOk
+      entryPrice: dataset.bars?.[dataset.entryIdx]?.close ?? existing.entryPrice,
+      exitPrice: dataset.bars?.[dataset.exitIdx]?.close ?? existing.exitPrice,
+      analysis,
+      analysisStatus: "complete",
+      agreement: analysis.combined.agreement,
+    };
+    await appendTrade(updated);
+    res.json(updated);
+  } catch (err) {
+    console.error("Reanalyze failed for", req.params.id, ":", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // --- Static frontend ---
 app.use(express.static(DIST_DIR));
 app.get("*", (req, res) => res.sendFile(path.join(DIST_DIR, "index.html")));
