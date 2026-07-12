@@ -32,8 +32,20 @@
 //     4 trades has learned nothing — it has memorized. The engine flags that
 //     explicitly rather than celebrating the win rate.
 
-import { backtestRule, priorSessions } from "./backtest.js";
+import { backtestRule, priorSessions, VALID_METRICS, TIME_FEED, TIME_METRICS } from "./backtest.js";
 import { callClaudeWithTools, callGPTWithTools, callGrokWithTools } from "./aiProviders.js";
+
+// The ONLY feed/metric pairs that exist. Models were previously inventing names
+// like "interval_map.minutes_to_close", which silently matched nothing and got
+// reported back as "0 trades" — indistinguishable from a real result. GPT then
+// misread that as "threshold too high" and burned two rounds chasing a phantom.
+// Now the exact vocabulary is stated up front, and invalid rules are rejected
+// with a loud, specific error instead of a silent zero.
+const FEED_VOCABULARY = [
+  ...Object.entries(VALID_METRICS).map(([feed, metrics]) =>
+    `  ${feed}  ->  metrics: ${metrics.map((m) => `"${m}"`).join(", ")}`),
+  `  ${TIME_FEED}  ->  metrics: ${TIME_METRICS.map((m) => `"${m}"`).join(", ")}  (minutes since 09:30 / until 16:00 — use this for "avoid the last hour" style filters)`,
+].join("\n");
 
 const PROVIDERS = { claude: callClaudeWithTools, gpt: callGPTWithTools, grok: callGrokWithTools };
 
@@ -75,8 +87,9 @@ function renderBacktestFeedback(result, availableFeeds) {
     lines.push(``);
   }
 
-  lines.push(`FEEDS AVAILABLE TO YOU AS FILTERS (any of these can be added as a condition):`);
-  lines.push(availableFeeds.join(", "));
+  lines.push(`=== THE ONLY FEEDS AND METRICS THAT EXIST ===`);
+  lines.push(`You MUST use these exact strings. Inventing a feed or metric name does not produce a signal — it produces a rejected rule.`);
+  lines.push(FEED_VOCABULARY);
 
   return lines.join("\n");
 }
@@ -129,7 +142,13 @@ NOTE ON THRESHOLDS: conditions are evaluated against z-scores (sigma), so a thre
 // ---------------------------------------------------------------------------
 export async function refineRule({
   modelId, initialRule, ticker, fromDate,
-  sessions = 20, maxRounds = 4, holdMinutes = 15, onRound,
+  // 60 sessions, not 20. THE CENTRAL TENSION of this loop, learned from real
+  // runs: tightening a rule reliably improves its win rate but starves its
+  // sample. GPT's round-2 rule hit 68.8% win / 4.64 profit factor — on 16
+  // trades, which is statistically meaningless and had to be rejected. The fix
+  // is NOT to loosen the rule or lower the bar; it is to test across more days
+  // so a rare-but-real signal has room to fire 20+ times. Rarity is the point.
+  sessions = 60, maxRounds = 4, holdMinutes = 15, onRound,
 } = {}) {
   const fn = PROVIDERS[modelId];
   // Same sessions every round — otherwise "improvement" could just be an
@@ -150,6 +169,26 @@ export async function refineRule({
     const entry = { round, rule: currentRule, backtest: result };
     history.push(entry);
     onRound?.(entry);
+
+    // An INVALID rule is not a failed rule — it was never tested at all. Feed
+    // the precise error back so the model can fix its vocabulary rather than
+    // misdiagnosing a phantom "0 trades" as a threshold problem.
+    if (result.invalidRule) {
+      if (round === maxRounds) { entry.stopReason = "Hit max rounds with an invalid rule."; break; }
+      const fixUser = `${result.reason}\n\nYour rule was NOT run. Rewrite it using only the exact feed and metric names above, keeping your intent intact. Respond with only the JSON object.`;
+      try {
+        const raw = await fn(REFINE_SYSTEM, fixUser, [], async () => "no tools");
+        const rev = extractJson(raw);
+        entry.diagnosis = rev.diagnosis;
+        entry.action = "fix_invalid_rule";
+        currentRule = rev.revisedRule || null;
+        if (!currentRule) entry.stopReason = "Model abandoned after invalid-rule feedback.";
+      } catch (err) {
+        entry.stopReason = `Repair call failed: ${err.message}`;
+        break;
+      }
+      continue;
+    }
 
     // Stop early on a genuinely good result — no point "refining" something
     // that already works, since further tinkering is just overfitting.

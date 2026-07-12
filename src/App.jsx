@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import {
   Plus, X, CheckCircle2, XCircle, Minus, ChevronRight, Clock, Search,
-  FileText, LayoutDashboard, Settings, ExternalLink, AlertTriangle, Zap, FlaskConical, Eye, EyeOff
+  FileText, LayoutDashboard, Settings, ExternalLink, AlertTriangle, Zap, FlaskConical, Eye, EyeOff, RefreshCw
 } from "lucide-react";
 
 const MODEL_META = {
@@ -160,7 +160,113 @@ function BacktestPanel({ analysisId, modelId, rule, existing, onDone }) {
   );
 }
 
-function ModelPanel({ record, modelId, onBacktestDone }) {
+// THE REFINEMENT LOOP, made visible.
+// Shows every round: the rule, what the backtest said, what the model concluded
+// from its own losses, and what it changed. The point is that you can READ the
+// learning as a narrative rather than trusting a final number.
+function RefinePanel({ analysisId, modelId, rule, existing, onDone }) {
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState(existing || null);
+  const [err, setErr] = useState(null);
+
+  const run = async () => {
+    setRunning(true); setErr(null);
+    try {
+      const res = await fetch(`/api/analyses/${analysisId}/refine`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ modelId, sessions: 60, maxRounds: 4 }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Refinement failed");
+      setResult(data); onDone?.(modelId, data);
+    } catch (e) { setErr(e.message); }
+    setRunning(false);
+  };
+
+  if (!rule) return null;
+
+  const survived = result && !result.abandoned && result.best;
+
+  return (
+    <div className="mt-5">
+      <div className="flex items-center gap-2 mb-2">
+        <RefreshCw size={14} className="text-zinc-500" />
+        <span className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono">
+          Refinement loop — learn from the losses, revise, retest
+        </span>
+        {!result && (
+          <button onClick={run} disabled={running}
+            className="ml-auto text-xs px-2.5 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 disabled:opacity-50">
+            {running ? "Refining… (60 sessions × 4 rounds, several min)" : "Run refinement"}
+          </button>
+        )}
+      </div>
+
+      {err && <p className="text-xs text-red-400 mb-2">{err}</p>}
+
+      {result && (
+        <>
+          <div className={`px-3 py-3 rounded-lg border mb-3 ${survived ? "bg-emerald-500/5 border-emerald-500/30" : "bg-zinc-900 border-zinc-700"}`}>
+            <div className={`text-sm font-medium ${survived ? "text-emerald-400" : "text-zinc-300"}`}>
+              {result.conclusion}
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            {result.history.map((h) => {
+              const b = h.backtest;
+              const invalid = b?.invalidRule;
+              return (
+                <div key={h.round} className="px-3 py-2.5 rounded-lg border border-zinc-800 bg-zinc-900">
+                  <div className="flex items-center gap-2 mb-1.5">
+                    <span className="text-xs font-mono text-zinc-400">ROUND {h.round}</span>
+                    {h.action && (
+                      <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
+                        h.action === "abandon" ? "bg-red-500/15 text-red-400"
+                        : h.action === "filter" ? "bg-sky-500/15 text-sky-400"
+                        : "bg-zinc-800 text-zinc-400"}`}>
+                        {h.action}
+                      </span>
+                    )}
+                    {b?.testable && (
+                      <span className="ml-auto text-xs font-mono text-zinc-400">
+                        {b.totalTrades} trades · {b.winRate}% win · PF {b.profitFactor}
+                        {!b.enoughData && b.totalTrades > 0 && (
+                          <span className="text-amber-400 ml-1.5">sample too small</span>
+                        )}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="text-[11px] font-mono text-zinc-500 mb-1.5">
+                    {h.rule.conditions.map((c) => `${c.feed}.${c.metric} ${c.operator} ${c.threshold}`).join("  AND  ")}
+                  </div>
+
+                  {invalid && (
+                    <p className="text-xs text-amber-400 leading-relaxed mb-1">
+                      Rule was invalid and never ran — {b.errors?.join("; ")}
+                    </p>
+                  )}
+
+                  {h.diagnosis && (
+                    <p className="text-xs text-zinc-400 leading-relaxed">
+                      <span className="text-zinc-600">diagnosis: </span>{h.diagnosis}
+                    </p>
+                  )}
+                  {h.stopReason && (
+                    <p className="text-xs text-zinc-500 leading-relaxed mt-1 italic">{h.stopReason}</p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function ModelPanel({ record, modelId, onBacktestDone, onRefineDone }) {
   const a = record.analysis?.[modelId];
   if (!a) return <p className="text-sm text-zinc-500">No analysis.</p>;
   if (a.failed) {
@@ -224,6 +330,9 @@ function ModelPanel({ record, modelId, onBacktestDone }) {
       <BacktestPanel analysisId={record.id} modelId={modelId} rule={a.rule}
         existing={record.backtests?.[modelId]} onDone={onBacktestDone} />
 
+      <RefinePanel analysisId={record.id} modelId={modelId} rule={a.rule}
+        existing={record.refinements?.[modelId]} onDone={onRefineDone} />
+
       <div className="mt-5">
         <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono mb-2">
           Feed audit — all {a.endpointReview?.length ?? 0} data feeds
@@ -265,7 +374,7 @@ function Timeline({ timeline }) {
   );
 }
 
-function AnalysisDetail({ record, onClose, onBacktestDone }) {
+function AnalysisDetail({ record, onClose, onBacktestDone, onRefineDone }) {
   const [tab, setTab] = useState("claude");
   const combined = record.analysis?.combined;
 
@@ -310,7 +419,7 @@ function AnalysisDetail({ record, onClose, onBacktestDone }) {
         </div>
 
         <div className="p-5">
-          <ModelPanel record={record} modelId={tab} onBacktestDone={onBacktestDone} />
+          <ModelPanel record={record} modelId={tab} onBacktestDone={onBacktestDone} onRefineDone={onRefineDone} />
         </div>
       </div>
     </div>
@@ -471,6 +580,11 @@ export default function App() {
       ? { ...r, backtests: { ...(r.backtests || {}), [modelId]: result } } : r));
   };
 
+  const onRefineDone = (modelId, result) => {
+    setRecords((prev) => prev.map((r) => r.id === openId
+      ? { ...r, refinements: { ...(r.refinements || {}), [modelId]: result } } : r));
+  };
+
   const NAV = [
     { id: "log", label: "Analyses", Icon: FileText },
     { id: "settings", label: "Settings", Icon: Settings },
@@ -540,7 +654,7 @@ export default function App() {
       </div>
 
       {showForm && <AnalyzeForm onClose={() => setShowForm(false)} onSubmit={analyze} error={error} running={running} />}
-      {open && <AnalysisDetail record={open} onClose={() => setOpenId(null)} onBacktestDone={onBacktestDone} />}
+      {open && <AnalysisDetail record={open} onClose={() => setOpenId(null)} onBacktestDone={onBacktestDone} onRefineDone={onRefineDone} />}
     </div>
   );
 }

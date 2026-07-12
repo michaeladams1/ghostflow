@@ -39,6 +39,89 @@ function buildSignalIndex(briefing) {
   return index;
 }
 
+// The exact feed/metric pairs a rule may reference. A model that invents a feed
+// name gets a LOUD error, not a silent zero.
+//
+// WHY THIS EXISTS (a real bug this fixes):
+// GPT proposed conditions on "interval_map.minutes_to_close" and
+// "net_drift.call_premium_drift_z" — neither exists. The backtest matched
+// nothing and dutifully reported "0 trades / NEVER FIRED". GPT read that as
+// "my threshold is too high" and burned two refinement rounds chasing a
+// phantom. A silent zero is indistinguishable from a real result, which makes
+// it the most dangerous kind of bug in a system like this.
+export const VALID_METRICS = {
+  net_drift: ["netCallPremium", "netPutPremium"],
+  net_flow: ["net premium change/min"],
+  dark_flow: ["dark pool notional"],
+  interval_map: ["net gamma exposure"],
+  volatility_drift: ["implied vol"],
+};
+
+// Time-of-day is not a feed, but the models keep (correctly) reaching for it —
+// "late-day spikes are exhaustion, not continuation" is a real market intuition.
+// So it is supported as a first-class pseudo-feed rather than left as a trap.
+export const TIME_FEED = "time_of_day";
+export const TIME_METRICS = ["minutes_since_open", "minutes_to_close"];
+
+export function validateRule(rule) {
+  if (!rule?.conditions?.length) {
+    return { valid: false, errors: ["Rule has no conditions."] };
+  }
+  const errors = [];
+  for (const c of rule.conditions) {
+    if (c.feed === TIME_FEED) {
+      if (!TIME_METRICS.includes(c.metric)) {
+        errors.push(`time_of_day metric "${c.metric}" is invalid. Valid: ${TIME_METRICS.join(", ")}`);
+      }
+      continue;
+    }
+    const metrics = VALID_METRICS[c.feed];
+    if (!metrics) {
+      errors.push(`Feed "${c.feed}" does not exist. Valid feeds: ${[...Object.keys(VALID_METRICS), TIME_FEED].join(", ")}`);
+    } else if (!metrics.includes(c.metric)) {
+      errors.push(`Metric "${c.metric}" does not exist on feed "${c.feed}". Valid metrics for ${c.feed}: ${metrics.join(", ")}`);
+    }
+    if (!Number.isFinite(Number(c.threshold))) {
+      errors.push(`Threshold on ${c.feed}.${c.metric} is not a number: ${c.threshold}`);
+    }
+  }
+
+  // CONTRADICTION CHECK — another real bug this catches.
+  // GPT once proposed: minutes_since_open <= 120 AND minutes_since_open >= 240.
+  // No bar can be both under 2 hours and over 4 hours from the open. The rule
+  // was UNSATISFIABLE, so it fired zero times — and GPT read that "0 trades" as
+  // "my thresholds are too extreme" and wasted a round loosening them. An
+  // impossible rule must be rejected as impossible, not reported as a result.
+  const byField = new Map();
+  for (const c of rule.conditions) {
+    const key = `${c.feed}.${c.metric}`;
+    if (!byField.has(key)) byField.set(key, []);
+    byField.get(key).push(c);
+  }
+  for (const [key, conds] of byField) {
+    let lowerBound = -Infinity, upperBound = Infinity;
+    for (const c of conds) {
+      const t = Number(c.threshold);
+      if (c.operator === ">" || c.operator === ">=") lowerBound = Math.max(lowerBound, t);
+      if (c.operator === "<" || c.operator === "<=") upperBound = Math.min(upperBound, t);
+    }
+    if (lowerBound > upperBound) {
+      errors.push(`CONTRADICTION on ${key}: you require it to be >= ${lowerBound} AND <= ${upperBound} at the same time. No value can satisfy both, so this rule can never fire. This is NOT a threshold problem — it is a logically impossible condition.`);
+    }
+  }
+
+  return { valid: errors.length === 0, errors };
+}
+
+// Minutes since 09:30 / until 16:00, NY time.
+function timeOfDay(ts) {
+  const [h, m] = new Date(Number(ts))
+    .toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false })
+    .split(":").map(Number);
+  const mins = h * 60 + m;
+  return { minutes_since_open: mins - (9 * 60 + 30), minutes_to_close: (16 * 60) - mins };
+}
+
 // Evaluates one rule against one session, returning every bar where it fired.
 //
 // COOLDOWN — a real bug Claude caught by reading its own backtest:
@@ -51,30 +134,39 @@ function findFirings(rule, briefing, { windowMin = 2, cooldownMin = 30 } = {}) {
   if (!rule?.conditions?.length) return [];
 
   const events = briefing.timeline.events;
+  const signalConds = rule.conditions.filter((c) => c.feed !== TIME_FEED);
+  const timeConds = rule.conditions.filter((c) => c.feed === TIME_FEED);
   const firings = [];
   let lastFiringTs = -Infinity;
 
+  const cmp = (subject, op, t) => {
+    switch (op) {
+      case ">": return subject > t;
+      case ">=": return subject >= t;
+      case "<": return subject < t;
+      case "<=": return subject <= t;
+      case "==": return subject === t;
+      default: return false;
+    }
+  };
+
   for (const anchor of events) {
-    // Still inside the cooldown from the previous firing — this is the SAME
-    // event continuing, not a new independent opportunity.
     if (anchor.ts - lastFiringTs < cooldownMin * 60_000) continue;
+
+    // Time-of-day conditions gate the bar itself.
+    const tod = timeOfDay(anchor.ts);
+    const timeOk = timeConds.every((c) => cmp(tod[c.metric], c.operator, Number(c.threshold)));
+    if (!timeOk) continue;
 
     const nearby = events.filter((e) => Math.abs(e.ts - anchor.ts) <= windowMin * 60_000);
 
-    const allMet = rule.conditions.every((cond) => nearby.some((e) => {
+    const allMet = signalConds.every((cond) => nearby.some((e) => {
       if (e.endpoint !== cond.feed) return false;
-      // Conditions are stated in sigma (the models were told so). Thresholds
-      // under 100 are read as z-scores; larger ones as raw values.
+      if (cond.metric && e.metric !== cond.metric) return false;
+      // Thresholds are in sigma (models were told so). Under 100 => z-score.
       const t = Number(cond.threshold);
       const subject = Math.abs(t) < 100 ? e.z : e.value;
-      switch (cond.operator) {
-        case ">": return subject > t;
-        case ">=": return subject >= t;
-        case "<": return subject < t;
-        case "<=": return subject <= t;
-        case "==": return subject === t;
-        default: return false;
-      }
+      return cmp(subject, cond.operator, t);
     }));
 
     if (allMet) {
@@ -121,13 +213,28 @@ export async function backtestRule(rule, { ticker, sessions, holdMinutes = 15, o
     };
   }
 
+  // FAIL LOUDLY on invented feeds/metrics. Returning "0 trades" for a rule that
+  // references a nonexistent feed is a lie: it looks exactly like a real result
+  // ("your signal never occurred") when the truth is ("you named a feed that
+  // doesn't exist"). A model cannot learn from a lie.
+  const validation = validateRule(rule);
+  if (!validation.valid) {
+    return {
+      testable: false,
+      invalidRule: true,
+      errors: validation.errors,
+      reason: `RULE REFERENCES THINGS THAT DO NOT EXIST — this was NOT a real backtest result, and it does NOT mean your signal never fired:\n  - ${validation.errors.join("\n  - ")}\nRewrite the rule using only the exact feed and metric names listed above, then it can actually be tested.`,
+    };
+  }
+
   const trades = [];
   const sessionResults = [];
   const errors = [];
   const direction = directionOf(rule);
 
-  // Only the feeds this rule actually references get fetched — not all 30.
-  const feedIds = [...new Set(rule.conditions.map((c) => c.feed))];
+  // Only the feeds this rule references get fetched — not all 30. time_of_day
+  // is a computed pseudo-feed, not an endpoint, so it must not be requested.
+  const feedIds = [...new Set(rule.conditions.map((c) => c.feed))].filter((f) => f !== TIME_FEED);
 
   for (const sessionDate of sessions) {
     try {

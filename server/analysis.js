@@ -67,9 +67,19 @@ If you name 13:43 as the entry, every fact you cite must be timestamped 13:43 or
 
 === RULE 4: PROPOSE A TESTABLE RULE ===
 Your thesis must be a rule a computer could evaluate on any other day without you present. Concrete, with thresholds.
-  GOOD: "net_drift.netCallPremium z > 5 AND net_flow z > 3 within the same 2-minute window AND net gamma positive -> buy at that bucket's close."
+  GOOD: "net_drift.netCallPremium z > 5 AND net_flow z > 3 within the same 2-minute window -> buy at that bucket's close."
   USELESS: "buy when flow looks strong and momentum builds." A computer cannot evaluate that, so it can never be backtested, so it can never be proven or disproven.
 If nothing was knowable, set "rule": null and explain why.
+
+=== THE ONLY FEEDS AND METRICS A RULE MAY REFERENCE ===
+Rules are executed by code, against these exact strings. Inventing a feed or metric name does NOT create a signal — it creates a rule that cannot run.
+  net_drift          -> "netCallPremium", "netPutPremium"
+  net_flow           -> "net premium change/min"
+  dark_flow          -> "dark pool notional"
+  interval_map       -> "net gamma exposure"
+  volatility_drift   -> "implied vol"
+  time_of_day        -> "minutes_since_open", "minutes_to_close"   (for "avoid the last hour" style filters)
+Thresholds are in SIGMA (z-scores). The other feeds are still essential for your REASONING and your endpointReview — they simply are not yet expressible as automated rule conditions.
 
 === OUTPUT ===
 Respond with ONLY one JSON object. No code fences, no prose around it:

@@ -14,6 +14,7 @@ import { fetchAllEndpoints } from "./server/quantDataClient.js";
 import { buildBriefing } from "./server/compress.js";
 import { analyzeAllModels } from "./server/analysis.js";
 import { backtestRule, priorSessions } from "./server/backtest.js";
+import { refineRule } from "./server/refine.js";
 import { callClaude, callGPT, callGrok } from "./server/aiProviders.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -147,6 +148,41 @@ app.post("/api/analyses/:id/backtest", async (req, res) => {
     res.json(result);
   } catch (err) {
     console.error("[backtest] FAILED:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// THE REFINEMENT LOOP: propose -> backtest -> read your own losses -> revise ->
+// backtest again. This is where the system actually learns rather than just
+// reporting a one-day story. Slow (many sessions x many rounds), so it's an
+// explicit action, not something that fires automatically.
+app.post("/api/analyses/:id/refine", async (req, res) => {
+  const { modelId, sessions = 60, maxRounds = 4, holdMinutes = 15 } = req.body;
+  try {
+    const all = await readTrades();
+    const record = all.find((r) => r.id === req.params.id);
+    if (!record) return res.status(404).json({ error: `No analysis with id ${req.params.id}` });
+
+    const rule = record.analysis?.[modelId]?.rule;
+    if (!rule) {
+      return res.status(400).json({ error: `${modelId} proposed no rule — it concluded nothing was tradeable. Nothing to refine.` });
+    }
+
+    console.log(`[refine] ${modelId} on ${record.symbol}, ${sessions} sessions, up to ${maxRounds} rounds...`);
+    const result = await refineRule({
+      modelId, initialRule: rule, ticker: record.symbol,
+      fromDate: record.sessionDate, sessions, maxRounds, holdMinutes,
+      onRound: (e) => console.log(`[refine] round ${e.round}: ${e.backtest.testable ? `${e.backtest.totalTrades} trades, ${e.backtest.winRate}% win` : "not testable"}`),
+    });
+    console.log(`[refine] ${result.conclusion}`);
+
+    record.refinements = record.refinements || {};
+    record.refinements[modelId] = result;
+    try { await appendTrade(record); } catch (e) { console.error("[refine] DB write failed:", e.message); }
+
+    res.json(result);
+  } catch (err) {
+    console.error("[refine] FAILED:", err);
     res.status(500).json({ error: err.message });
   }
 });
