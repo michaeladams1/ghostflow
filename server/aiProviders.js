@@ -80,15 +80,23 @@ export async function callGrok(prompt, { system } = {}) {
 // 8 rounds is generous headroom for a single trade's analysis.
 const MAX_TOOL_ITERATIONS = 8;
 
+// A full 29-feed review plus rule + falsification does not fit in 4096 tokens.
+// Claude hit stop_reason: "max_tokens" and returned NOTHING (a reasoning model
+// can burn its whole budget before emitting any text). 16k gives real headroom.
+const MAX_TOKENS = 16000;
+
 export async function callClaudeWithTools(system, userPrompt, tools, executeTool) {
   const claudeTools = tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters }));
   let messages = [{ role: "user", content: userPrompt }];
 
   for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
+    const body = { model: ANTHROPIC_MODEL, max_tokens: MAX_TOKENS, system, messages };
+    if (claudeTools.length) body.tools = claudeTools; // omit `tools` entirely when empty — an empty array is rejected
+
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
-      body: JSON.stringify({ model: ANTHROPIC_MODEL, max_tokens: 4096, system, tools: claudeTools, messages }),
+      body: JSON.stringify(body),
     });
     if (!res.ok) throw new Error(`Claude error ${res.status}: ${await res.text()}`);
     const data = await res.json();
@@ -116,10 +124,12 @@ export async function callGPTWithTools(system, userPrompt, tools, executeTool) {
   let messages = [{ role: "system", content: system }, { role: "user", content: userPrompt }];
 
   for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
+    const body = { model: OPENAI_MODEL, messages };
+    if (openaiTools.length) body.tools = openaiTools;
     const res = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: { Authorization: `Bearer ${OPENAI_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ model: OPENAI_MODEL, messages, tools: openaiTools }),
+      body: JSON.stringify(body),
     });
     if (!res.ok) throw new Error(`GPT error ${res.status}: ${await res.text()}`);
     const data = await res.json();
@@ -143,10 +153,12 @@ export async function callGrokWithTools(system, userPrompt, tools, executeTool) 
   let messages = [{ role: "system", content: system }, { role: "user", content: userPrompt }];
 
   for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
+    const body = { model: XAI_MODEL, messages };
+    if (xaiTools.length) body.tools = xaiTools;
     const res = await fetch("https://api.x.ai/v1/chat/completions", {
       method: "POST",
       headers: { Authorization: `Bearer ${XAI_KEY}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ model: XAI_MODEL, messages, tools: xaiTools }),
+      body: JSON.stringify(body),
     });
     if (!res.ok) throw new Error(`Grok error ${res.status}: ${await res.text()}`);
     const data = await res.json();
