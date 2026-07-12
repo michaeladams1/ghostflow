@@ -60,7 +60,10 @@ export function aggregateTo15Min(minuteBars) {
   return Array.from(buckets.values()).sort((a, b) => a.ts - b.ts);
 }
 
-function closestIndex(bars, targetDate) {
+// Exported so server/analysis.js can map a model's own freely-chosen
+// "suggested entry" date/time onto a bar index for charting, the same way
+// we map the human-logged entry date.
+export function closestIndex(bars, targetDate) {
   const target = new Date(targetDate).getTime();
   let best = 0, bestDiff = Infinity;
   bars.forEach((bar, i) => {

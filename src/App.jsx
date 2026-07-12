@@ -13,6 +13,11 @@ const MODEL_META = {
 };
 const MODEL_ORDER = ["claude", "gpt", "grok", "combined"];
 
+// SVG fill/stroke need real color values, not Tailwind class names \u2014 these
+// match the Tailwind accent colors above so a model's chart marker matches
+// its tab color exactly.
+const MODEL_HEX = { claude: "#fbbf24", gpt: "#34d399", grok: "#a78bfa", combined: "#d4d4d8" };
+
 const BILLING_LINKS = [
   { name: "OpenAI (GPT)", url: "https://platform.openai.com/settings/organization/billing/overview", accent: "text-emerald-400", dot: "bg-emerald-400" },
   { name: "Anthropic (Claude)", url: "https://platform.claude.com/dashboard", accent: "text-amber-400", dot: "bg-amber-400" },
@@ -113,7 +118,7 @@ function computeEMA(closes, period) {
 // (TradingView-style), a volume subplot, entry/exit markers, and an optional
 // EMA overlay. Renders whatever bar series it's given — 15-min intraday by
 // default, daily as a fallback when intraday data wasn't available.
-function CandlestickChart({ bars, entryIdx, exitIdx, status, overlay = {}, height = 320 }) {
+function CandlestickChart({ bars, entryIdx, exitIdx, status, overlay = {}, height = 320, modelEntry = null }) {
   const [hover, setHover] = useState(null);
   const svgRef = useRef(null);
 
@@ -240,17 +245,57 @@ function CandlestickChart({ bars, entryIdx, exitIdx, status, overlay = {}, heigh
         )}
 
         {(() => {
-          const entryBar = bars[safeEntryIdx], exitBar = bars[safeExitIdx];
-          const entryAnchorY = yScale(entryBar.low);
+          const exitBar = bars[safeExitIdx];
           const exitAnchorY = yScale(exitBar.high);
           const tagW = 44, tagH = 20;
-          const entryTagY = entryAnchorY + 10; // BUY tag sits below its anchor, pointing up
           const exitTagY = exitAnchorY - 10 - tagH; // SELL tag sits above its anchor, pointing down
+
+          // If we have this model's OWN entry pick, the logged entry becomes a
+          // small muted reference marker (fact, not endorsement) and the
+          // model's pick becomes the prominent colored tag. If we don't have
+          // a model pick (combined tab, or data not available yet), fall back
+          // to the original single green BUY tag at the logged entry.
+          const hasModelPick = modelEntry && modelEntry.idx != null;
+          const safeModelIdx = hasModelPick ? Math.min(modelEntry.idx, bars.length - 1) : null;
+          const overlap = hasModelPick && safeModelIdx === safeEntryIdx;
+
+          const entryBar = bars[safeEntryIdx];
+          const entryAnchorY = yScale(entryBar.low);
+          const entryTagY = entryAnchorY + 10;
+          const entryTagW = hasModelPick ? 52 : tagW;
+          const entryX = hasModelPick && overlap ? x(safeEntryIdx) - 30 : x(safeEntryIdx);
+
           return (
             <>
-              <line x1={x(safeEntryIdx)} y1={entryAnchorY} x2={x(safeEntryIdx)} y2={entryTagY} stroke="#22c55e" strokeWidth="1.5" />
-              <rect x={x(safeEntryIdx) - tagW / 2} y={entryTagY} width={tagW} height={tagH} rx="4" fill="#22c55e" />
-              <text x={x(safeEntryIdx)} y={entryTagY + tagH / 2 + 1} fontSize="10" fontWeight="700" fill="#052e16" textAnchor="middle" dominantBaseline="central" fontFamily="monospace">BUY</text>
+              {hasModelPick ? (
+                <>
+                  {/* Logged entry \u2014 muted reference marker, not a recommendation */}
+                  <line x1={entryX} y1={entryAnchorY} x2={entryX} y2={entryTagY} stroke="#71717a" strokeWidth="1" strokeDasharray="2,2" />
+                  <rect x={entryX - entryTagW / 2} y={entryTagY} width={entryTagW} height={tagH} rx="4" fill="none" stroke="#71717a" strokeWidth="1" />
+                  <text x={entryX} y={entryTagY + tagH / 2 + 1} fontSize="9" fontWeight="600" fill="#a1a1aa" textAnchor="middle" dominantBaseline="central" fontFamily="monospace">LOGGED</text>
+
+                  {/* This model's own, independently-chosen entry pick */}
+                  {(() => {
+                    const pickBar = bars[safeModelIdx];
+                    const pickAnchorY = yScale(pickBar.low);
+                    const pickTagY = pickAnchorY + 10;
+                    const pickTagW = 60;
+                    return (
+                      <>
+                        <line x1={x(safeModelIdx)} y1={pickAnchorY} x2={x(safeModelIdx)} y2={pickTagY} stroke={modelEntry.color} strokeWidth="1.5" />
+                        <rect x={x(safeModelIdx) - pickTagW / 2} y={pickTagY} width={pickTagW} height={tagH} rx="4" fill={modelEntry.color} />
+                        <text x={x(safeModelIdx)} y={pickTagY + tagH / 2 + 1} fontSize="9" fontWeight="700" fill="#052e16" textAnchor="middle" dominantBaseline="central" fontFamily="monospace">{modelEntry.label}</text>
+                      </>
+                    );
+                  })()}
+                </>
+              ) : (
+                <>
+                  <line x1={x(safeEntryIdx)} y1={entryAnchorY} x2={x(safeEntryIdx)} y2={entryTagY} stroke="#22c55e" strokeWidth="1.5" />
+                  <rect x={x(safeEntryIdx) - tagW / 2} y={entryTagY} width={tagW} height={tagH} rx="4" fill="#22c55e" />
+                  <text x={x(safeEntryIdx)} y={entryTagY + tagH / 2 + 1} fontSize="10" fontWeight="700" fill="#052e16" textAnchor="middle" dominantBaseline="central" fontFamily="monospace">BUY</text>
+                </>
+              )}
 
               <line x1={x(safeExitIdx)} y1={exitAnchorY} x2={x(safeExitIdx)} y2={exitTagY + tagH} stroke="#ef4444" strokeWidth="1.5" />
               <rect x={x(safeExitIdx) - tagW / 2} y={exitTagY} width={tagW} height={tagH} rx="4" fill="#ef4444" />
@@ -509,9 +554,12 @@ function LogTradeForm({ onClose, onSubmit, error }) {
 // based, but we don't have a real benchmark (QQQ) series fetched yet — flagged
 // honestly rather than faked.
 function useChartConfig(trade, modelId) {
-  const bars = trade.intradayBars?.length ? trade.intradayBars : trade.bars;
-  const entryIdx = trade.intradayBars?.length ? trade.intradayEntryIdx : trade.entryIdx;
-  const exitIdx = trade.intradayBars?.length ? trade.intradayExitIdx : trade.exitIdx;
+  const usingIntraday = !!trade.intradayBars?.length;
+  const bars = usingIntraday ? trade.intradayBars : trade.bars;
+  // entryIdx/exitIdx here are Michael's ACTUAL logged trade \u2014 context only,
+  // rendered as a muted reference marker, never as "this model endorses this".
+  const entryIdx = usingIntraday ? trade.intradayEntryIdx : trade.entryIdx;
+  const exitIdx = usingIntraday ? trade.intradayExitIdx : trade.exitIdx;
   const overlay = {};
   if (bars && modelId === "claude") {
     const closes = bars.map((b) => b.close);
@@ -521,7 +569,81 @@ function useChartConfig(trade, modelId) {
     ];
   }
   if (modelId === "gpt") overlay.emphasizeVolume = true;
-  return { bars, entryIdx, exitIdx, overlay };
+
+  // This model's OWN, independently-chosen, lookahead-free entry pick \u2014
+  // only meaningful on an individual model tab (not "combined", which has no
+  // single opinion of its own). Falls back to null if the model didn't
+  // return a usable date, or a chart couldn't index it (e.g. still "pending").
+  let modelEntry = null;
+  const a = trade.analysis?.[modelId];
+  if (a && modelId !== "combined") {
+    const idx = usingIntraday ? a.suggestedEntryIntradayIdx : a.suggestedEntryIdx;
+    if (idx != null && bars && idx < bars.length) {
+      modelEntry = { idx, color: MODEL_HEX[modelId], label: `${MODEL_META[modelId].name.toUpperCase()} PICK` };
+    }
+  }
+
+  return { bars, entryIdx, exitIdx, overlay, modelEntry };
+}
+
+// Shows this model's own, independently-chosen, lookahead-free entry pick —
+// deliberately separate from the "what explained the move" text above it,
+// so the two questions ("what happened" vs "when would I have gotten in")
+// never get blended into one justification.
+function OwnEntryPick({ modelId, suggestedEntry, trade }) {
+  if (!suggestedEntry || !suggestedEntry.date) {
+    return (
+      <p className="text-xs text-zinc-600 italic mb-4">
+        {MODEL_META[modelId].name} didn't return a usable entry pick for this trade.
+      </p>
+    );
+  }
+  const differsFromLogged = suggestedEntry.date.slice(0, 10) !== (trade.entryDate || "").slice(0, 10);
+  return (
+    <div className="mb-4 px-3 py-2.5 rounded-lg border border-zinc-800 bg-zinc-950/60">
+      <div className="flex items-center gap-1.5 mb-1.5">
+        <span className="w-2 h-2 rounded-sm flex-shrink-0" style={{ background: MODEL_HEX[modelId] }} />
+        <span className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono">{MODEL_META[modelId].name}'s own entry pick</span>
+      </div>
+      <div className="text-sm font-mono text-zinc-200 mb-1">
+        {new Date(suggestedEntry.date).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
+        {differsFromLogged && <span className="ml-2 text-[11px] text-zinc-500 font-sans">(differs from your logged entry — expected)</span>}
+      </div>
+      <p className="text-sm text-zinc-400 leading-relaxed">{suggestedEntry.reasoning}</p>
+    </div>
+  );
+}
+
+// Combined tab: no single "combined entry" exists (it can't be averaged),
+// so instead this lists each responding model's own pick side by side —
+// the point is to make agreement or disagreement on timing visible, not to
+// force a consensus.
+function CombinedEntryComparison({ trade }) {
+  const entries = trade.analysis?.combined?.suggestedEntries || {};
+  const models = MODEL_ORDER.filter((m) => m !== "combined" && entries[m]);
+  if (!models.length) return null;
+  return (
+    <div className="mb-4">
+      <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono mb-1.5">Each analyst's own entry pick (not merged)</div>
+      <div className="space-y-2">
+        {models.map((m) => {
+          const e = entries[m];
+          return (
+            <div key={m} className="px-3 py-2 rounded-lg border border-zinc-800 bg-zinc-950/60">
+              <div className="flex items-center gap-1.5 mb-1">
+                <span className="w-2 h-2 rounded-sm flex-shrink-0" style={{ background: MODEL_HEX[m] }} />
+                <span className={`text-xs font-mono ${MODEL_META[m].accent}`}>{MODEL_META[m].name}</span>
+                <span className="text-xs font-mono text-zinc-500 ml-auto">
+                  {e.date ? new Date(e.date).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "no pick returned"}
+                </span>
+              </div>
+              {e.reasoning && <p className="text-xs text-zinc-500 leading-relaxed">{e.reasoning}</p>}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 function AnalysisDetails({ trade, modelId }) {
@@ -532,7 +654,9 @@ function AnalysisDetails({ trade, modelId }) {
         <VerdictBadge verdict={a.verdict} />
         {a.confidence > 0 && <span className="text-xs font-mono text-zinc-500">confidence {a.confidence}%</span>}
       </div>
+      <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono mb-1">What explains the move</div>
       <p className="text-sm text-zinc-300 leading-relaxed mb-3">{a.text}</p>
+      {modelId === "combined" ? <CombinedEntryComparison trade={trade} /> : <OwnEntryPick modelId={modelId} suggestedEntry={a.suggestedEntry} trade={trade} />}
       <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono mb-1.5">Indicator combination used</div>
       <IndicatorLegend flags={a.flags} />
       <ChatPanel trade={trade} modelId={modelId} />
@@ -541,7 +665,7 @@ function AnalysisDetails({ trade, modelId }) {
 }
 
 function ModelPanel({ trade, modelId, onExpand }) {
-  const { bars, entryIdx, exitIdx, overlay } = useChartConfig(trade, modelId);
+  const { bars, entryIdx, exitIdx, overlay, modelEntry } = useChartConfig(trade, modelId);
   return (
     <div>
       <div className="flex items-center justify-between mb-1">
@@ -550,7 +674,7 @@ function ModelPanel({ trade, modelId, onExpand }) {
           <Maximize2 size={12} /> Expand
         </button>
       </div>
-      <CandlestickChart bars={bars} entryIdx={entryIdx} exitIdx={exitIdx} status={trade.status} overlay={overlay} height={280} />
+      <CandlestickChart bars={bars} entryIdx={entryIdx} exitIdx={exitIdx} status={trade.status} overlay={overlay} modelEntry={modelEntry} height={280} />
       <div className="flex justify-between text-xs font-mono text-zinc-500 mt-1 px-1 mb-3">
         <span>{trade.entryDate} · ${trade.entryPrice}</span>
         <span>{trade.exitDate} · ${trade.exitPrice}</span>
@@ -564,7 +688,7 @@ function ModelPanel({ trade, modelId, onExpand }) {
 // per your request to make the chart big and interactive like a real
 // trading terminal rather than squeezed into a small modal panel.
 function ExpandedChartView({ trade, modelId, onClose }) {
-  const { bars, entryIdx, exitIdx, overlay } = useChartConfig(trade, modelId);
+  const { bars, entryIdx, exitIdx, overlay, modelEntry } = useChartConfig(trade, modelId);
   return (
     <div className="fixed inset-0 bg-black z-[60] flex flex-col">
       <div className="flex items-center justify-between px-5 py-3 border-b border-zinc-800">
@@ -577,7 +701,7 @@ function ExpandedChartView({ trade, modelId, onClose }) {
       </div>
       <div className="grid grid-cols-10 flex-1 overflow-hidden">
         <div className="col-span-7 p-5 overflow-y-auto border-r border-zinc-800">
-          <CandlestickChart bars={bars} entryIdx={entryIdx} exitIdx={exitIdx} status={trade.status} overlay={overlay} height={560} />
+          <CandlestickChart bars={bars} entryIdx={entryIdx} exitIdx={exitIdx} status={trade.status} overlay={overlay} modelEntry={modelEntry} height={560} />
           <div className="flex justify-between text-xs font-mono text-zinc-500 mt-2 px-1">
             <span>{trade.entryDate} · ${trade.entryPrice}</span>
             <span>{trade.exitDate} · ${trade.exitPrice}</span>
@@ -990,17 +1114,27 @@ export default function App() {
       });
       if (!res.ok) throw new Error((await res.json()).error || "Failed to log trade");
       const trade = await res.json();
+      // The server already runs the real 3-model analysis before responding
+      // (see server.js) \u2014 use it directly. Only fall back to a "pending"
+      // placeholder if analysis genuinely didn't complete (analysisStatus
+      // !== "complete"), instead of always overwriting real results with a
+      // stale placeholder that used to make sense before analysis existed.
+      const analysis = trade.analysisStatus === "complete" && trade.analysis
+        ? trade.analysis
+        : Object.fromEntries(MODEL_ORDER.map((m) => [m, {
+            verdict: "pending", confidence: 0, entryIdx: trade.entryIdx, exitIdx: trade.exitIdx, flags: [],
+            suggestedEntry: { date: null, reasoning: "" }, suggestedEntryIdx: null, suggestedEntryIntradayIdx: null,
+            text: trade.dataFetchOk && trade.dataFetchOk.databento
+              ? "Real price data pulled successfully, but AI analysis didn't complete for this trade \u2014 check server logs."
+              : "Data pull had an issue (check server logs) \u2014 this trade is stored but the chart may be incomplete.",
+          }]));
+      const agreement = analysis.combined?.agreement || "\u2014";
       setTrades((prev) => [
         {
           ...trade,
           status: trade.outcome === "win" ? "win" : "near-miss-loss",
-          agreement: "\u2014",
-          analysis: Object.fromEntries(MODEL_ORDER.map((m) => [m, {
-            verdict: "pending", confidence: 0, entryIdx: trade.entryIdx, exitIdx: trade.exitIdx, flags: [],
-            text: trade.dataFetchOk && trade.dataFetchOk.databento
-              ? "Real price data pulled successfully. AI analysis isn't wired up yet \u2014 this trade is stored and ready for the next build phase."
-              : "Data pull had an issue (check server logs) \u2014 this trade is stored but the chart may be incomplete.",
-          }])),
+          agreement,
+          analysis,
         },
         ...prev,
       ]);
