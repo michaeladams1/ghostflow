@@ -30,6 +30,42 @@ export function toClock(ts) {
   });
 }
 
+// Regular US session only, in minutes-from-midnight NY time (09:30-16:00).
+const SESSION_OPEN_MIN = 9 * 60 + 30;
+const SESSION_CLOSE_MIN = 16 * 60;
+
+function nyMinutes(ts) {
+  const [h, m] = new Date(Number(ts))
+    .toLocaleTimeString("en-US", { timeZone: NY_TZ, hour: "2-digit", minute: "2-digit", hour12: false })
+    .split(":").map(Number);
+  return h * 60 + m;
+}
+
+// BUG FIX (found while reviewing the first real briefing): a rolling baseline
+// that includes pre-market minutes makes the 09:30 opening bell look like a
+// 284-sigma event, because the open is ALWAYS a volume explosion relative to
+// thin pre-market. That artifact then showed up as a "precursor" to every
+// early-session move — a completely spurious signal that would have poisoned
+// the theses. Restricting every series to regular trading hours means
+// "unusual" is measured against other regular-hours minutes, which is the
+// only comparison that means anything.
+export function regularHoursOnly(series) {
+  return series.filter((p) => {
+    const m = nyMinutes(p.ts);
+    return m >= SESSION_OPEN_MIN && m <= SESSION_CLOSE_MIN;
+  });
+}
+
+// BUG FIX: reading the LAST bucket of a series returned zeros, because the
+// final buckets sit after the close and are empty. This takes the last bucket
+// that actually has a non-zero reading.
+function lastMeaningful(series) {
+  for (let i = series.length - 1; i >= 0; i--) {
+    if (series[i].value !== 0 && Number.isFinite(series[i].value)) return series[i];
+  }
+  return series[series.length - 1] ?? null;
+}
+
 function mean(xs) { return xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0; }
 function stdev(xs) {
   if (xs.length < 2) return 0;
@@ -51,12 +87,16 @@ function rollingZScores(series, lookback = 30) {
 }
 
 // Pulls a named metric out of a bucket-keyed endpoint into a clean time series.
+// Regular-hours filtering is applied HERE, at the source, so every endpoint
+// inherits it and no compressor can accidentally reintroduce the pre-market
+// baseline artifact described above.
 function seriesFrom(result, pick) {
   if (!result?.ok || !result.data?.data) return [];
-  return Object.entries(result.data.data)
+  const raw = Object.entries(result.data.data)
     .map(([ts, v]) => ({ ts: Number(ts), value: pick(v) }))
     .filter((p) => Number.isFinite(p.value))
     .sort((a, b) => a.ts - b.ts);
+  return regularHoursOnly(raw);
 }
 
 // ---------------------------------------------------------------------------
@@ -203,9 +243,10 @@ export const COMPRESSORS = {
     const net = call.map((c, i) => ({ ts: c.ts, value: c.value - (put[i]?.value ?? 0) }));
     const deltas = net.slice(1).map((p, i) => ({ ts: p.ts, value: p.value - net[i].value }));
     const events = detectSignalEvents(deltas, { endpoint: "net_flow", metric: "net premium change/min" });
-    const last = net[net.length - 1];
+    const last = lastMeaningful(net);
+    const peak = net.length ? net.reduce((a, b) => (Math.abs(b.value) > Math.abs(a.value) ? b : a)) : null;
     return {
-      summary: `Net call-minus-put premium ended at ${last ? (last.value / 1e6).toFixed(1) : "?"}M. ${events.length} unusual minute-over-minute flow spikes detected.`,
+      summary: `Net call-minus-put premium finished at ${last ? (last.value / 1e6).toFixed(1) : "?"}M; largest reading ${peak ? (peak.value / 1e6).toFixed(1) : "?"}M at ${peak ? toClock(peak.ts) : "?"}. ${events.length} unusual minute-over-minute flow spikes detected.`,
       events,
     };
   },
@@ -217,10 +258,13 @@ export const COMPRESSORS = {
       ...detectSignalEvents(netCall, { endpoint: "net_drift", metric: "netCallPremium" }),
       ...detectSignalEvents(netPut, { endpoint: "net_drift", metric: "netPutPremium" }),
     ];
-    const lastC = netCall[netCall.length - 1]?.value ?? 0;
-    const lastP = netPut[netPut.length - 1]?.value ?? 0;
+    // Use the last MEANINGFUL bucket, not the literal last one — trailing
+    // post-close buckets are empty and were reporting a bogus "0.00M vs 0.00M".
+    const lastC = lastMeaningful(netCall)?.value ?? 0;
+    const lastP = lastMeaningful(netPut)?.value ?? 0;
+    const peakC = netCall.length ? Math.max(...netCall.map((p) => p.value)) : 0;
     return {
-      summary: `Ended netCallPremium ${(lastC / 1e6).toFixed(2)}M vs netPutPremium ${(lastP / 1e6).toFixed(2)}M (${lastC > Math.abs(lastP) ? "call-dominant" : "put-dominant"}). ${events.length} unusual drift spikes.`,
+      summary: `Final netCallPremium ${(lastC / 1e6).toFixed(2)}M vs netPutPremium ${(lastP / 1e6).toFixed(2)}M (${Math.abs(lastC) > Math.abs(lastP) ? "call-dominant" : "put-dominant"}); intraday peak call drift ${(peakC / 1e6).toFixed(2)}M. ${events.length} unusual drift spikes.`,
       events,
     };
   },
@@ -229,7 +273,7 @@ export const COMPRESSORS = {
     const iv = seriesFrom(r, (v) => v.iv);
     const arv = seriesFrom(r, (v) => v.arv);
     const events = detectSignalEvents(iv, { endpoint: "volatility_drift", metric: "implied vol" });
-    const lastIv = iv[iv.length - 1]?.value, lastArv = arv[arv.length - 1]?.value;
+    const lastIv = lastMeaningful(iv)?.value, lastArv = lastMeaningful(arv)?.value;
     return {
       // Realized running ABOVE implied means options were underpriced for the
       // move that actually happened — a tell that the move was not anticipated.
