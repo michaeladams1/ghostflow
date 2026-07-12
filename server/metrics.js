@@ -447,11 +447,75 @@ export const SESSION_METRICS = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// INTRADAY GAMMA PROXIMITY — bar-level metrics derived from the strike map.
+//
+// CORRECTION TO AN EARLIER MISTAKE: I originally classed ALL gamma exposure as
+// a session-level "gate", on the reasoning that a gamma wall is a standing
+// structure rather than a moment. That was half right and half wrong, and the
+// wrong half matters:
+//
+//   - The STRIKE LOCATIONS of the walls are built from open interest, which
+//     only updates daily. Those really are near-static intraday.
+//   - But DEALER GAMMA EXPOSURE AT SPOT changes every single minute, because
+//     gamma is a function of where price sits RELATIVE to those strikes. Price
+//     moving 665 -> 670 walks into a completely different part of the profile.
+//     The wall doesn't move; the price's relationship to it moves constantly.
+//
+// So "is price approaching a call wall RIGHT NOW" is a genuine minute-by-minute
+// trigger, and it was previously impossible to express. These metrics fix that
+// by combining the (static) strike map with the (live) per-minute spot price.
+// `interval_map` separately gives true time-bucketed exposure straight from the
+// vendor; these complement it with proximity, which it does not provide.
+// ---------------------------------------------------------------------------
+export function gammaProximitySeries(gammaResult, priceBars) {
+  const strikes = exposureStrikes(gammaResult);
+  if (!strikes || !priceBars?.length) return {};
+
+  const walls = Object.entries(strikes).map(([k, v]) => ({
+    strike: parseFloat(k),
+    call: v.callExposure || 0,
+    put: v.putExposure || 0,
+    net: (v.callExposure || 0) + (v.putExposure || 0),
+  }));
+
+  const callWalls = walls.filter((w) => w.call > 0);
+  const putWalls = walls.filter((w) => w.put < 0);
+  const biggestCall = callWalls.length ? callWalls.reduce((a, b) => (b.call > a.call ? b : a)) : null;
+  const biggestPut = putWalls.length ? putWalls.reduce((a, b) => (Math.abs(b.put) > Math.abs(a.put) ? b : a)) : null;
+
+  // Gamma "at spot": exposure concentrated in the strikes price is currently
+  // sitting among. This genuinely swings minute to minute as price moves.
+  const gammaAtSpot = (spot) => {
+    const band = spot * 0.01; // strikes within 1% of current price
+    return sum(walls.filter((w) => Math.abs(w.strike - spot) <= band).map((w) => w.net));
+  };
+
+  const out = {
+    call_wall_distance_pct: [],
+    put_wall_distance_pct: [],
+    gamma_at_spot: [],
+  };
+
+  for (const bar of priceBars) {
+    const spot = bar.value;
+    if (!spot) continue;
+    if (biggestCall) out.call_wall_distance_pct.push({ ts: bar.ts, value: ((biggestCall.strike - spot) / spot) * 100 });
+    if (biggestPut) out.put_wall_distance_pct.push({ ts: bar.ts, value: ((spot - biggestPut.strike) / spot) * 100 });
+    out.gamma_at_spot.push({ ts: bar.ts, value: gammaAtSpot(spot) });
+  }
+  return out;
+}
+
+export const GAMMA_PROXIMITY_METRICS = ["call_wall_distance_pct", "put_wall_distance_pct", "gamma_at_spot"];
+
 // Flat vocabulary for validation + prompting.
 export function buildVocabulary() {
   const bar = {}, session = {};
   for (const [feed, metrics] of Object.entries(BAR_METRICS)) bar[feed] = Object.keys(metrics);
   for (const [feed, metrics] of Object.entries(SESSION_METRICS)) session[feed] = Object.keys(metrics);
+  // Gamma proximity is bar-level, computed from the strike map + live spot.
+  bar.gamma_proximity = [...GAMMA_PROXIMITY_METRICS];
   return { bar, session };
 }
 

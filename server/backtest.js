@@ -256,7 +256,11 @@ export async function backtestRule(rule, { ticker, sessions, holdMinutes = 15, o
   // for real: a model set net_gamma > 50 against a raw value of 65,426,346.
   const gateBlockCounts = Object.fromEntries(gates.map((g) => [`${g.feed}.${g.metric}`, 0]));
 
-  const feedIds = [...new Set(rule.conditions.map((c) => c.feed))].filter((f) => f !== TIME_FEED);
+  // `gamma_proximity` is a DERIVED bar feed (strike map + live spot), not an
+  // endpoint. Referencing it requires fetching the gamma exposure endpoint.
+  const rawFeeds = [...new Set(rule.conditions.map((c) => c.feed))].filter((f) => f !== TIME_FEED);
+  const feedIds = [...new Set(rawFeeds.flatMap((f) =>
+    f === "gamma_proximity" ? ["exposure_by_strike_gamma"] : [f]))];
 
   let gateBlockedDays = 0;
 

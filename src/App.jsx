@@ -1,27 +1,44 @@
 import { useState, useEffect, useMemo } from "react";
 import {
-  Plus, X, CheckCircle2, XCircle, Minus, ChevronRight, Clock, Search,
-  FileText, LayoutDashboard, Settings, ExternalLink, AlertTriangle, Zap, FlaskConical, Eye, EyeOff, RefreshCw
+  X, CheckCircle2, XCircle, Minus, ChevronRight, Search, Sun, Moon,
+  FileText, Settings, ExternalLink, AlertTriangle, Zap, FlaskConical,
+  RefreshCw, Target, ListFilter, Table2
 } from "lucide-react";
 
 const MODEL_META = {
-  claude: { name: "Claude", accent: "text-amber-400", dot: "bg-amber-400", hex: "#fbbf24" },
-  gpt:    { name: "GPT",    accent: "text-emerald-400", dot: "bg-emerald-400", hex: "#34d399" },
-  grok:   { name: "Grok",   accent: "text-violet-400", dot: "bg-violet-400", hex: "#a78bfa" },
+  claude: { name: "Claude", accent: "text-amber-500", dot: "bg-amber-500", hex: "#f59e0b" },
+  gpt:    { name: "GPT",    accent: "text-emerald-500", dot: "bg-emerald-500", hex: "#10b981" },
+  grok:   { name: "Grok",   accent: "text-violet-500", dot: "bg-violet-500", hex: "#8b5cf6" },
 };
 const MODEL_IDS = ["claude", "gpt", "grok"];
 
 const BILLING_LINKS = [
-  { name: "OpenAI (GPT)", url: "https://platform.openai.com/settings/organization/billing/overview", accent: "text-emerald-400", dot: "bg-emerald-400" },
-  { name: "Anthropic (Claude)", url: "https://platform.claude.com/dashboard", accent: "text-amber-400", dot: "bg-amber-400" },
-  { name: "xAI (Grok)", url: "https://console.x.ai", accent: "text-violet-400", dot: "bg-violet-400" },
+  { name: "OpenAI (GPT)", url: "https://platform.openai.com/settings/organization/billing/overview", accent: "text-emerald-500", dot: "bg-emerald-500" },
+  { name: "Anthropic (Claude)", url: "https://platform.claude.com/dashboard", accent: "text-amber-500", dot: "bg-amber-500" },
+  { name: "xAI (Grok)", url: "https://console.x.ai", accent: "text-violet-500", dot: "bg-violet-500" },
 ];
 
-// ---------- primitives ----------
+// Role colours. The SIGNAL/CONFIRMATION/NOISE distinction is the core mental
+// model, so it gets a consistent visual language everywhere it appears.
+const ROLE_STYLE = {
+  SIGNAL:       { cls: "text-emerald-600 dark:text-emerald-400 border-emerald-500/40 bg-emerald-500/10", label: "SIGNAL" },
+  CONFIRMATION: { cls: "text-sky-600 dark:text-sky-400 border-sky-500/40 bg-sky-500/10", label: "CONFIRMATION" },
+  NOISE:        { cls: "text-zinc-500 border-zinc-400/30 bg-zinc-500/5", label: "noise" },
+  NOT_REVIEWED: { cls: "text-red-600 dark:text-red-400 border-red-500/40 bg-red-500/10", label: "NOT REVIEWED" },
+  "ANTI-CONFIRMATION": { cls: "text-red-600 dark:text-red-400 border-red-500/40 bg-red-500/10", label: "ANTI-CONFIRM" },
+  UNTESTABLE:   { cls: "text-zinc-500 border-zinc-400/30 bg-zinc-500/5", label: "untestable" },
+  ERROR:        { cls: "text-red-500 border-red-500/40 bg-red-500/10", label: "error" },
+};
+
+function RoleBadge({ role }) {
+  const s = ROLE_STYLE[role] || ROLE_STYLE.NOISE;
+  return <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${s.cls}`}>{s.label}</span>;
+}
+
 function Verdict({ v }) {
   const map = {
-    tradeable: { label: "TRADEABLE", cls: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30", Icon: CheckCircle2 },
-    not_tradeable: { label: "NOT TRADEABLE", cls: "bg-zinc-500/15 text-zinc-400 border-zinc-500/30", Icon: Minus },
+    tradeable: { label: "TRADEABLE", cls: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30", Icon: CheckCircle2 },
+    not_tradeable: { label: "NOT TRADEABLE", cls: "bg-zinc-500/15 text-zinc-600 dark:text-zinc-400 border-zinc-500/30", Icon: Minus },
   };
   const m = map[v] || map.not_tradeable;
   const I = m.Icon;
@@ -32,61 +49,132 @@ function Verdict({ v }) {
   );
 }
 
-// THE FEED AUDIT — the visual proof that a model actually looked at all 30.
-// Three states, and the distinction between the last two is the whole point:
-//   USED     (green)  — examined AND incorporated into the thesis
-//   EXAMINED (grey)   — looked at, judged irrelevant. This is a GOOD outcome.
-//   SKIPPED  (red)    — the model failed to report on it. A real defect.
-function FeedAudit({ review }) {
-  const [showAll, setShowAll] = useState(false);
-  if (!review?.length) return <p className="text-xs text-zinc-600 italic">No feed review returned.</p>;
+const card = "bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800";
+const sub = "text-zinc-600 dark:text-zinc-400";
+const faint = "text-zinc-500 dark:text-zinc-500";
+const heading = "text-[11px] uppercase tracking-wider font-mono text-zinc-500";
 
-  const used = review.filter((r) => r.used);
-  const examined = review.filter((r) => !r.used && r.reviewed);
-  const skipped = review.filter((r) => !r.reviewed);
-  const visible = showAll ? review : [...used, ...skipped];
+// ---------------------------------------------------------------------------
+// THE FEED AUDIT — every feed, always fully visible. This is the model showing
+// its work, including the dead ends. Nothing is collapsed or hidden by default,
+// because "I checked GEX and it didn't line up" is exactly the reasoning that
+// needs to be readable.
+// ---------------------------------------------------------------------------
+function FeedAudit({ review }) {
+  const [filter, setFilter] = useState("ALL");
+  if (!review?.length) return <p className={`text-xs italic ${faint}`}>No feed review returned.</p>;
+
+  const counts = {
+    ALL: review.length,
+    SIGNAL: review.filter((r) => r.role === "SIGNAL").length,
+    CONFIRMATION: review.filter((r) => r.role === "CONFIRMATION").length,
+    NOISE: review.filter((r) => r.role === "NOISE").length,
+    NOT_REVIEWED: review.filter((r) => !r.reviewed).length,
+  };
+  const shown = filter === "ALL" ? review : review.filter((r) => (filter === "NOT_REVIEWED" ? !r.reviewed : r.role === filter));
 
   return (
     <div>
-      <div className="flex items-center gap-3 mb-2 text-[11px] font-mono">
-        <span className="text-emerald-400">{used.length} used</span>
-        <span className="text-zinc-500">{examined.length} examined, not used</span>
-        {skipped.length > 0
-          ? <span className="text-red-400">{skipped.length} SKIPPED</span>
-          : <span className="text-zinc-600">0 skipped</span>}
-        <button onClick={() => setShowAll((s) => !s)}
-          className="ml-auto flex items-center gap-1 text-zinc-500 hover:text-zinc-300">
-          {showAll ? <EyeOff size={12} /> : <Eye size={12} />}
-          {showAll ? "hide" : `show all ${review.length}`}
-        </button>
-      </div>
-
-      {/* Compact strip: one cell per feed, so "did it look at everything?" is answerable at a glance. */}
-      <div className="flex flex-wrap gap-1 mb-3">
-        {review.map((r) => (
-          <span key={r.id} title={`${r.id}: ${r.used ? "USED" : r.reviewed ? "examined, not used" : "SKIPPED"}`}
-            className={`w-2.5 h-2.5 rounded-sm ${!r.reviewed ? "bg-red-500" : r.used ? "bg-emerald-400" : "bg-zinc-700"}`} />
+      <div className="flex flex-wrap items-center gap-1.5 mb-3">
+        {["ALL", "SIGNAL", "CONFIRMATION", "NOISE", "NOT_REVIEWED"].map((f) => (
+          counts[f] > 0 || f === "ALL" ? (
+            <button key={f} onClick={() => setFilter(f)}
+              className={`text-[10px] font-mono px-2 py-1 rounded border transition
+                ${filter === f
+                  ? "bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 border-zinc-900 dark:border-zinc-100"
+                  : "border-zinc-300 dark:border-zinc-700 text-zinc-600 dark:text-zinc-400 hover:border-zinc-400"}`}>
+              {f === "NOT_REVIEWED" ? "SKIPPED" : f} {counts[f]}
+            </button>
+          ) : null
         ))}
       </div>
 
-      <div className="space-y-1.5">
-        {visible.map((r) => (
-          <div key={r.id} className={`text-xs px-2.5 py-2 rounded border ${
-            !r.reviewed ? "bg-red-500/5 border-red-500/30"
-            : r.used ? "bg-emerald-500/5 border-emerald-500/20"
-            : "bg-zinc-900 border-zinc-800"}`}>
-            <div className="flex items-center gap-1.5 mb-1">
-              {!r.reviewed ? <XCircle size={12} className="text-red-400 flex-shrink-0" />
-                : r.used ? <CheckCircle2 size={12} className="text-emerald-400 flex-shrink-0" />
-                : <Minus size={12} className="text-zinc-600 flex-shrink-0" />}
-              <span className="font-mono text-zinc-300">{r.id}</span>
-              <span className={`ml-auto text-[10px] font-mono ${!r.reviewed ? "text-red-400" : r.used ? "text-emerald-400" : "text-zinc-600"}`}>
-                {!r.reviewed ? "SKIPPED" : r.used ? "USED" : "not used"}
-              </span>
+      {/* One cell per feed — "did it look at everything?" answerable at a glance. */}
+      <div className="flex flex-wrap gap-1 mb-4">
+        {review.map((r) => (
+          <span key={r.id} title={`${r.id}: ${r.role}`}
+            className={`w-2.5 h-2.5 rounded-sm ${
+              !r.reviewed ? "bg-red-500"
+              : r.role === "SIGNAL" ? "bg-emerald-500"
+              : r.role === "CONFIRMATION" ? "bg-sky-500"
+              : "bg-zinc-300 dark:bg-zinc-700"}`} />
+        ))}
+      </div>
+
+      <div className="space-y-2">
+        {shown.map((r) => (
+          <div key={r.id} className={`text-xs px-3 py-2.5 rounded-lg border ${
+            !r.reviewed ? "border-red-500/40 bg-red-500/5"
+            : r.role === "SIGNAL" ? "border-emerald-500/30 bg-emerald-500/5"
+            : r.role === "CONFIRMATION" ? "border-sky-500/30 bg-sky-500/5"
+            : "border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-900"}`}>
+            <div className="flex items-center gap-2 mb-1.5">
+              <span className="font-mono text-zinc-800 dark:text-zinc-200">{r.id}</span>
+              <span className="ml-auto"><RoleBadge role={r.reviewed ? r.role : "NOT_REVIEWED"} /></span>
             </div>
-            <p className="text-zinc-400 leading-relaxed pl-[18px]">{r.notes}</p>
+            <p className={`leading-relaxed ${sub}`}>{r.notes}</p>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// BACKTEST INSPECTOR — every single trade, clickable. No summarised numbers
+// without the underlying trades available to check.
+// ---------------------------------------------------------------------------
+function TradeInspector({ result, onClose }) {
+  return (
+    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4" onClick={onClose}>
+      <div className={`${card} rounded-xl w-full max-w-2xl max-h-[85vh] overflow-y-auto`} onClick={(e) => e.stopPropagation()}>
+        <div className={`flex items-center justify-between px-5 py-4 border-b border-zinc-200 dark:border-zinc-800 sticky top-0 ${card}`}>
+          <div>
+            <h3 className="font-semibold">Every trade this rule took</h3>
+            <p className={`text-xs ${faint} mt-0.5`}>{result.totalTrades} trades across {result.sessionsTested} sessions — winners and losers, nothing hidden.</p>
+          </div>
+          <button onClick={onClose} className={faint}><X size={18} /></button>
+        </div>
+
+        <div className="p-5">
+          <p className={`text-xs font-mono mb-3 ${sub}`}>{result.dataIntegrity}</p>
+
+          {result.sessionResults?.some((s) => s.gateBlocked) && (
+            <div className="mb-4">
+              <div className={`${heading} mb-1.5`}>Days your session gates blocked outright</div>
+              <div className="space-y-1">
+                {result.sessionResults.filter((s) => s.gateBlocked).map((s) => (
+                  <div key={s.sessionDate} className={`text-xs font-mono px-2.5 py-1.5 rounded border border-zinc-200 dark:border-zinc-800 ${faint}`}>
+                    {s.sessionDate} — {s.gateReason}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className={`${heading} mb-1.5`}>Trades</div>
+          <table className="w-full text-xs font-mono">
+            <thead>
+              <tr className={`text-left ${faint} border-b border-zinc-200 dark:border-zinc-800`}>
+                <th className="py-1.5">Date</th><th>Entry</th><th className="text-right">In</th>
+                <th className="text-right">Out</th><th className="text-right">Return</th>
+              </tr>
+            </thead>
+            <tbody>
+              {result.trades?.map((t, i) => (
+                <tr key={i} className="border-b border-zinc-100 dark:border-zinc-800/50">
+                  <td className="py-1.5">{t.sessionDate}</td>
+                  <td>{t.entryClock}</td>
+                  <td className="text-right">${t.entryPrice}</td>
+                  <td className="text-right">${t.exitPrice}</td>
+                  <td className={`text-right font-medium ${t.win ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>
+                    {t.pctReturn > 0 ? "+" : ""}{t.pctReturn}%
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
@@ -96,13 +184,14 @@ function BacktestPanel({ analysisId, modelId, rule, existing, onDone }) {
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState(existing || null);
   const [err, setErr] = useState(null);
+  const [inspect, setInspect] = useState(false);
 
   const run = async () => {
     setRunning(true); setErr(null);
     try {
       const res = await fetch(`/api/analyses/${analysisId}/backtest`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ modelId, sessions: 20, holdMinutes: 15 }),
+        body: JSON.stringify({ modelId, sessions: 40, holdMinutes: 15 }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Backtest failed");
@@ -113,75 +202,161 @@ function BacktestPanel({ analysisId, modelId, rule, existing, onDone }) {
 
   if (!rule) {
     return (
-      <div className="mt-4 px-3 py-2.5 rounded-lg border border-zinc-800 bg-zinc-950/60">
-        <p className="text-xs text-zinc-500">This model proposed no rule — it concluded nothing here was tradeable. Nothing to backtest, which is a legitimate outcome.</p>
+      <div className={`mt-4 px-3 py-2.5 rounded-lg border border-zinc-200 dark:border-zinc-800`}>
+        <p className={`text-xs ${sub}`}>No rule proposed — this model concluded nothing here was tradeable. Nothing to backtest, which is a legitimate outcome.</p>
       </div>
     );
   }
 
-  // The verdict wording comes straight from the engine, including when it's bad
-  // news. A rule that fails is displayed as prominently as one that passes.
-  const failed = result && (result.verdict?.startsWith("DOES NOT") || result.verdict?.startsWith("NEVER") || result.verdict?.startsWith("INSUFFICIENT"));
+  const failed = result && /^(DOES NOT|NEVER|INSUFFICIENT)/.test(result.verdict || "");
 
   return (
-    <div className="mt-4">
+    <div className="mt-5">
       <div className="flex items-center gap-2 mb-2">
-        <FlaskConical size={14} className="text-zinc-500" />
-        <span className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono">Backtest — does this rule survive other days?</span>
+        <FlaskConical size={14} className={faint} />
+        <span className={heading}>Backtest — does this rule survive other days?</span>
         {!result && (
           <button onClick={run} disabled={running}
-            className="ml-auto text-xs px-2.5 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 disabled:opacity-50">
-            {running ? "Running 20 sessions…" : "Run backtest"}
+            className="ml-auto text-xs px-2.5 py-1 rounded bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 hover:opacity-80 disabled:opacity-40">
+            {running ? "Running 40 sessions…" : "Run backtest"}
           </button>
         )}
       </div>
 
-      {err && <p className="text-xs text-red-400 mb-2">{err}</p>}
+      {err && <p className="text-xs text-red-500 mb-2">{err}</p>}
 
       {result && (
-        <div className={`px-3 py-3 rounded-lg border ${failed ? "bg-red-500/5 border-red-500/30" : "bg-emerald-500/5 border-emerald-500/30"}`}>
-          <div className={`text-sm font-medium mb-2 ${failed ? "text-red-400" : "text-emerald-400"}`}>
+        <div className={`px-3 py-3 rounded-lg border ${failed ? "border-red-500/30 bg-red-500/5" : "border-emerald-500/30 bg-emerald-500/5"}`}>
+          <div className={`text-sm font-medium mb-2 ${failed ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}>
             {result.verdict}
           </div>
 
-          {/* Warnings that invalidate the numbers above them. Shown loudly and
-              never collapsed — a lookahead-biased 80% win rate is more dangerous
-              than an honest 45%, because it looks like it works. */}
           {result.warnings?.map((w, i) => (
             <div key={i} className="flex gap-1.5 mb-2 px-2.5 py-2 rounded border border-amber-500/40 bg-amber-500/10">
-              <AlertTriangle size={13} className="text-amber-400 flex-shrink-0 mt-0.5" />
-              <p className="text-xs text-amber-300 leading-relaxed">{w}</p>
+              <AlertTriangle size={13} className="text-amber-500 flex-shrink-0 mt-0.5" />
+              <p className="text-xs text-amber-700 dark:text-amber-300 leading-relaxed">{w}</p>
             </div>
           ))}
 
           {result.gateCount > 0 && (
-            <p className="text-[11px] font-mono text-zinc-500 mb-2">
-              {result.gateCount} session gate{result.gateCount > 1 ? "s" : ""} · {result.triggerCount} trigger{result.triggerCount > 1 ? "s" : ""}
+            <p className={`text-[11px] font-mono mb-2 ${faint}`}>
+              {result.gateCount} gate{result.gateCount > 1 ? "s" : ""} · {result.triggerCount} trigger{result.triggerCount > 1 ? "s" : ""}
               {result.gateBlockedDays > 0 && ` · gates blocked ${result.gateBlockedDays}/${result.sessionsTested} days`}
             </p>
           )}
 
           {result.totalTrades > 0 && (
-            <div className="grid grid-cols-4 gap-2 text-center">
-              {[["Trades", result.totalTrades], ["Win rate", `${result.winRate}%`],
-                ["Avg/trade", `${result.avgReturnPct}%`], ["Profit factor", result.profitFactor]].map(([k, v]) => (
-                <div key={k}>
-                  <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-mono">{k}</div>
-                  <div className="text-sm font-mono text-zinc-200">{v}</div>
-                </div>
-              ))}
-            </div>
+            <>
+              <div className="grid grid-cols-4 gap-2 text-center mb-3">
+                {[["Trades", result.totalTrades], ["Win rate", `${result.winRate}%`],
+                  ["Avg/trade", `${result.avgReturnPct}%`], ["Profit factor", result.profitFactor]].map(([k, v]) => (
+                  <div key={k}>
+                    <div className={heading}>{k}</div>
+                    <div className="text-sm font-mono">{v}</div>
+                  </div>
+                ))}
+              </div>
+              <button onClick={() => setInspect(true)}
+                className="w-full flex items-center justify-center gap-1.5 text-xs py-1.5 rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800">
+                <Table2 size={13} /> Inspect all {result.totalTrades} trades
+              </button>
+            </>
           )}
         </div>
+      )}
+
+      {inspect && result && <TradeInspector result={result} onClose={() => setInspect(false)} />}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// CONFIRMATION ANALYSIS — MEASURES which feeds are signals, which are
+// confirmations, and which are noise, instead of asking a model to guess.
+// ---------------------------------------------------------------------------
+function ConfirmersPanel({ analysisId, modelId, rule, existing, onDone }) {
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState(existing || null);
+  const [err, setErr] = useState(null);
+
+  const run = async () => {
+    setRunning(true); setErr(null);
+    try {
+      const res = await fetch(`/api/analyses/${analysisId}/confirmers`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ modelId, sessions: 40 }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Failed");
+      setResult(data); onDone?.(modelId, data);
+    } catch (e) { setErr(e.message); }
+    setRunning(false);
+  };
+
+  if (!rule) return null;
+
+  return (
+    <div className="mt-5">
+      <div className="flex items-center gap-2 mb-2">
+        <Target size={14} className={faint} />
+        <span className={heading}>Confirmation analysis — what lifts this signal?</span>
+        {!result && (
+          <button onClick={run} disabled={running}
+            className="ml-auto text-xs px-2.5 py-1 rounded bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 hover:opacity-80 disabled:opacity-40">
+            {running ? "Measuring lift… (slow)" : "Find confirmers"}
+          </button>
+        )}
+      </div>
+
+      <p className={`text-xs mb-2 ${faint}`}>
+        Tests every other feed as a confirmer: does adding it to the base rule lift the win rate, and does it win on its own? A feed that's worthless alone but lifts the base signal is a CONFIRMATION, not a signal.
+      </p>
+
+      {err && <p className="text-xs text-red-500 mb-2">{err}</p>}
+
+      {result && !result.ok && (
+        <div className="px-3 py-2.5 rounded-lg border border-zinc-200 dark:border-zinc-800">
+          <p className={`text-xs ${sub}`}>{result.reason}</p>
+        </div>
+      )}
+
+      {result?.ok && (
+        <>
+          <div className="px-3 py-2.5 rounded-lg border border-zinc-200 dark:border-zinc-800 mb-3">
+            <p className={`text-sm ${sub} leading-relaxed`}>{result.summary}</p>
+          </div>
+
+          <div className="space-y-1.5">
+            {[...result.confirmations, ...result.signals, ...result.antiConfirmations, ...result.noise].map((r) => (
+              <div key={r.key} className={`px-3 py-2 rounded-lg border text-xs ${
+                r.role === "CONFIRMATION" ? "border-sky-500/30 bg-sky-500/5"
+                : r.role === "SIGNAL" ? "border-emerald-500/30 bg-emerald-500/5"
+                : r.role === "ANTI-CONFIRMATION" ? "border-red-500/30 bg-red-500/5"
+                : "border-zinc-200 dark:border-zinc-800"}`}>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="font-mono">{r.key}</span>
+                  <RoleBadge role={r.role} />
+                  {r.lift != null && (
+                    <span className={`ml-auto font-mono ${r.lift > 0 ? "text-emerald-600 dark:text-emerald-400" : r.lift < 0 ? "text-red-600 dark:text-red-400" : faint}`}>
+                      {r.lift > 0 ? "+" : ""}{r.lift} pts
+                    </span>
+                  )}
+                </div>
+                <p className={`leading-relaxed ${sub}`}>{r.why}</p>
+                {r.confirmedTrades != null && (
+                  <p className={`mt-1 font-mono text-[10px] ${faint}`}>
+                    base {r.baseWinRate}% / {result.baseTrades} trades → with it {r.confirmedWinRate}% / {r.confirmedTrades} trades ({r.tradesRetainedPct}% retained) · alone {r.aloneWinRate ?? "—"}% / {r.aloneTrades}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+        </>
       )}
     </div>
   );
 }
 
-// THE REFINEMENT LOOP, made visible.
-// Shows every round: the rule, what the backtest said, what the model concluded
-// from its own losses, and what it changed. The point is that you can READ the
-// learning as a narrative rather than trusting a final number.
 function RefinePanel({ analysisId, modelId, rule, existing, onDone }) {
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState(existing || null);
@@ -202,78 +377,55 @@ function RefinePanel({ analysisId, modelId, rule, existing, onDone }) {
   };
 
   if (!rule) return null;
-
   const survived = result && !result.abandoned && result.best;
 
   return (
     <div className="mt-5">
       <div className="flex items-center gap-2 mb-2">
-        <RefreshCw size={14} className="text-zinc-500" />
-        <span className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono">
-          Refinement loop — learn from the losses, revise, retest
-        </span>
+        <RefreshCw size={14} className={faint} />
+        <span className={heading}>Refinement loop — learn from losses, revise, retest</span>
         {!result && (
           <button onClick={run} disabled={running}
-            className="ml-auto text-xs px-2.5 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 disabled:opacity-50">
-            {running ? "Refining… (60 sessions × 4 rounds, several min)" : "Run refinement"}
+            className="ml-auto text-xs px-2.5 py-1 rounded bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 hover:opacity-80 disabled:opacity-40">
+            {running ? "Refining… (several min)" : "Run refinement"}
           </button>
         )}
       </div>
 
-      {err && <p className="text-xs text-red-400 mb-2">{err}</p>}
+      {err && <p className="text-xs text-red-500 mb-2">{err}</p>}
 
       {result && (
         <>
-          <div className={`px-3 py-3 rounded-lg border mb-3 ${survived ? "bg-emerald-500/5 border-emerald-500/30" : "bg-zinc-900 border-zinc-700"}`}>
-            <div className={`text-sm font-medium ${survived ? "text-emerald-400" : "text-zinc-300"}`}>
-              {result.conclusion}
-            </div>
+          <div className={`px-3 py-3 rounded-lg border mb-3 ${survived ? "border-emerald-500/30 bg-emerald-500/5" : "border-zinc-200 dark:border-zinc-800"}`}>
+            <div className={`text-sm font-medium ${survived ? "text-emerald-600 dark:text-emerald-400" : sub}`}>{result.conclusion}</div>
           </div>
 
           <div className="space-y-2">
             {result.history.map((h) => {
               const b = h.backtest;
-              const invalid = b?.invalidRule;
               return (
-                <div key={h.round} className="px-3 py-2.5 rounded-lg border border-zinc-800 bg-zinc-900">
+                <div key={h.round} className={`px-3 py-2.5 rounded-lg border border-zinc-200 dark:border-zinc-800`}>
                   <div className="flex items-center gap-2 mb-1.5">
-                    <span className="text-xs font-mono text-zinc-400">ROUND {h.round}</span>
+                    <span className="text-xs font-mono">ROUND {h.round}</span>
                     {h.action && (
-                      <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded ${
-                        h.action === "abandon" ? "bg-red-500/15 text-red-400"
-                        : h.action === "filter" ? "bg-sky-500/15 text-sky-400"
-                        : "bg-zinc-800 text-zinc-400"}`}>
-                        {h.action}
-                      </span>
+                      <span className={`text-[10px] font-mono px-1.5 py-0.5 rounded border ${
+                        h.action === "abandon" ? "text-red-600 dark:text-red-400 border-red-500/40"
+                        : h.action === "filter" ? "text-sky-600 dark:text-sky-400 border-sky-500/40"
+                        : "border-zinc-300 dark:border-zinc-700 " + faint}`}>{h.action}</span>
                     )}
                     {b?.testable && (
-                      <span className="ml-auto text-xs font-mono text-zinc-400">
+                      <span className={`ml-auto text-xs font-mono ${sub}`}>
                         {b.totalTrades} trades · {b.winRate}% win · PF {b.profitFactor}
-                        {!b.enoughData && b.totalTrades > 0 && (
-                          <span className="text-amber-400 ml-1.5">sample too small</span>
-                        )}
+                        {!b.enoughData && b.totalTrades > 0 && <span className="text-amber-500 ml-1.5">sample too small</span>}
                       </span>
                     )}
                   </div>
-
-                  <div className="text-[11px] font-mono text-zinc-500 mb-1.5">
+                  <div className={`text-[11px] font-mono mb-1.5 ${faint}`}>
                     {h.rule.conditions.map((c) => `${c.feed}.${c.metric} ${c.operator} ${c.threshold}`).join("  AND  ")}
                   </div>
-
-                  {invalid && (
-                    <p className="text-xs text-amber-400 leading-relaxed mb-1">
-                      Rule was invalid and never ran — {b.errors?.join("; ")}
-                    </p>
-                  )}
-
-                  {h.diagnosis && (
-                    <p className="text-xs text-zinc-400 leading-relaxed">
-                      <span className="text-zinc-600">diagnosis: </span>{h.diagnosis}
-                    </p>
-                  )}
-                  {h.stopReason && (
-                    <p className="text-xs text-zinc-500 leading-relaxed mt-1 italic">{h.stopReason}</p>
-                  )}
+                  {b?.invalidRule && <p className="text-xs text-amber-600 dark:text-amber-400 mb-1">Rule invalid, never ran — {b.errors?.join("; ")}</p>}
+                  {h.diagnosis && <p className={`text-xs leading-relaxed ${sub}`}><span className={faint}>diagnosis: </span>{h.diagnosis}</p>}
+                  {h.stopReason && <p className={`text-xs leading-relaxed mt-1 italic ${faint}`}>{h.stopReason}</p>}
                 </div>
               );
             })}
@@ -284,14 +436,14 @@ function RefinePanel({ analysisId, modelId, rule, existing, onDone }) {
   );
 }
 
-function ModelPanel({ record, modelId, onBacktestDone, onRefineDone }) {
+function ModelPanel({ record, modelId, cb }) {
   const a = record.analysis?.[modelId];
-  if (!a) return <p className="text-sm text-zinc-500">No analysis.</p>;
+  if (!a) return <p className={`text-sm ${sub}`}>No analysis.</p>;
   if (a.failed) {
     return (
-      <div className="px-3 py-3 rounded-lg border border-red-500/30 bg-red-500/5">
-        <p className="text-sm text-red-400">{a.reasoning}</p>
-        <p className="text-xs text-zinc-500 mt-1">This model has NO opinion on this session — it is excluded from the agreement count, not counted as a vote.</p>
+      <div className="px-3 py-3 rounded-lg border border-red-500/40 bg-red-500/5">
+        <p className="text-sm text-red-600 dark:text-red-400">{a.reasoning}</p>
+        <p className={`text-xs mt-1 ${faint}`}>This model has NO opinion — it is excluded from the agreement count, not counted as a vote.</p>
       </div>
     );
   }
@@ -300,60 +452,65 @@ function ModelPanel({ record, modelId, onBacktestDone, onRefineDone }) {
     <div>
       <div className="flex items-center justify-between mb-3">
         <Verdict v={a.verdict} />
-        {a.confidence > 0 && <span className="text-xs font-mono text-zinc-500">confidence {a.confidence}%</span>}
+        <div className={`text-xs font-mono ${faint}`}>
+          {a.confidence > 0 && <span className="mr-3">confidence {a.confidence}%</span>}
+          <span>{a.reviewedCount}/{a.endpointReview?.length} feeds reviewed</span>
+        </div>
       </div>
 
       {a.entry?.timestamp ? (
-        <div className="mb-4 px-3 py-2.5 rounded-lg border border-zinc-800 bg-zinc-950/60">
+        <div className={`mb-4 px-3 py-2.5 rounded-lg border border-zinc-200 dark:border-zinc-800`}>
           <div className="flex items-center gap-1.5 mb-1">
             <Zap size={13} style={{ color: MODEL_META[modelId].hex }} />
-            <span className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono">Entry it would have taken</span>
+            <span className={heading}>Entry it would have taken</span>
           </div>
-          <div className="text-lg font-mono text-zinc-100">
+          <div className="text-lg font-mono">
             {a.entry.timestamp}
-            {a.entry.leadMinutes != null && <span className="text-xs text-zinc-500 ml-2">{a.entry.leadMinutes} min before the move</span>}
+            {a.entry.leadMinutes != null && <span className={`text-xs ml-2 ${faint}`}>{a.entry.leadMinutes} min before the move</span>}
           </div>
-          <p className="text-sm text-zinc-400 mt-1 leading-relaxed">{a.entry.reasoning}</p>
-          {a.entry.corroboratingFeeds?.length > 0 && (
-            <div className="flex flex-wrap gap-1 mt-2">
-              {a.entry.corroboratingFeeds.map((f) => (
-                <span key={f} className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400">{f}</span>
-              ))}
-            </div>
-          )}
+          <p className={`text-sm mt-1 leading-relaxed ${sub}`}>{a.entry.reasoning}</p>
         </div>
       ) : (
-        <div className="mb-4 px-3 py-2.5 rounded-lg border border-zinc-800 bg-zinc-950/60">
-          <p className="text-sm text-zinc-400">No defensible entry. This model concluded the move was not knowable in advance — a legitimate and useful finding.</p>
+        <div className={`mb-4 px-3 py-2.5 rounded-lg border border-zinc-200 dark:border-zinc-800`}>
+          <p className={`text-sm ${sub}`}>No defensible entry. This model concluded the move was not knowable in advance — a legitimate finding, not a failure.</p>
         </div>
       )}
 
-      <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono mb-1">Reasoning</div>
-      <p className="text-sm text-zinc-300 leading-relaxed mb-4">{a.reasoning}</p>
+      <div className={`${heading} mb-1`}>Reasoning</div>
+      <p className={`text-sm leading-relaxed mb-4 ${sub}`}>{a.reasoning}</p>
 
       {a.rule && (
         <>
-          <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono mb-1">Proposed rule</div>
-          <p className="text-sm text-zinc-300 leading-relaxed mb-2 font-mono bg-zinc-900 border border-zinc-800 rounded px-2.5 py-2">{a.rule.description}</p>
+          <div className={`${heading} mb-1`}>Proposed rule</div>
+          <p className={`text-sm mb-2 font-mono px-2.5 py-2 rounded border border-zinc-200 dark:border-zinc-800 ${sub}`}>{a.rule.description}</p>
+          <div className="space-y-1 mb-3">
+            {a.rule.conditions?.map((c, i) => (
+              <div key={i} className={`text-[11px] font-mono px-2 py-1 rounded bg-zinc-100 dark:bg-zinc-800 ${sub}`}>
+                {c.feed}.{c.metric} {c.operator} {c.threshold}
+              </div>
+            ))}
+          </div>
         </>
       )}
 
       {a.falsification && (
         <>
-          <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono mb-1">What would prove it wrong</div>
-          <p className="text-sm text-zinc-400 leading-relaxed mb-4">{a.falsification}</p>
+          <div className={`${heading} mb-1`}>What would prove it wrong</div>
+          <p className={`text-sm leading-relaxed mb-2 ${sub}`}>{a.falsification}</p>
         </>
       )}
 
       <BacktestPanel analysisId={record.id} modelId={modelId} rule={a.rule}
-        existing={record.backtests?.[modelId]} onDone={onBacktestDone} />
-
+        existing={record.backtests?.[modelId]} onDone={cb.backtest} />
+      <ConfirmersPanel analysisId={record.id} modelId={modelId} rule={a.rule}
+        existing={record.confirmers?.[modelId]} onDone={cb.confirm} />
       <RefinePanel analysisId={record.id} modelId={modelId} rule={a.rule}
-        existing={record.refinements?.[modelId]} onDone={onRefineDone} />
+        existing={record.refinements?.[modelId]} onDone={cb.refine} />
 
-      <div className="mt-5">
-        <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono mb-2">
-          Feed audit — all {a.endpointReview?.length ?? 0} data feeds
+      <div className="mt-6 pt-5 border-t border-zinc-200 dark:border-zinc-800">
+        <div className="flex items-center gap-2 mb-2">
+          <ListFilter size={14} className={faint} />
+          <span className={heading}>Feed audit — all {a.endpointReview?.length ?? 0} feeds, including the dead ends</span>
         </div>
         <FeedAudit review={a.endpointReview} />
       </div>
@@ -363,26 +520,26 @@ function ModelPanel({ record, modelId, onBacktestDone, onRefineDone }) {
 
 function Timeline({ timeline }) {
   if (!timeline?.priceThrusts?.length) {
-    return <p className="text-xs text-zinc-500 italic">No statistically significant price move detected this session.</p>;
+    return <p className={`text-xs italic ${faint}`}>No statistically significant price move detected this session. There may simply have been nothing to trade.</p>;
   }
   return (
     <div className="space-y-2">
       {timeline.priceThrusts.map((t, i) => {
         const ll = timeline.leadLag?.[i];
         return (
-          <div key={i} className="px-3 py-2 rounded border border-zinc-800 bg-zinc-900">
+          <div key={i} className={`px-3 py-2 rounded border border-zinc-200 dark:border-zinc-800`}>
             <div className="flex items-center gap-2 text-sm font-mono">
-              <span className={t.direction === "UP" ? "text-emerald-400" : "text-red-400"}>
+              <span className={t.direction === "UP" ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}>
                 {t.direction} {t.pctMove}%
               </span>
-              <span className="text-zinc-500">{t.startClock} → {t.endClock}</span>
-              <span className="text-zinc-600 text-xs ml-auto">{t.z}σ</span>
+              <span className={faint}>{t.startClock} → {t.endClock}</span>
+              <span className={`text-xs ml-auto ${faint}`}>{t.z}σ</span>
             </div>
             {ll && (
-              <div className="text-xs text-zinc-500 mt-1">
+              <div className={`text-xs mt-1 ${sub}`}>
                 {ll.precursorCount === 0
                   ? "Nothing fired in advance — this move was likely not knowable."
-                  : `${ll.precursorCount} precursor signals across ${ll.corroborationScore} feeds: ${ll.corroboratingFeeds.join(", ")}`}
+                  : `${ll.precursorCount} precursors across ${ll.corroborationScore} feeds: ${ll.corroboratingFeeds.join(", ")}`}
               </div>
             )}
           </div>
@@ -392,52 +549,83 @@ function Timeline({ timeline }) {
   );
 }
 
-function AnalysisDetail({ record, onClose, onBacktestDone, onRefineDone }) {
+function SessionMetrics({ metrics }) {
+  const [open, setOpen] = useState(false);
+  const keys = Object.keys(metrics || {}).sort();
+  if (!keys.length) return null;
+  return (
+    <div className="mt-3">
+      <button onClick={() => setOpen((o) => !o)} className={`text-xs font-mono ${faint} hover:underline`}>
+        {open ? "hide" : "show"} all {keys.length} measured session metrics
+      </button>
+      {open && (
+        <div className="mt-2 grid sm:grid-cols-2 gap-x-4 gap-y-1">
+          {keys.map((k) => (
+            <div key={k} className="flex justify-between text-[11px] font-mono gap-2">
+              <span className={faint}>{k}</span>
+              <span className={sub}>{typeof metrics[k] === "number" ? metrics[k].toLocaleString(undefined, { maximumFractionDigits: 2 }) : metrics[k]}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AnalysisDetail({ record, onClose, cb }) {
   const [tab, setTab] = useState("claude");
   const combined = record.analysis?.combined;
 
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-      <div className="bg-zinc-950 border border-zinc-800 rounded-xl w-full max-w-3xl max-h-[92vh] overflow-y-auto">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-800 sticky top-0 bg-zinc-950 z-10">
-          <div className="flex items-center gap-3">
-            <h3 className="text-zinc-100 font-semibold text-lg">{record.symbol}</h3>
-            <span className="text-xs font-mono text-zinc-500">{record.sessionDate}</span>
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className={`${card} rounded-xl w-full max-w-3xl max-h-[92vh] overflow-y-auto`}>
+        <div className={`flex items-center justify-between px-5 py-4 border-b border-zinc-200 dark:border-zinc-800 sticky top-0 z-10 ${card}`}>
+          <div className="flex items-center gap-3 flex-wrap">
+            <h3 className="font-semibold text-lg">{record.symbol}</h3>
+            <span className={`text-xs font-mono ${faint}`}>{record.sessionDate}</span>
             {combined && <Verdict v={combined.verdict} />}
-            <span className="text-xs font-mono text-zinc-600">agreement {record.agreement}</span>
+            <span className={`text-xs font-mono ${faint}`}>agreement {record.agreement}</span>
           </div>
-          <button onClick={onClose} className="text-zinc-500 hover:text-zinc-300"><X size={18} /></button>
+          <button onClick={onClose} className={faint}><X size={18} /></button>
         </div>
 
-        <div className="px-5 py-4 border-b border-zinc-800">
-          <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono mb-2">
-            Price moves detected (computed, not opinion)
+        {record.notes && (
+          <div className="px-5 pt-4">
+            <div className="px-3 py-2 rounded-lg border border-amber-500/40 bg-amber-500/10">
+              <div className={`${heading} mb-1`}>Your note (given to all 3 as a hunch to check, not a rule)</div>
+              <p className="text-sm text-amber-800 dark:text-amber-300">{record.notes}</p>
+            </div>
           </div>
+        )}
+
+        <div className="px-5 py-4 border-b border-zinc-200 dark:border-zinc-800">
+          <div className={`${heading} mb-2`}>Price moves detected (computed, not opinion)</div>
           <Timeline timeline={record.briefing?.timeline} />
           {record.briefing?.fetchReport && (
-            <p className="text-[11px] font-mono text-zinc-600 mt-2">
-              {record.briefing.fetchReport.succeeded}/{record.briefing.fetchReport.attempted} feeds fetched successfully
+            <p className={`text-[11px] font-mono mt-2 ${faint}`}>
+              {record.briefing.fetchReport.succeeded}/{record.briefing.fetchReport.attempted} feeds fetched · {record.briefing.timeline?.totalSignalEvents ?? 0} signal events detected
             </p>
           )}
+          <SessionMetrics metrics={record.briefing?.sessionMetrics} />
         </div>
 
-        <div className="flex gap-1 px-5 pt-4 border-b border-zinc-800">
+        <div className="flex gap-1 px-5 pt-4 border-b border-zinc-200 dark:border-zinc-800">
           {MODEL_IDS.map((m) => {
             const a = record.analysis?.[m];
             return (
               <button key={m} onClick={() => setTab(m)}
-                className={`flex items-center gap-1.5 px-3 py-2 -mb-px border-b-2 text-sm font-medium transition
-                  ${tab === m ? "border-current " + MODEL_META[m].accent : "border-transparent text-zinc-500 hover:text-zinc-300"}`}>
+                className={`flex items-center gap-1.5 px-3 py-2 -mb-px border-b-2 text-sm font-medium
+                  ${tab === m ? "border-current " + MODEL_META[m].accent : "border-transparent " + faint}`}>
                 <span className={`w-1.5 h-1.5 rounded-full ${MODEL_META[m].dot}`} />
                 {MODEL_META[m].name}
-                {a && !a.failed && <span className="text-[10px] text-zinc-600">{a.usedCount}/{a.endpointReview?.length}</span>}
+                {a && !a.failed && <span className={`text-[10px] ${faint}`}>{a.usedCount}/{a.endpointReview?.length}</span>}
               </button>
             );
           })}
         </div>
 
         <div className="p-5">
-          <ModelPanel record={record} modelId={tab} onBacktestDone={onBacktestDone} onRefineDone={onRefineDone} />
+          <ModelPanel record={record} modelId={tab} cb={cb} />
         </div>
       </div>
     </div>
@@ -446,21 +634,22 @@ function AnalysisDetail({ record, onClose, onBacktestDone, onRefineDone }) {
 
 function AnalyzeForm({ onClose, onSubmit, error, running }) {
   const [mode, setMode] = useState("stock");
-  const [f, setF] = useState({ symbol: "", sessionDate: "", strikePrice: "", contractType: "CALL", expirationDate: "" });
+  const [f, setF] = useState({ symbol: "", sessionDate: "", strikePrice: "", contractType: "CALL", expirationDate: "", notes: "" });
   const set = (k) => (e) => setF((s) => ({ ...s, [k]: e.target.value }));
+  const inp = "w-full mt-1 bg-transparent border border-zinc-300 dark:border-zinc-700 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/40";
 
   return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-      <div className="bg-zinc-950 border border-zinc-800 rounded-xl w-full max-w-md p-5">
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className={`${card} rounded-xl w-full max-w-md p-5 max-h-[92vh] overflow-y-auto`}>
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-zinc-100 font-semibold">Analyze a session</h3>
-          <button onClick={onClose} className="text-zinc-500 hover:text-zinc-300"><X size={18} /></button>
+          <h3 className="font-semibold">Analyze a session</h3>
+          <button onClick={onClose} className={faint}><X size={18} /></button>
         </div>
 
-        <div className="flex gap-1 mb-4 p-1 bg-zinc-900 rounded-lg">
+        <div className="flex gap-1 mb-4 p-1 rounded-lg bg-zinc-100 dark:bg-zinc-800">
           {[["stock", "Stock"], ["options", "Options"]].map(([k, label]) => (
             <button key={k} onClick={() => setMode(k)}
-              className={`flex-1 py-1.5 rounded text-sm font-medium ${mode === k ? "bg-zinc-800 text-zinc-100" : "text-zinc-500 hover:text-zinc-300"}`}>
+              className={`flex-1 py-1.5 rounded text-sm font-medium ${mode === k ? "bg-white dark:bg-zinc-900 shadow-sm" : faint}`}>
               {label}
             </button>
           ))}
@@ -469,56 +658,61 @@ function AnalyzeForm({ onClose, onSubmit, error, running }) {
         <div className="space-y-3">
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="text-xs text-zinc-500 font-mono">SYMBOL</label>
-              <input value={f.symbol} onChange={set("symbol")} placeholder="META"
-                className="w-full mt-1 bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-zinc-100 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/40" />
+              <label className={`text-xs font-mono ${faint}`}>SYMBOL</label>
+              <input value={f.symbol} onChange={set("symbol")} placeholder="META" className={inp} />
             </div>
             <div>
-              <label className="text-xs text-zinc-500 font-mono">SESSION DATE</label>
-              <input type="date" value={f.sessionDate} onChange={set("sessionDate")}
-                className="w-full mt-1 bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-zinc-100 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/40" />
+              <label className={`text-xs font-mono ${faint}`}>SESSION DATE</label>
+              <input type="date" value={f.sessionDate} onChange={set("sessionDate")} className={inp} />
             </div>
           </div>
 
           {mode === "options" && (
             <div className="grid grid-cols-3 gap-3">
               <div>
-                <label className="text-xs text-zinc-500 font-mono">STRIKE</label>
-                <input value={f.strikePrice} onChange={set("strikePrice")} placeholder="700"
-                  className="w-full mt-1 bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-zinc-100 text-sm" />
+                <label className={`text-xs font-mono ${faint}`}>STRIKE</label>
+                <input value={f.strikePrice} onChange={set("strikePrice")} placeholder="700" className={inp} />
               </div>
               <div>
-                <label className="text-xs text-zinc-500 font-mono">TYPE</label>
-                <select value={f.contractType} onChange={set("contractType")}
-                  className="w-full mt-1 bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-zinc-100 text-sm">
+                <label className={`text-xs font-mono ${faint}`}>TYPE</label>
+                <select value={f.contractType} onChange={set("contractType")} className={inp}>
                   <option>CALL</option><option>PUT</option>
                 </select>
               </div>
               <div>
-                <label className="text-xs text-zinc-500 font-mono">EXPIRY</label>
-                <input type="date" value={f.expirationDate} onChange={set("expirationDate")}
-                  className="w-full mt-1 bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-zinc-100 text-sm" />
+                <label className={`text-xs font-mono ${faint}`}>EXPIRY</label>
+                <input type="date" value={f.expirationDate} onChange={set("expirationDate")} className={inp} />
               </div>
             </div>
           )}
+
+          {/* The hunch box. Explicitly a hint to CHECK, never a rule to obey — the
+              prompt tells all three models that agreeing when the data doesn't
+              support it is the worst thing they can do. */}
+          <div>
+            <label className={`text-xs font-mono ${faint}`}>NOTES (optional)</label>
+            <textarea value={f.notes} onChange={set("notes")} rows={3}
+              placeholder="Something you noticed and want them to consider — e.g. 'saw a possible bear trap around 10:30, worth a look?'"
+              className={inp + " resize-none"} />
+            <p className={`text-[11px] mt-1 ${faint}`}>
+              Passed to all 3 as a hunch to <em>check</em>, not a rule to follow. They're instructed to tell you plainly if the data contradicts it.
+            </p>
+          </div>
         </div>
 
         <button
           onClick={() => onSubmit({
-            symbol: f.symbol, sessionDate: f.sessionDate,
+            symbol: f.symbol, sessionDate: f.sessionDate, notes: f.notes || null,
             contract: mode === "options" && f.strikePrice && f.expirationDate
               ? { strikePrice: f.strikePrice, contractType: f.contractType, expirationDate: f.expirationDate }
               : null,
           })}
           disabled={!f.symbol || !f.sessionDate || running}
-          className="w-full mt-5 py-2 rounded bg-emerald-600 text-zinc-950 text-sm font-medium hover:bg-emerald-500 disabled:opacity-40">
+          className="w-full mt-5 py-2 rounded bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-500 disabled:opacity-40">
           {running ? "Pulling 30 feeds, running 3 analysts…" : "Analyze"}
         </button>
 
-        {error && <p className="text-xs text-red-400 mt-2">{error}</p>}
-        <p className="text-[11px] text-zinc-600 mt-3 leading-relaxed">
-          You give a symbol and a date. The system finds the moves itself, then asks all 3 analysts whether they were knowable in advance — using only data that existed before each move. Takes ~1-2 min.
-        </p>
+        {error && <p className="text-xs text-red-500 mt-2">{error}</p>}
       </div>
     </div>
   );
@@ -530,44 +724,45 @@ function AnalysisCard({ record, onOpen }) {
   const entries = c?.entries ? Object.values(c.entries).filter((e) => e?.timestamp) : [];
 
   return (
-    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 flex flex-col">
+    <div className={`${card} rounded-lg p-4 flex flex-col`}>
       <div className="flex items-center justify-between mb-3">
-        {c ? <Verdict v={c.verdict} /> : <span className="text-xs text-zinc-500 font-mono">pending</span>}
-        <span className="text-[11px] font-mono text-zinc-600">agreement {record.agreement}</span>
+        {c ? <Verdict v={c.verdict} /> : <span className={`text-xs font-mono ${faint}`}>pending</span>}
+        <span className={`text-[11px] font-mono ${faint}`}>agreement {record.agreement}</span>
       </div>
-      <div className="text-base font-semibold text-zinc-100">{record.symbol}</div>
-      <div className="text-xs font-mono text-zinc-500 mb-3">{record.sessionDate}</div>
+      <div className="text-base font-semibold">{record.symbol}</div>
+      <div className={`text-xs font-mono mb-3 ${faint}`}>{record.sessionDate}</div>
 
-      <div className="border-t border-zinc-800 pt-3 grid grid-cols-3 gap-2">
-        <div>
-          <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-mono">Moves</div>
-          <div className="text-sm font-mono text-zinc-200">{thrusts}</div>
-        </div>
-        <div>
-          <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-mono">Entries</div>
-          <div className="text-sm font-mono text-zinc-200">{entries.length}/3</div>
-        </div>
-        <div>
-          <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-mono">Feeds</div>
-          <div className="text-sm font-mono text-zinc-200">{record.briefing?.fetchReport?.succeeded ?? "—"}</div>
-        </div>
+      <div className="border-t border-zinc-200 dark:border-zinc-800 pt-3 grid grid-cols-3 gap-2">
+        {[["Moves", thrusts], ["Entries", `${entries.length}/3`], ["Feeds", record.briefing?.fetchReport?.succeeded ?? "—"]].map(([k, v]) => (
+          <div key={k}>
+            <div className={heading}>{k}</div>
+            <div className="text-sm font-mono">{v}</div>
+          </div>
+        ))}
       </div>
 
       <button onClick={() => onOpen(record.id)}
-        className="mt-4 w-full flex items-center justify-center gap-1.5 bg-zinc-950 hover:bg-black border border-zinc-800 text-zinc-200 text-sm font-medium py-2 rounded-md">
-        View analysis <ChevronRight size={14} />
+        className="mt-4 w-full flex items-center justify-center gap-1.5 border border-zinc-300 dark:border-zinc-700 text-sm font-medium py-2 rounded-md hover:bg-zinc-100 dark:hover:bg-zinc-800">
+        View full analysis <ChevronRight size={14} />
       </button>
     </div>
   );
 }
 
 export default function App() {
+  // Light by default, with a working sun/moon toggle — this got lost in the
+  // rebuild and is restored here.
+  const [dark, setDark] = useState(false);
   const [tab, setTab] = useState("log");
   const [records, setRecords] = useState([]);
   const [openId, setOpenId] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState(null);
   const [running, setRunning] = useState(false);
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", dark);
+  }, [dark]);
 
   useEffect(() => {
     fetch("/api/analyses").then((r) => r.json())
@@ -593,39 +788,36 @@ export default function App() {
     setRunning(false);
   };
 
-  const onBacktestDone = (modelId, result) => {
+  const patch = (field) => (modelId, result) => {
     setRecords((prev) => prev.map((r) => r.id === openId
-      ? { ...r, backtests: { ...(r.backtests || {}), [modelId]: result } } : r));
+      ? { ...r, [field]: { ...(r[field] || {}), [modelId]: result } } : r));
   };
-
-  const onRefineDone = (modelId, result) => {
-    setRecords((prev) => prev.map((r) => r.id === openId
-      ? { ...r, refinements: { ...(r.refinements || {}), [modelId]: result } } : r));
-  };
-
-  const NAV = [
-    { id: "log", label: "Analyses", Icon: FileText },
-    { id: "settings", label: "Settings", Icon: Settings },
-  ];
+  const cb = { backtest: patch("backtests"), refine: patch("refinements"), confirm: patch("confirmers") };
 
   return (
-    <div className="min-h-full bg-black text-zinc-100 font-sans">
+    <div className="min-h-screen bg-white dark:bg-black text-zinc-900 dark:text-zinc-100 font-sans transition-colors">
       <div className="max-w-5xl mx-auto px-4 py-6">
-        <div className="flex items-baseline justify-between mb-6">
+        <div className="flex items-start justify-between mb-6">
           <div>
             <h1 className="text-xl font-semibold tracking-tight">GHOSTFLOW</h1>
-            <p className="text-xs text-zinc-500 font-mono mt-0.5">signal discovery · 3-analyst engine · 30 live feeds</p>
+            <p className={`text-xs font-mono mt-0.5 ${faint}`}>signal discovery · 3-analyst engine · 30 live feeds</p>
           </div>
-          <span className="text-[11px] font-mono text-zinc-600 border border-zinc-800 rounded px-2 py-1">
-            was it knowable in advance?
-          </span>
+          <div className="flex items-center gap-2">
+            <span className={`text-[11px] font-mono border rounded px-2 py-1 border-zinc-300 dark:border-zinc-700 ${faint}`}>
+              was it knowable in advance?
+            </span>
+            <button onClick={() => setDark((d) => !d)} aria-label="Toggle theme"
+              className="p-2 rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800">
+              {dark ? <Sun size={15} /> : <Moon size={15} />}
+            </button>
+          </div>
         </div>
 
-        <div className="flex gap-1 mb-6 border-b border-zinc-800">
-          {NAV.map(({ id, label, Icon }) => (
+        <div className="flex gap-1 mb-6 border-b border-zinc-200 dark:border-zinc-800">
+          {[{ id: "log", label: "Analyses", Icon: FileText }, { id: "settings", label: "Settings", Icon: Settings }].map(({ id, label, Icon }) => (
             <button key={id} onClick={() => setTab(id)}
-              className={`flex items-center gap-1.5 px-3 py-2 text-sm border-b-2 -mb-px transition
-                ${tab === id ? "border-emerald-400 text-zinc-100" : "border-transparent text-zinc-500 hover:text-zinc-300"}`}>
+              className={`flex items-center gap-1.5 px-3 py-2 text-sm border-b-2 -mb-px
+                ${tab === id ? "border-emerald-500 text-zinc-900 dark:text-zinc-100" : "border-transparent " + faint}`}>
               <Icon size={15} /> {label}
             </button>
           ))}
@@ -634,16 +826,16 @@ export default function App() {
         {tab === "log" && (
           <div>
             <div className="flex items-center justify-between mb-4">
-              <p className="text-xs text-zinc-500">Enter a symbol and a date. The system finds the moves itself.</p>
+              <p className={`text-xs ${faint}`}>Enter a symbol and a date. The system finds the moves itself.</p>
               <button onClick={() => setShowForm(true)}
-                className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-500 text-zinc-950 text-sm font-medium px-3 py-1.5 rounded-md">
+                className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium px-3 py-1.5 rounded-md">
                 <Search size={16} /> Analyze session
               </button>
             </div>
             <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
               {records.map((r) => <AnalysisCard key={r.id} record={r} onOpen={setOpenId} />)}
               {records.length === 0 && (
-                <div className="col-span-full px-4 py-10 text-center text-zinc-600 text-sm border border-zinc-800 rounded-lg">
+                <div className={`col-span-full px-4 py-10 text-center text-sm rounded-lg border border-zinc-200 dark:border-zinc-800 ${faint}`}>
                   No analyses yet. Run one to get started.
                 </div>
               )}
@@ -652,18 +844,18 @@ export default function App() {
         )}
 
         {tab === "settings" && (
-          <div className="max-w-xl bg-zinc-900 border border-zinc-800 rounded-lg p-4">
-            <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono mb-1">AI provider billing</div>
-            <p className="text-xs text-zinc-500 mb-3">Top up token balance for each model this system calls.</p>
+          <div className={`max-w-xl ${card} rounded-lg p-4`}>
+            <div className={`${heading} mb-1`}>AI provider billing</div>
+            <p className={`text-xs mb-3 ${faint}`}>Top up token balance for each model this system calls.</p>
             <div className="space-y-2">
               {BILLING_LINKS.map((l) => (
                 <a key={l.url} href={l.url} target="_blank" rel="noopener noreferrer"
-                  className="flex items-center justify-between px-3 py-2.5 rounded bg-zinc-950 hover:bg-black border border-zinc-800">
+                  className="flex items-center justify-between px-3 py-2.5 rounded border border-zinc-200 dark:border-zinc-800 hover:bg-zinc-100 dark:hover:bg-zinc-800">
                   <span className="flex items-center gap-2 text-sm">
                     <span className={`w-2 h-2 rounded-full ${l.dot}`} />
                     <span className={l.accent}>{l.name}</span>
                   </span>
-                  <ExternalLink size={14} className="text-zinc-600" />
+                  <ExternalLink size={14} className={faint} />
                 </a>
               ))}
             </div>
@@ -672,7 +864,7 @@ export default function App() {
       </div>
 
       {showForm && <AnalyzeForm onClose={() => setShowForm(false)} onSubmit={analyze} error={error} running={running} />}
-      {open && <AnalysisDetail record={open} onClose={() => setOpenId(null)} onBacktestDone={onBacktestDone} onRefineDone={onRefineDone} />}
+      {open && <AnalysisDetail record={open} onClose={() => setOpenId(null)} cb={cb} />}
     </div>
   );
 }

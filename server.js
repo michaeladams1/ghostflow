@@ -15,6 +15,7 @@ import { buildBriefing } from "./server/compress.js";
 import { analyzeAllModels } from "./server/analysis.js";
 import { backtestRule, priorSessions } from "./server/backtest.js";
 import { refineRule } from "./server/refine.js";
+import { analyzeConfirmers } from "./server/confirmation.js";
 import { callClaude, callGPT, callGrok } from "./server/aiProviders.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -53,7 +54,7 @@ app.get("/api/analyses", async (req, res) => {
 // Steps: fetch all 30 feeds -> compress into a timeline + lead/lag ->
 //        3 models independently review every feed and propose a testable rule.
 app.post("/api/analyze", async (req, res) => {
-  const { symbol, sessionDate, lookbackDays = 15, contract } = req.body;
+  const { symbol, sessionDate, lookbackDays = 15, contract, notes } = req.body;
   if (!symbol || !sessionDate) {
     return res.status(400).json({ error: "symbol and sessionDate are required" });
   }
@@ -71,7 +72,7 @@ app.post("/api/analyze", async (req, res) => {
     const briefing = buildBriefing(bundle, { contract });
     console.log(`[analyze] ${briefing.timeline.priceThrusts.length} price thrusts detected; running 3 analysts...`);
 
-    const analysis = await analyzeAllModels(briefing);
+    const analysis = await analyzeAllModels(briefing, notes);
     console.log(`[analyze] done. combined=${analysis.combined.verdict} agreement=${analysis.combined.agreement}`);
 
     const record = {
@@ -79,13 +80,12 @@ app.post("/api/analyze", async (req, res) => {
       symbol: ticker,
       sessionDate,
       contract: contract || null,
+      notes: notes || null,
       loggedAt: new Date().toISOString(),
-      // The briefing is stored WITHOUT the giant raw bundle — the compressed
-      // per-feed readings and timeline are what the UI needs, and the raw
-      // payloads would bloat the row for no benefit.
       briefing: {
         endpoints: briefing.endpoints,
         timeline: briefing.timeline,
+        sessionMetrics: briefing.sessionMetrics,
         fetchReport: briefing.fetchReport,
       },
       analysis,
@@ -183,6 +183,40 @@ app.post("/api/analyses/:id/refine", async (req, res) => {
     res.json(result);
   } catch (err) {
     console.error("[refine] FAILED:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// CONFIRMATION ANALYSIS: separates SIGNAL from CONFIRMATION from NOISE by
+// MEASURING them. Backtests the base rule alone, then base+each candidate, then
+// each candidate alone — and reports the actual lift. This is how "works 60% of
+// the time, but 90% when a volume spike accompanies it" becomes a fact rather
+// than a hunch.
+app.post("/api/analyses/:id/confirmers", async (req, res) => {
+  const { modelId, sessions = 40, holdMinutes = 15 } = req.body;
+  try {
+    const all = await readTrades();
+    const record = all.find((r) => r.id === req.params.id);
+    if (!record) return res.status(404).json({ error: `No analysis with id ${req.params.id}` });
+
+    const rule = record.analysis?.[modelId]?.rule;
+    if (!rule) return res.status(400).json({ error: `${modelId} proposed no rule — nothing to find confirmers for.` });
+
+    const sessionList = priorSessions(record.sessionDate, sessions);
+    console.log(`[confirmers] ${modelId} on ${record.symbol}, ${sessionList.length} sessions...`);
+
+    const result = await analyzeConfirmers(rule, {
+      ticker: record.symbol, sessions: sessionList, holdMinutes,
+      onProgress: (row) => console.log(`[confirmers] ${row.key}: ${row.role} (lift ${row.lift})`),
+    });
+
+    record.confirmers = record.confirmers || {};
+    record.confirmers[modelId] = result;
+    try { await appendTrade(record); } catch (e) { console.error("[confirmers] DB write failed:", e.message); }
+
+    res.json(result);
+  } catch (err) {
+    console.error("[confirmers] FAILED:", err);
     res.status(500).json({ error: err.message });
   }
 });

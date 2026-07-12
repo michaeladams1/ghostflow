@@ -547,18 +547,14 @@ Object.assign(COMPRESSORS, {
 // ---------------------------------------------------------------------------
 
 import { QD_ENDPOINTS, QD_CONTRACT_ENDPOINTS } from "./quantDataRegistry.js";
-import { BAR_METRICS, barMetricSpec, computeSessionMetrics } from "./metrics.js";
+import { BAR_METRICS, barMetricSpec, computeSessionMetrics, gammaProximitySeries } from "./metrics.js";
 
-// Builds z-scored events for EVERY bar metric across EVERY time-series feed —
-// not just a hand-picked few. Any bar metric a model can name in a rule must
-// also produce events here, or the rule would reference a signal the backtest
-// can never see. Keeping this driven off BAR_METRICS keeps the two in lockstep.
-function eventsForAllBarMetrics(results) {
+function eventsForAllBarMetrics(results, priceSeries) {
   let all = [];
   for (const [feed, metrics] of Object.entries(BAR_METRICS)) {
     const r = results[feed];
     if (!r?.ok) continue;
-    // The price series and contract price are the P&L instruments, not signals.
+    // Price series are the P&L instruments, not signals.
     if (feed === "stock_price_over_time" || feed === "option_price_over_time") continue;
 
     for (const metric of Object.keys(metrics)) {
@@ -574,6 +570,20 @@ function eventsForAllBarMetrics(results) {
       all = all.concat(detectSignalEvents(series, { endpoint: feed, metric }));
     }
   }
+
+  // INTRADAY GAMMA PROXIMITY. Gamma-at-spot and distance-to-wall change every
+  // minute as price moves through the strike map, even though the strikes
+  // themselves are near-static intraday. Treating gamma as purely session-level
+  // was a real error; this restores it as a minute-by-minute trigger.
+  if (results.exposure_by_strike_gamma?.ok && priceSeries?.length) {
+    const prox = gammaProximitySeries(results.exposure_by_strike_gamma, priceSeries);
+    for (const [metric, series] of Object.entries(prox)) {
+      if (series?.length) {
+        all = all.concat(detectSignalEvents(series, { endpoint: "gamma_proximity", metric }));
+      }
+    }
+  }
+
   return all;
 }
 
@@ -628,7 +638,7 @@ export function buildBriefing(bundle, { contract } = {}) {
   // happened to emit. A model can name any bar metric in a rule, so every bar
   // metric must be able to produce an event — otherwise the rule would reference
   // a signal the backtest is structurally blind to.
-  allEvents = eventsForAllBarMetrics(bundle.results);
+  allEvents = eventsForAllBarMetrics(bundle.results, priceSeries);
 
   // SESSION METRICS — the regime gates. One scalar per feed per day.
   const spot = priceSeries.length ? priceSeries[priceSeries.length - 1].value : null;

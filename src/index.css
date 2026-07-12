@@ -2,41 +2,24 @@
 @tailwind components;
 @tailwind utilities;
 
+/* THEME.
+   Previously this file carried a pile of `.light .bg-black { ... !important }`
+   overrides — a hack that retrofitted a light theme onto a hardcoded-dark UI by
+   fighting Tailwind's own utilities. When the UI was rebuilt, those overrides
+   were orphaned and the toggle silently stopped working.
+
+   Now the components use real `dark:` variants and tailwind.config.js is set to
+   darkMode: "class", so the sun/moon button toggles `.dark` on <html> and
+   Tailwind does the rest. Light is the default. No !important anywhere. */
+
 html, body, #root {
   height: 100%;
-  background: black;
 }
 
-/* ---------- Light theme ----------
-   Rather than retrofitting dark:/light: variants onto every className in
-   App.jsx, this overrides the actual Tailwind-generated utility classes
-   when a `.light` class is present on an ancestor (toggled by the
-   sun/moon control). Keeps the theme swap in one file instead of touching
-   hundreds of classNames. Accent colors (emerald/amber/violet) are left
-   alone on purpose — they're the model-identity colors, not theme colors. */
-
-html.light, html.light body, html.light #root {
+body {
   background: #ffffff;
 }
 
-.light .bg-black { background-color: #ffffff !important; }
-.light .bg-zinc-950 { background-color: #ffffff !important; }
-.light .bg-zinc-950\/95 { background-color: rgba(255,255,255,0.95) !important; }
-.light .bg-zinc-900 { background-color: #f4f4f5 !important; }
-.light .bg-zinc-900\/50 { background-color: rgba(244,244,245,0.7) !important; }
-.light .bg-zinc-800 { background-color: #e4e4e7 !important; }
-.light .hover\:bg-black:hover { background-color: #f4f4f5 !important; }
-.light .hover\:bg-zinc-900:hover { background-color: #e4e4e7 !important; }
-.light .hover\:bg-zinc-900\/60:hover { background-color: #e4e4e7 !important; }
-.light .hover\:bg-zinc-700:hover { background-color: #d4d4d8 !important; }
-
-.light .border-zinc-800 { border-color: #e4e4e7 !important; }
-
-.light .text-zinc-100 { color: #18181b !important; }
-.light .text-zinc-200 { color: #27272a !important; }
-.light .text-zinc-300 { color: #3f3f46 !important; }
-.light .text-zinc-400 { color: #52525b !important; }
-.light .text-zinc-500 { color: #71717a !important; }
-.light .text-zinc-600 { color: #9ca3af !important; }
-.light .hover\:text-zinc-300:hover { color: #27272a !important; }
-.light .hover\:text-zinc-400:hover { color: #3f3f46 !important; }
+html.dark body {
+  background: #000000;
+}

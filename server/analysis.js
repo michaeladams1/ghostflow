@@ -37,8 +37,26 @@ function extractJson(text) {
   return JSON.parse(cleaned.slice(start, end + 1));
 }
 
-function buildPrompt(briefing) {
+function buildPrompt(briefing, userNotes) {
   const endpointIds = briefing.endpoints.map((e) => e.id);
+
+  // Michael's optional hint. Deliberately framed as something to CONSIDER and
+  // to CHECK AGAINST THE DATA — never as an instruction to confirm. A hint that
+  // gets treated as a conclusion turns the system into a yes-man, which is the
+  // exact failure mode this whole project exists to avoid.
+  const notesBlock = userNotes?.trim()
+    ? `
+
+=== ANALYST'S NOTE FROM MICHAEL (a hunch to CHECK, not a rule to obey) ===
+"${userNotes.trim()}"
+
+This is a hypothesis he wants you to LOOK AT. It is NOT a conclusion, NOT a constraint, and NOT something to confirm.
+Test it against the actual data and report honestly:
+  - If the data supports it, say so and use it.
+  - If the data CONTRADICTS it, say so plainly and explain why. That is the most valuable possible response to a hunch.
+  - If the data is silent on it, say that.
+Agreeing with him when the data does not support him is the single worst thing you can do here. He is asking you to check, not to agree.`
+    : "";
 
   const system = `You are one of three independent AI analysts in a research system called GHOSTFLOW. You do not know what the other two conclude, and you must not try to match them or to differ from them. Reason from the data and land where it takes you.
 
@@ -72,6 +90,28 @@ Your thesis must be a rule a computer could evaluate on any other day without yo
   USELESS: "buy when flow looks strong and momentum builds." A computer cannot evaluate that, so it can never be backtested, so it can never be proven or disproven.
 If nothing was knowable, set "rule": null and explain why.
 
+=== RULE 6: CLASSIFY EVERY FEED YOU USE — SIGNAL vs CONFIRMATION vs NOISE ===
+These three roles are different and the difference is the heart of this system:
+
+  SIGNAL       — fires on its own and would have gotten you into the trade. It IS the trade.
+  CONFIRMATION — predicts nothing by itself, but when it appears ALONGSIDE a signal, it tells you THIS instance is a good one. Example of the shape: "the flow spike works ~60% of the time, but when a volume surge accompanies it, it works far more often." The volume surge is not a reason to buy; it is a reason to believe the buy.
+  NOISE        — no standalone value, and adds nothing when combined. Say so plainly.
+
+For every feed you mark "used": true, set its "role" to one of SIGNAL, CONFIRMATION, or NOISE. Feeds you did not use are NOISE by definition (or simply irrelevant) — say which and why.
+
+Do not guess wildly here. The system will MEASURE your claims afterwards by backtesting each candidate confirmer for its actual lift. Your job is a reasoned hypothesis grounded in what you can see in the timeline.
+
+=== RULE 7: SHOW YOUR WORK, INCLUDING THE DEAD ENDS ===
+For EVERY feed, write what you actually checked and what happened — especially the things that DIDN'T work. That reasoning is as valuable as the answer, because a dead end rules something out.
+
+This is the texture I want, as an example of the THINKING (do not copy these specific indicators — reason from the feeds you actually have):
+  "GEX showed positive gamma, which argues for pinning — but price ran anyway, so dealer positioning did not govern this move. Not correlated.
+   Dark pool flow was flat all morning, then a 4-sigma burst at 10:47 — nine minutes before the push. Possible precursor.
+   Term structure was inverted, so the market expected an event. That is context, not timing.
+   Open interest CHANGE showed calls being opened, not closed, which supports the flow read being real positioning rather than churn."
+
+Dead ends are not failures. "I checked it and it did not line up" is exactly what I want to read.
+
 === RULE 5: IF YOUR REASONING NAMES A REGIME, YOU MUST ENCODE IT AS A GATE ===
 This is the most commonly botched part, so read it twice.
 
@@ -94,7 +134,7 @@ Respond with ONLY one JSON object. No code fences, no prose around it:
   "verdict": "tradeable" | "not_tradeable",
   "confidence": 0-100,
   "verdict_reasoning": "2-5 sentences: what drove the move, and was it knowable beforehand?",
-  "endpointReview": [ { "id": "<feed id>", "used": true|false, "notes": "what YOU concluded, including 'nothing here' if that is the truth" } ],
+  "endpointReview": [ { "id": "<feed id>", "used": true|false, "role": "SIGNAL"|"CONFIRMATION"|"NOISE", "notes": "what YOU checked and what you concluded — INCLUDING dead ends, e.g. 'positive gamma argued for pinning but price ran anyway, not correlated'" } ],
   "entry": {
     "timestamp": "HH:MM NY time, or null if not tradeable",
     "reasoning": "cite ONLY signals at or before this timestamp",
@@ -109,9 +149,9 @@ Respond with ONLY one JSON object. No code fences, no prose around it:
   "falsification": "What would have to be true for this rule to be WRONG? What would kill it?"
 }`;
 
-  const user = `${renderBriefing(briefing)}
+  const user = `${renderBriefing(briefing)}${notesBlock}
 
-Analyze this session now. Review all ${endpointIds.length} feeds honestly — including the ones that told you nothing. Identify whether any move was knowable in advance and at exactly what minute. Propose a testable rule, or state plainly that none exists. Respond with only the JSON object.`;
+Analyze this session now. Review all ${endpointIds.length} feeds honestly — including the ones that told you nothing, and SHOW THE DEAD ENDS. Classify each used feed as SIGNAL, CONFIRMATION, or NOISE. Identify whether any move was knowable in advance and at exactly what minute. Propose a testable rule, or state plainly that none exists. Respond with only the JSON object.`;
 
   return { system, user };
 }
@@ -125,18 +165,21 @@ function validateReview(parsed, briefing) {
 
   const review = expected.map((id) => {
     const found = returned.get(id);
-    if (found) return { id, used: !!found.used, notes: found.notes || "", reviewed: true };
+    if (found) {
+      const role = ["SIGNAL", "CONFIRMATION", "NOISE"].includes(found.role) ? found.role : (found.used ? "SIGNAL" : "NOISE");
+      return { id, used: !!found.used, role, notes: found.notes || "", reviewed: true };
+    }
     // NOT silently defaulted to "irrelevant" — flagged as a real gap, so a lazy
     // model is visible in the UI rather than invisible.
-    return { id, used: false, notes: "NOT REVIEWED — this model failed to report on this feed.", reviewed: false };
+    return { id, used: false, role: "NOT_REVIEWED", notes: "NOT REVIEWED — this model failed to report on this feed.", reviewed: false };
   });
 
   return { review, missing };
 }
 
-export async function analyzeWithModel(modelId, briefing) {
+export async function analyzeWithModel(modelId, briefing, userNotes) {
   const fn = PROVIDERS[modelId];
-  const { system, user } = buildPrompt(briefing);
+  const { system, user } = buildPrompt(briefing, userNotes);
   const raw = await fn(system, user, [], async () => "no tools");
   const parsed = extractJson(raw);
 
@@ -152,15 +195,17 @@ export async function analyzeWithModel(modelId, briefing) {
     missingReviews: missing,
     usedCount: review.filter((r) => r.used).length,
     reviewedCount: review.filter((r) => r.reviewed).length,
+    signalCount: review.filter((r) => r.role === "SIGNAL").length,
+    confirmationCount: review.filter((r) => r.role === "CONFIRMATION").length,
     entry: parsed.entry || { timestamp: null, reasoning: "", corroboratingFeeds: [], leadMinutes: null },
-    rule: parsed.rule || null,
+    rule: tradeable ? (parsed.rule || null) : null, // a "not tradeable" verdict cannot carry a rule
     falsification: parsed.falsification || "",
     failed: false,
   };
 }
 
-export async function analyzeAllModels(briefing) {
-  const settled = await Promise.allSettled(MODEL_IDS.map((m) => analyzeWithModel(m, briefing)));
+export async function analyzeAllModels(briefing, userNotes) {
+  const settled = await Promise.allSettled(MODEL_IDS.map((m) => analyzeWithModel(m, briefing, userNotes)));
   const results = {};
 
   settled.forEach((r, i) => {
