@@ -134,6 +134,23 @@ function CandlestickChart({ bars, entryIdx, exitIdx, status, overlay = {}, heigh
   const volMax = Math.max(...bars.map((b) => b.volume), 1);
   const emaSeries = overlay.ema || [];
 
+  // Trend cloud: always-on baseline styling (every tab, not model-specific) —
+  // a shaded ribbon between price and a trend EMA, green when price is
+  // above it (buy zone), red when below (sell zone).
+  const trendEma = computeEMA(bars.map((b) => b.close), 9);
+  const cloudSegments = [];
+  {
+    let start = 0;
+    for (let i = 1; i <= bars.length; i++) {
+      const prevBullish = bars[i - 1].close >= trendEma[i - 1];
+      const currBullish = i < bars.length ? bars[i].close >= trendEma[i] : prevBullish;
+      if (currBullish !== prevBullish || i === bars.length) {
+        cloudSegments.push({ start, end: i - 1, bullish: prevBullish });
+        start = i;
+      }
+    }
+  }
+
   const handleMove = (e) => {
     if (!svgRef.current) return;
     const rect = svgRef.current.getBoundingClientRect();
@@ -150,6 +167,18 @@ function CandlestickChart({ bars, entryIdx, exitIdx, status, overlay = {}, heigh
     <div className="relative">
       <svg ref={svgRef} viewBox={`0 0 ${w} ${height}`} className="w-full cursor-crosshair" style={{ height }}
         onMouseMove={handleMove} onMouseLeave={() => setHover(null)}>
+        {cloudSegments.map((seg, si) => {
+          const idxs = [];
+          for (let i = seg.start; i <= seg.end; i++) idxs.push(i);
+          const topPts = idxs.map((i) => `${x(i)},${yScale(bars[i].close)}`);
+          const bottomPts = idxs.slice().reverse().map((i) => `${x(i)},${yScale(trendEma[i])}`);
+          return (
+            <polygon key={si} points={[...topPts, ...bottomPts].join(" ")}
+              fill={seg.bullish ? "#22c55e" : "#ef4444"} opacity="0.16" />
+          );
+        })}
+        <polyline points={trendEma.map((v, i) => `${x(i)},${yScale(v)}`).join(" ")} fill="none" stroke="#0d9488" strokeWidth="1.5" opacity="0.8" />
+
         {bars.map((b, i) => {
           const up = b.close >= b.open;
           const color = up ? "#34d399" : "#f87171";
@@ -881,7 +910,7 @@ export default function App() {
   const [openTradeId, setOpenTradeId] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [submitError, setSubmitError] = useState(null);
-  const [theme, setTheme] = useState("dark"); // moon (dark) by default
+  const [theme, setTheme] = useState("light"); // sun (light) by default
 
   useEffect(() => {
     document.documentElement.classList.toggle("light", theme === "light");
