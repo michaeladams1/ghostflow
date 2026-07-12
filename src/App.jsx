@@ -173,12 +173,25 @@ function CandlestickChart({ bars, entryIdx, exitIdx, status, overlay = {}, heigh
           </text>
         )}
 
-        <circle cx={x(safeEntryIdx)} cy={yScale(bars[safeEntryIdx].close)} r="4.5" fill="#e4e4e7" />
-        <text x={x(safeEntryIdx)} y={yScale(bars[safeEntryIdx].close) - 10} fontSize="10" fill="#a1a1aa" fontFamily="monospace" textAnchor="middle">ENTRY</text>
-        <circle cx={x(safeExitIdx)} cy={yScale(bars[safeExitIdx].close)} r="4.5" fill={status === "win" ? "#34d399" : "#fbbf24"} />
-        <text x={x(safeExitIdx)} y={yScale(bars[safeExitIdx].close) - 10} fontSize="10" fill={status === "win" ? "#34d399" : "#fbbf24"} fontFamily="monospace" textAnchor="middle">
-          {status === "win" ? "EXIT" : "EXIT (stop)"}
-        </text>
+        {(() => {
+          const entryBar = bars[safeEntryIdx], exitBar = bars[safeExitIdx];
+          const entryAnchorY = yScale(entryBar.low);
+          const exitAnchorY = yScale(exitBar.high);
+          const tagW = 44, tagH = 20;
+          const entryTagY = entryAnchorY + 10; // BUY tag sits below its anchor, pointing up
+          const exitTagY = exitAnchorY - 10 - tagH; // SELL tag sits above its anchor, pointing down
+          return (
+            <>
+              <line x1={x(safeEntryIdx)} y1={entryAnchorY} x2={x(safeEntryIdx)} y2={entryTagY} stroke="#22c55e" strokeWidth="1.5" />
+              <rect x={x(safeEntryIdx) - tagW / 2} y={entryTagY} width={tagW} height={tagH} rx="4" fill="#22c55e" />
+              <text x={x(safeEntryIdx)} y={entryTagY + tagH / 2 + 1} fontSize="10" fontWeight="700" fill="#052e16" textAnchor="middle" dominantBaseline="central" fontFamily="monospace">BUY</text>
+
+              <line x1={x(safeExitIdx)} y1={exitAnchorY} x2={x(safeExitIdx)} y2={exitTagY + tagH} stroke="#ef4444" strokeWidth="1.5" />
+              <rect x={x(safeExitIdx) - tagW / 2} y={exitTagY} width={tagW} height={tagH} rx="4" fill="#ef4444" />
+              <text x={x(safeExitIdx)} y={exitTagY + tagH / 2 + 1} fontSize="10" fontWeight="700" fill="#450a0a" textAnchor="middle" dominantBaseline="central" fontFamily="monospace">SELL</text>
+            </>
+          );
+        })()}
 
         <text x={pad} y={volumeTop - 4} fontSize="9" fill="#71717a" fontFamily="monospace">VOLUME</text>
         {bars.map((b, i) => {

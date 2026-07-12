@@ -87,13 +87,14 @@ function findDayBoundary(bars, dateStr, edge) {
 export async function buildTradeDataset({ symbol, entryDate, exitDate }) {
   const lookbackStart = addDays(entryDate, -30);
   const rangeEnd = exitDate ? addDays(exitDate, 1) : addDays(entryDate, 5);
+  const intradayPaddedStart = addDays(entryDate, -2); // ~1-2 prior sessions of lead-up context, per your earlier call
 
   const [ohlcvText, intradayText, flowData] = await Promise.all([
     getDatabentoOHLCV(symbol, lookbackStart, rangeEnd).catch((err) => {
       console.error("Databento daily fetch failed:", err.message);
       return null;
     }),
-    getDatabentoIntraday(symbol, `${entryDate}T00:00:00`, `${rangeEnd}T00:00:00`).catch((err) => {
+    getDatabentoIntraday(symbol, `${intradayPaddedStart}T00:00:00`, `${rangeEnd}T00:00:00`).catch((err) => {
       console.error("Databento intraday fetch failed:", err.message);
       return null;
     }),
