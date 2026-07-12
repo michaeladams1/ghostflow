@@ -12,13 +12,19 @@ const { Pool } = pg;
 
 const connectionString = process.env.DATABASE_URL;
 
+// SSL is required by Railway's PUBLIC Postgres URL, but NOT supported by
+// Railway's internal URL, and NOT supported by a plain local Postgres. Forcing
+// it unconditionally made local testing impossible ("The server does not
+// support SSL connections"), which is how a re-run bug went undiagnosed.
+// Detect rather than assume.
+const isLocal = !connectionString
+  || connectionString.includes("localhost")
+  || connectionString.includes("127.0.0.1")
+  || connectionString.includes("railway.internal");
+
 export const pool = new Pool({
   connectionString,
-  // Railway's internal/private-network Postgres URL doesn't need SSL; the
-  // public one does. This handles both without a separate config flag.
-  ssl: connectionString && connectionString.includes("railway.internal")
-    ? false
-    : { rejectUnauthorized: false },
+  ssl: isLocal ? false : { rejectUnauthorized: false },
 });
 
 let schemaReady = null;

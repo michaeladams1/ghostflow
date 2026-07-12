@@ -604,7 +604,7 @@ function SessionMetrics({ metrics }) {
   );
 }
 
-function AnalysisDetail({ record, onClose, cb, onRerun, rerunning }) {
+function AnalysisDetail({ record, onClose, cb, onRerun, rerunning, rerunError }) {
   const [tab, setTab] = useState("claude");
   const combined = record.analysis?.combined;
   const stale = isStale(record);
@@ -633,6 +633,28 @@ function AnalysisDetail({ record, onClose, cb, onRerun, rerunning }) {
         {stale && (
           <div className="px-5 pt-4">
             <RerunBanner record={record} onRerun={onRerun} running={rerunning} />
+          </div>
+        )}
+
+        {/* A re-run takes 1-2 minutes (30 feed pulls + 3 LLM calls). Without
+            this, the button looked like it did nothing at all. */}
+        {rerunning && (
+          <div className="px-5 pt-3">
+            <div className="px-3 py-2.5 rounded-lg border border-sky-500/40 bg-sky-500/10 flex items-center gap-2">
+              <RefreshCw size={14} className="text-sky-500 animate-spin flex-shrink-0" />
+              <p className="text-xs text-sky-700 dark:text-sky-300">
+                Re-running: pulling all 30 feeds, rebuilding the timeline, and running all 3 analysts. This takes 1–2 minutes — leave this open.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {rerunError && (
+          <div className="px-5 pt-3">
+            <div className="px-3 py-2.5 rounded-lg border border-red-500/40 bg-red-500/10 flex items-start gap-2">
+              <AlertTriangle size={14} className="text-red-500 flex-shrink-0 mt-0.5" />
+              <p className="text-xs text-red-700 dark:text-red-300 leading-relaxed">{rerunError}</p>
+            </div>
           </div>
         )}
 
@@ -850,17 +872,43 @@ export default function App() {
   const cb = { backtest: patch("backtests"), refine: patch("refinements"), confirm: patch("confirmers") };
 
   const [rerunning, setRerunning] = useState(false);
+  const [rerunError, setRerunError] = useState(null);
+
   const rerun = async () => {
     if (!openId) return;
-    setRerunning(true); setError(null);
+    setRerunning(true);
+    setRerunError(null);
     try {
       const res = await fetch(`/api/analyses/${openId}/rerun`, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Re-run failed");
+
+      // The server may reply with HTML rather than JSON — most commonly a 404
+      // when this route doesn't exist yet on the deployed build, or a 401 when
+      // auth fails. Blindly calling res.json() on HTML throws a parse error
+      // that says nothing useful, which is exactly why this button appeared to
+      // "do nothing". Read the status first and report it honestly.
+      const text = await res.text();
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        throw new Error(
+          res.status === 404
+            ? "Re-run endpoint not found (HTTP 404). The deployed server is still running an older build — wait for Railway to finish redeploying, then try again."
+            : `Server returned HTTP ${res.status} with a non-JSON response: ${text.slice(0, 120)}`
+        );
+      }
+
+      if (!res.ok) throw new Error(data.error || `Re-run failed (HTTP ${res.status})`);
+
       setRecords((prev) => prev.map((r) => (r.id === openId ? data : r)));
-    } catch (e) { setError(e.message); }
+      if (data.persisted === false) {
+        setRerunError("Re-run completed, but the result could NOT be saved to the database. It's shown here, but will be lost on refresh.");
+      }
+    } catch (e) {
+      setRerunError(e.message);
+    }
     setRerunning(false);
   };
 
@@ -934,7 +982,7 @@ export default function App() {
       </div>
 
       {showForm && <AnalyzeForm onClose={() => setShowForm(false)} onSubmit={analyze} error={error} running={running} />}
-      {open && <AnalysisDetail record={open} onClose={() => setOpenId(null)} cb={cb} onRerun={rerun} rerunning={rerunning} />}
+      {open && <AnalysisDetail record={open} onClose={() => setOpenId(null)} cb={cb} onRerun={rerun} rerunning={rerunning} rerunError={rerunError} />}
     </div>
   );
 }
