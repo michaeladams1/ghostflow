@@ -9,7 +9,7 @@
 import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { readTrades, appendTrade } from "./server/store.js";
+import { readTrades, appendTrade, deleteTrade } from "./server/store.js";
 import { fetchAllEndpoints } from "./server/quantDataClient.js";
 import { buildBriefing } from "./server/compress.js";
 import { analyzeAllModels } from "./server/analysis.js";
@@ -235,7 +235,25 @@ app.post("/api/analyses/:id/rerun", async (req, res) => {
     if (!old) return res.status(404).json({ error: `No analysis with id ${req.params.id}` });
 
     const ticker = old.symbol;
-    const sessionDate = old.sessionDate;
+
+    // LEGACY RECORDS. The oldest records predate the architecture pivot: they
+    // were TRADES (entryDate/exitDate/outcome), not session analyses, so they
+    // have no `sessionDate` at all. Doing `new Date(undefined + "T00:00:00Z")`
+    // produced an Invalid Date, and `.toISOString()` on it threw the useless
+    // "Invalid time value". Fall back to the trade's entry date, which is the
+    // session the old record was actually about.
+    const sessionDate = old.sessionDate || old.entryDate || null;
+
+    if (!ticker || !sessionDate) {
+      return res.status(400).json({
+        error: `This record is too old to re-run: it has ${!ticker ? "no symbol" : "no session date (and no legacy entryDate to fall back on)"}. It predates the current schema entirely. Delete it and run a fresh analysis for the symbol/date you want.`,
+      });
+    }
+    // A malformed date string would throw the same cryptic error deeper in.
+    if (Number.isNaN(new Date(sessionDate + "T00:00:00Z").getTime())) {
+      return res.status(400).json({ error: `This record's date ("${sessionDate}") isn't a valid date, so it can't be re-run. Delete it and start a fresh analysis.` });
+    }
+
     const contract = old.contract || null;
     const notes = req.body?.notes ?? old.notes ?? null;
 
@@ -252,7 +270,14 @@ app.post("/api/analyses/:id/rerun", async (req, res) => {
 
     const record = {
       ...old,
+      // Normalize a legacy trade record onto the current schema, and drop the
+      // dead trade-era fields so it stops looking like something it isn't.
+      symbol: ticker,
+      sessionDate,
       notes,
+      entryDate: undefined,
+      exitDate: undefined,
+      outcome: undefined,
       rerunAt: new Date().toISOString(),
       briefing: {
         endpoints: briefing.endpoints,
@@ -275,6 +300,19 @@ app.post("/api/analyses/:id/rerun", async (req, res) => {
     res.json({ ...record, persisted });
   } catch (err) {
     console.error("[rerun] FAILED:", err);
+    res.status(500).json({ error: err.message || String(err) });
+  }
+});
+
+// Delete a record. Needed because some legacy records are genuinely
+// unrecoverable (no symbol/date), and leaving broken rows in the log is worse
+// than removing them.
+app.delete("/api/analyses/:id", async (req, res) => {
+  try {
+    await deleteTrade(req.params.id);
+    res.json({ deleted: req.params.id });
+  } catch (err) {
+    console.error("[delete] FAILED:", err);
     res.status(500).json({ error: err.message });
   }
 });

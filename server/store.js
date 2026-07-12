@@ -12,6 +12,12 @@ export async function readTrades() {
   return rows.map((r) => r.data);
 }
 
+export async function deleteTrade(id) {
+  await ensureSchema();
+  await pool.query("DELETE FROM trades WHERE id = $1", [id]);
+  return id;
+}
+
 export async function appendTrade(trade) {
   await ensureSchema();
   await pool.query(

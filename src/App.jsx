@@ -50,19 +50,32 @@ function isStale(record) {
   return false;
 }
 
-function RerunBanner({ record, onRerun, running }) {
+function RerunBanner({ record, onRerun, running, onDelete }) {
+  // Legacy trade-era records have no sessionDate at all — they predate the
+  // pivot away from trade logging. A re-run can still salvage them via
+  // entryDate, but if neither exists there is nothing to re-run.
+  const salvageable = !!(record.sessionDate || record.entryDate) && !!record.symbol;
+
   return (
     <div className="px-3 py-2.5 rounded-lg border border-amber-500/40 bg-amber-500/10 flex items-start gap-2">
       <AlertTriangle size={14} className="text-amber-500 flex-shrink-0 mt-0.5" />
       <div className="flex-1">
         <p className="text-xs text-amber-800 dark:text-amber-300 leading-relaxed">
-          <strong>This analysis is stale.</strong> It was produced by an older engine — before intraday gamma, the full 77-metric vocabulary, session metrics, and feed roles existed. Its conclusions were reached without that data.
+          <strong>This analysis is stale.</strong> It was produced by an older engine — before intraday gamma, the full metric vocabulary, session metrics, and feed roles existed.
+          {!salvageable && " It also predates the current schema entirely (no symbol or session date), so it can't be re-run — delete it and start fresh."}
         </p>
       </div>
-      <button onClick={onRerun} disabled={running}
-        className="flex-shrink-0 text-xs px-2.5 py-1 rounded bg-amber-600 text-white hover:bg-amber-500 disabled:opacity-50">
-        {running ? "Re-running…" : "Re-run"}
-      </button>
+      {salvageable ? (
+        <button onClick={onRerun} disabled={running}
+          className="flex-shrink-0 text-xs px-2.5 py-1 rounded bg-amber-600 text-white hover:bg-amber-500 disabled:opacity-50">
+          {running ? "Re-running…" : "Re-run"}
+        </button>
+      ) : (
+        <button onClick={onDelete}
+          className="flex-shrink-0 text-xs px-2.5 py-1 rounded bg-red-600 text-white hover:bg-red-500">
+          Delete
+        </button>
+      )}
     </div>
   );
 }
@@ -604,7 +617,7 @@ function SessionMetrics({ metrics }) {
   );
 }
 
-function AnalysisDetail({ record, onClose, cb, onRerun, rerunning, rerunError }) {
+function AnalysisDetail({ record, onClose, cb, onRerun, rerunning, rerunError, onDelete }) {
   const [tab, setTab] = useState("claude");
   const combined = record.analysis?.combined;
   const stale = isStale(record);
@@ -632,7 +645,7 @@ function AnalysisDetail({ record, onClose, cb, onRerun, rerunning, rerunError })
 
         {stale && (
           <div className="px-5 pt-4">
-            <RerunBanner record={record} onRerun={onRerun} running={rerunning} />
+            <RerunBanner record={record} onRerun={onRerun} running={rerunning} onDelete={onDelete} />
           </div>
         )}
 
@@ -912,6 +925,19 @@ export default function App() {
     setRerunning(false);
   };
 
+  const del = async () => {
+    if (!openId) return;
+    if (!window.confirm("Delete this analysis permanently? This can't be undone.")) return;
+    try {
+      const res = await fetch(`/api/analyses/${openId}`, { method: "DELETE" });
+      if (!res.ok) throw new Error(`Delete failed (HTTP ${res.status})`);
+      setRecords((prev) => prev.filter((r) => r.id !== openId));
+      setOpenId(null);
+    } catch (e) {
+      setRerunError(e.message);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-white dark:bg-black text-zinc-900 dark:text-zinc-100 font-sans transition-colors">
       <div className="max-w-5xl mx-auto px-4 py-6">
@@ -982,7 +1008,7 @@ export default function App() {
       </div>
 
       {showForm && <AnalyzeForm onClose={() => setShowForm(false)} onSubmit={analyze} error={error} running={running} />}
-      {open && <AnalysisDetail record={open} onClose={() => setOpenId(null)} cb={cb} onRerun={rerun} rerunning={rerunning} rerunError={rerunError} />}
+      {open && <AnalysisDetail record={open} onClose={() => setOpenId(null)} cb={cb} onRerun={rerun} rerunning={rerunning} rerunError={rerunError} onDelete={del} />}
     </div>
   );
 }
