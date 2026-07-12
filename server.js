@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readTrades, appendTrade } from "./server/store.js";
 import { buildTradeDataset } from "./server/tradeData.js";
+import { callClaude, callGPT, callGrok } from "./server/aiProviders.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DIST_DIR = path.join(__dirname, "dist");
@@ -64,4 +65,24 @@ app.get("*", (req, res) => res.sendFile(path.join(DIST_DIR, "index.html")));
 
 app.listen(PORT, () => {
   console.log(`GHOSTFLOW serving on port ${PORT}${!USER || !PASS ? " (WARNING: no auth configured)" : " (auth enabled)"}`);
+  runAIProviderHealthCheck(); // fire-and-forget, doesn't block startup
 });
+
+// One-time startup check confirming each AI provider key actually works.
+// Logs pass/fail only — never logs key values. Not on the request path;
+// just a startup diagnostic so this shows up in Deploy Logs automatically.
+async function runAIProviderHealthCheck() {
+  const checks = [
+    ["Claude", callClaude],
+    ["GPT", callGPT],
+    ["Grok", callGrok],
+  ];
+  for (const [name, fn] of checks) {
+    try {
+      await fn("Reply with exactly one word: OK");
+      console.log(`AI provider check \u2014 ${name}: OK`);
+    } catch (err) {
+      console.error(`AI provider check \u2014 ${name}: FAILED (${err.message})`);
+    }
+  }
+}
