@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import {
   Plus, X, CheckCircle2, XCircle, AlertTriangle, ChevronRight,
-  Users, FileText, LayoutDashboard, Minus, Send, MessageSquare
+  Users, FileText, LayoutDashboard, Minus, Send, MessageSquare, Clock, Copy
 } from "lucide-react";
 
 // ---------- Design tokens ----------
@@ -475,6 +475,98 @@ function TradeDetail({ trade, onClose }) {
   );
 }
 
+function copyToClipboard(text) {
+  if (navigator.clipboard) navigator.clipboard.writeText(text).catch(() => {});
+}
+
+function daysBetween(a, b) {
+  if (!a || !b) return null;
+  const diff = (new Date(b) - new Date(a)) / 86400000;
+  return Number.isFinite(diff) ? Math.round(diff) : null;
+}
+
+function returnPct(entry, exit) {
+  const e = Number(entry), x = Number(exit);
+  if (!e || !x) return null;
+  return ((x - e) / e) * 100;
+}
+
+// A compact per-trade summary widget, styled after a backtest-result card:
+// status header + id, then a metric grid, then a "view trade" action.
+function TradeCard({ trade, onOpen }) {
+  const combined = trade.analysis?.combined;
+  const isPending = trade.analysisStatus === "pending" || combined?.verdict === "pending";
+  const ret = returnPct(trade.entryPrice, trade.exitPrice);
+  const held = daysBetween(trade.entryDate, trade.exitDate);
+  const flagCount = combined?.flags?.length ?? 0;
+
+  const headerMeta = isPending
+    ? { Icon: Clock, cls: "text-zinc-400", label: "Awaiting AI analysis" }
+    : trade.status === "win"
+    ? { Icon: CheckCircle2, cls: "text-emerald-400", label: "Analysis complete" }
+    : trade.status === "near-miss-loss"
+    ? { Icon: AlertTriangle, cls: "text-amber-400", label: "Analysis complete \u2014 counter-example" }
+    : { Icon: Minus, cls: "text-zinc-500", label: "Analysis complete \u2014 low info" };
+  const HeaderIcon = headerMeta.Icon;
+
+  return (
+    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 flex flex-col">
+      <div className="flex items-center justify-between mb-3">
+        <div className={`flex items-center gap-1.5 text-sm font-medium ${headerMeta.cls}`}>
+          <HeaderIcon size={15} /> {headerMeta.label}
+        </div>
+        <button
+          onClick={() => copyToClipboard(trade.id)}
+          className="flex items-center gap-1 text-[11px] font-mono text-zinc-600 hover:text-zinc-400 bg-zinc-950 border border-zinc-800 rounded px-1.5 py-0.5"
+          title="Copy trade ID">
+          ID: {String(trade.id).slice(-6)} <Copy size={11} />
+        </button>
+      </div>
+
+      <div className="text-base font-semibold text-zinc-100 mb-1">
+        {trade.symbol} <span className="text-zinc-500 font-mono text-sm">{trade.direction}</span>
+      </div>
+      <div className="text-xs font-mono text-zinc-500 mb-3">
+        {trade.entryDate || "\u2014"} ~ {trade.exitDate || "\u2014"}
+      </div>
+
+      <div className="border-t border-zinc-800 pt-3 grid grid-cols-3 gap-y-3 gap-x-2">
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-mono">Return</div>
+          <div className={`text-sm font-mono font-semibold ${ret == null ? "text-zinc-600" : ret >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+            {ret == null ? "\u2014" : `${ret >= 0 ? "+" : ""}${ret.toFixed(2)}%`}
+          </div>
+        </div>
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-mono">Days held</div>
+          <div className="text-sm font-mono font-semibold text-zinc-200">{held ?? "\u2014"}</div>
+        </div>
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-mono">Agreement</div>
+          <div className="text-sm font-mono font-semibold text-zinc-200">{trade.agreement || "\u2014"}</div>
+        </div>
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-mono">Confidence</div>
+          <div className="text-sm font-mono font-semibold text-zinc-200">{combined && combined.confidence > 0 ? `${combined.confidence}%` : "\u2014"}</div>
+        </div>
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-mono">Indicators</div>
+          <div className="text-sm font-mono font-semibold text-zinc-200">{flagCount || "\u2014"}</div>
+        </div>
+        <div>
+          <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-mono">Status</div>
+          <div className="text-sm"><StatusPill status={trade.status} /></div>
+        </div>
+      </div>
+
+      <button onClick={() => onOpen(trade.id)}
+        className="mt-4 w-full flex items-center justify-center gap-1.5 bg-zinc-950 hover:bg-black border border-zinc-800 text-zinc-200 text-sm font-medium py-2 rounded-md transition">
+        View trade <ChevronRight size={14} />
+      </button>
+    </div>
+  );
+}
+
 // ---------- Tabs: Trade Log ----------
 function TradeLogTab({ trades, onOpen, onAdd }) {
   const [filter, setFilter] = useState("all");
@@ -495,29 +587,13 @@ function TradeLogTab({ trades, onOpen, onAdd }) {
         </button>
       </div>
 
-      <div className="border border-zinc-800 rounded-lg overflow-hidden">
-        <div className="grid grid-cols-12 px-4 py-2 text-[11px] uppercase tracking-wider text-zinc-500 font-mono border-b border-zinc-800 bg-zinc-900/50">
-          <div className="col-span-2">Symbol</div>
-          <div className="col-span-2">Status</div>
-          <div className="col-span-2">Entry</div>
-          <div className="col-span-2">Exit</div>
-          <div className="col-span-2">Agreement</div>
-          <div className="col-span-2 text-right">Logged</div>
-        </div>
-        {filtered.map((t) => (
-          <button key={t.id} onClick={() => onOpen(t.id)}
-            className="w-full grid grid-cols-12 px-4 py-3 text-sm text-left hover:bg-zinc-900/60 border-b border-zinc-900 last:border-0 items-center">
-            <div className="col-span-2 font-mono text-zinc-100">{t.symbol} <span className="text-zinc-600">{t.direction}</span></div>
-            <div className="col-span-2"><StatusPill status={t.status} /></div>
-            <div className="col-span-2 text-zinc-400 font-mono text-xs">{t.entryDate}</div>
-            <div className="col-span-2 text-zinc-400 font-mono text-xs">{t.exitDate}</div>
-            <div className="col-span-2 text-zinc-400 font-mono text-xs">{t.agreement}</div>
-            <div className="col-span-2 text-right text-zinc-600 font-mono text-xs flex items-center justify-end gap-1">
-              {t.loggedAt} <ChevronRight size={14} />
-            </div>
-          </button>
-        ))}
-        {filtered.length === 0 && <div className="px-4 py-8 text-center text-zinc-600 text-sm">No trades match this filter.</div>}
+      <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        {filtered.map((t) => <TradeCard key={t.id} trade={t} onOpen={onOpen} />)}
+        {filtered.length === 0 && (
+          <div className="col-span-full px-4 py-8 text-center text-zinc-600 text-sm border border-zinc-800 rounded-lg">
+            No trades match this filter.
+          </div>
+        )}
       </div>
     </div>
   );
