@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useEffect } from "react";
 import {
   Plus, X, CheckCircle2, XCircle, AlertTriangle, ChevronRight,
-  Users, FileText, LayoutDashboard, Minus, Send, MessageSquare, Clock, Copy, Settings, ExternalLink, Maximize2
+  Users, FileText, LayoutDashboard, Minus, Send, MessageSquare, Clock, Copy, Settings, ExternalLink, Maximize2, Sun, Moon
 } from "lucide-react";
 
 // ---------- Design tokens ----------
@@ -868,6 +868,11 @@ export default function App() {
   const [openTradeId, setOpenTradeId] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [submitError, setSubmitError] = useState(null);
+  const [theme, setTheme] = useState("dark"); // moon (dark) by default
+
+  useEffect(() => {
+    document.documentElement.classList.toggle("light", theme === "light");
+  }, [theme]);
 
   useEffect(() => {
     fetch("/api/trades")
@@ -926,7 +931,14 @@ export default function App() {
             <h1 className="text-xl font-semibold tracking-tight">GHOSTFLOW</h1>
             <p className="text-xs text-zinc-500 font-mono mt-0.5">options research · 3-analyst thesis engine</p>
           </div>
-          <span className="text-[11px] font-mono text-zinc-600 border border-zinc-800 rounded px-2 py-1">live · real trades only</span>
+          <div className="flex items-center gap-2">
+            <button onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
+              className="p-1.5 rounded border border-zinc-800 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900"
+              title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}>
+              {theme === "dark" ? <Moon size={14} /> : <Sun size={14} />}
+            </button>
+            <span className="text-[11px] font-mono text-zinc-600 border border-zinc-800 rounded px-2 py-1">live · real trades only</span>
+          </div>
         </div>
 
         <div className="flex gap-1 mb-6 border-b border-zinc-800">
