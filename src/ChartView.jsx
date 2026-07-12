@@ -33,13 +33,17 @@ function clockToMinutes(clock) {
   return h * 60 + m;
 }
 
-export default function ChartView({ record, modelId, meta, onClose }) {
+export default function ChartView({ record, modelId, meta, onClose, onRerun, rerunning }) {
   const a = record.analysis?.[modelId];
   const price = record.briefing?.priceSeries || [];
   const thrusts = record.briefing?.timeline?.priceThrusts || [];
   const events = record.briefing?.timeline?.events || [];
   const [hover, setHover] = useState(null);
   const [showRole, setShowRole] = useState({ SIGNAL: true, CONFIRMATION: true, NOISE: false });
+  // Minimum sigma to plot. Defaults to 3 because a feed can fire 100+ times a
+  // session at the 2.5-sigma detection floor, and plotting all of them buries
+  // the handful of readings that actually mattered.
+  const [minSigma, setMinSigma] = useState(3);
 
   // Which feeds did THIS model actually use, and what role did it give them?
   // The overlay is filtered to that model's own judgment — this is why the three
@@ -51,6 +55,25 @@ export default function ChartView({ record, modelId, meta, onClose }) {
     if (map.exposure_by_strike_gamma) map.gamma_proximity = map.exposure_by_strike_gamma;
     return map;
   }, [a]);
+
+  // A feed the model called a SIGNAL that fired 40+ times in a single session is
+  // not rare — it is common, and a rule built on it will fire constantly and
+  // over-trade. Flagged on the chart, because it's the exact mistake the
+  // backtest keeps catching only after the fact.
+  //
+  // NOTE: this must sit ABOVE the early `if (!geom) return` — a hook called
+  // after a conditional return violates React's rules of hooks and crashes on
+  // the very records that have no chart data.
+  const overFiring = useMemo(() => {
+    const byFeed = {};
+    events.forEach((e) => {
+      const role = roleByFeed[e.endpoint];
+      if (role !== "SIGNAL" && role !== "CONFIRMATION") return;
+      byFeed[e.endpoint] = byFeed[e.endpoint] || { feed: e.endpoint, count: 0, role };
+      byFeed[e.endpoint].count++;
+    });
+    return Object.values(byFeed).filter((f) => f.count >= 40).sort((a, b) => b.count - a.count);
+  }, [events, roleByFeed]);
 
   const geom = useMemo(() => {
     if (!price.length) return null;
@@ -70,12 +93,28 @@ export default function ChartView({ record, modelId, meta, onClose }) {
   }, [price]);
 
   if (!geom) {
+    // This analysis predates the chart data being stored. Rather than a dead
+    // end, offer the fix directly — a re-run regenerates everything including
+    // the price series.
     return (
-      <div className="fixed inset-0 bg-white dark:bg-black z-[70] flex items-center justify-center">
-        <div className="text-center">
-          <p className="text-sm text-zinc-500 mb-3">No price data stored for this analysis.</p>
-          <p className="text-xs text-zinc-500 mb-4">Re-run it to capture the chart data.</p>
-          <button onClick={onClose} className="text-xs px-3 py-1.5 rounded border border-zinc-300 dark:border-zinc-700">Close</button>
+      <div className="fixed inset-0 bg-white dark:bg-black z-[70] flex items-center justify-center p-6">
+        <div className="max-w-md text-center">
+          <p className="text-base font-medium mb-2">This analysis has no chart data.</p>
+          <p className="text-sm text-zinc-500 mb-5 leading-relaxed">
+            It was produced before the engine stored the price series. A re-run regenerates it — along with the 3-session window, intraday gamma, and the auto-backtest. Takes 1–2 minutes.
+          </p>
+          <div className="flex items-center justify-center gap-2">
+            {onRerun && (
+              <button onClick={() => { onClose(); onRerun(); }} disabled={rerunning}
+                className="text-sm px-4 py-2 rounded bg-amber-600 text-white hover:bg-amber-500 disabled:opacity-50">
+                {rerunning ? "Re-running…" : "Re-run now"}
+              </button>
+            )}
+            <button onClick={onClose}
+              className="text-sm px-4 py-2 rounded border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800">
+              Close
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -84,10 +123,11 @@ export default function ChartView({ record, modelId, meta, onClose }) {
   const { W, H, PAD, x, y, yMin, yMax } = geom;
   const pathD = price.map((p, i) => `${i ? "L" : "M"}${x(clockToMinutes(p.clock))},${y(p.price)}`).join(" ");
 
-  // Only the events from feeds THIS model used, in the roles it assigned.
+  // Only the events from feeds THIS model used, in the roles it assigned,
+  // above the sigma floor.
   const shown = events.filter((e) => {
     const role = roleByFeed[e.endpoint];
-    return role && showRole[role];
+    return role && showRole[role] && Math.abs(e.z) >= minSigma;
   });
 
   const entryMin = parseEntryClock(a?.entry?.timestamp);
@@ -125,7 +165,7 @@ export default function ChartView({ record, modelId, meta, onClose }) {
       <div className="flex-1 flex overflow-hidden">
         {/* ---------- 70% CHART ---------- */}
         <div className="flex-[7] p-4 overflow-y-auto border-r border-zinc-200 dark:border-zinc-800">
-          <div className="flex items-center gap-2 mb-3 flex-wrap">
+          <div className="flex items-center gap-2 mb-2 flex-wrap">
             {["SIGNAL", "CONFIRMATION", "NOISE"].map((r) => (
               <button key={r} onClick={() => setShowRole((s) => ({ ...s, [r]: !s[r] }))}
                 className={`flex items-center gap-1.5 text-[11px] font-mono px-2 py-1 rounded border transition
@@ -134,10 +174,32 @@ export default function ChartView({ record, modelId, meta, onClose }) {
                 {r} {counts[r]}
               </button>
             ))}
-            <span className="text-[11px] font-mono text-zinc-500 ml-2">
-              showing only the feeds {meta.name} used, in the roles it assigned
-            </span>
+
+            <div className="flex items-center gap-2 ml-2">
+              <span className="text-[11px] font-mono text-zinc-500">min σ</span>
+              <input type="range" min="2.5" max="15" step="0.5" value={minSigma}
+                onChange={(e) => setMinSigma(Number(e.target.value))} className="w-28" />
+              <span className="text-[11px] font-mono w-8">{minSigma}</span>
+              <span className="text-[11px] font-mono text-zinc-500">
+                {shown.length} of {events.length} plotted
+              </span>
+            </div>
           </div>
+
+          <p className="text-[11px] font-mono text-zinc-500 mb-3">
+            Only the feeds {meta.name} used, in the roles it assigned. Dot size scales with sigma.
+          </p>
+
+          {/* If a feed the model called a SIGNAL fired dozens of times in one
+              session, that is itself a finding — it means the "signal" is common,
+              and a rule built on it will over-trade. Surfaced rather than buried. */}
+          {overFiring.length > 0 && (
+            <div className="mb-3 px-3 py-2 rounded border border-amber-500/40 bg-amber-500/10">
+              <p className="text-[11px] text-amber-700 dark:text-amber-300 leading-relaxed">
+                <strong>Over-firing:</strong> {overFiring.map((f) => `${f.feed} fired ${f.count}x`).join(", ")} on this one session — despite being classed {overFiring[0].role}. A signal that common will over-trade. Check the backtest.
+              </p>
+            </div>
+          )}
 
           <svg viewBox={`0 0 ${W} ${H}`} className="w-full" style={{ maxHeight: "62vh" }}>
             {/* grid */}
@@ -175,16 +237,23 @@ export default function ChartView({ record, modelId, meta, onClose }) {
             {/* price */}
             <path d={pathD} fill="none" stroke="currentColor" strokeWidth="1.4" className="text-zinc-800 dark:text-zinc-200" />
 
-            {/* signal events, coloured by the ROLE THIS MODEL assigned */}
+            {/* Signal events, coloured by the ROLE THIS MODEL assigned, and SIZED
+                BY SIGMA. Sizing matters: a feed the model called a "signal" may
+                have fired 100+ times in one session, and a chart of 100 equal
+                dots hides the one 54-sigma spike that actually mattered. Scaling
+                by magnitude makes the real event pop and lets the noise recede —
+                and it also makes an over-firing feed visibly obvious. */}
             {shown.map((e, i) => {
               const role = roleByFeed[e.endpoint];
               const mx = clockToMinutes(e.clock);
               const bar = price.find((p) => clockToMinutes(p.clock) === mx);
               if (!bar) return null;
-              const r = role === "SIGNAL" ? 4.5 : role === "CONFIRMATION" ? 3.5 : 2;
+              const az = Math.abs(e.z);
+              const r = Math.min(2 + az * 0.55, 11);   // 2.5σ -> ~3.4px, 54σ -> 11px
+              const op = Math.min(0.25 + az * 0.06, 0.9);
               return (
                 <circle key={i} cx={x(mx)} cy={y(bar.price)} r={r}
-                  fill={ROLE_COLOR[role]} opacity={role === "NOISE" ? 0.35 : 0.85}
+                  fill={ROLE_COLOR[role]} opacity={role === "NOISE" ? op * 0.5 : op}
                   onMouseEnter={() => setHover({ ...e, role, price: bar.price })}
                   onMouseLeave={() => setHover(null)}
                   style={{ cursor: "pointer" }} />

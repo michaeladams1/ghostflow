@@ -16,6 +16,7 @@ import { analyzeAllModels } from "./server/analysis.js";
 import { backtestRule, priorSessions } from "./server/backtest.js";
 import { refineRule } from "./server/refine.js";
 import { analyzeConfirmers } from "./server/confirmation.js";
+import { startBackgroundJobs } from "./server/jobs.js";
 import { callClaude, callGPT, callGrok } from "./server/aiProviders.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -165,10 +166,30 @@ app.post("/api/analyze", async (req, res) => {
       console.error("[analyze] DB write failed (analysis still returned):", err.message);
     }
 
+    // Respond NOW, then keep working. Confirmation analysis and the refinement
+    // loop take many minutes; making them buttons made the most important steps
+    // optional, and making them blocking would time out the request. They run in
+    // the background and write into this record as they finish.
     res.status(201).json({ ...record, persisted, persistError });
+
+    if (persisted) {
+      startBackgroundJobs(record.id, { ticker, sessionDate: briefing.sessionDate, analysis });
+    }
   } catch (err) {
     console.error("[analyze] FAILED:", err);
     res.status(500).json({ error: err.message || String(err) });
+  }
+});
+
+// Single record — the UI polls this while background jobs fill in findings.
+app.get("/api/analyses/:id", async (req, res) => {
+  try {
+    const all = await readTrades();
+    const rec = all.find((r) => r.id === req.params.id);
+    if (!rec) return res.status(404).json({ error: "not found" });
+    res.json(rec);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -374,6 +395,11 @@ app.post("/api/analyses/:id/rerun", async (req, res) => {
 
     console.log(`[rerun] done. ${analysis.combined.verdict} ${analysis.combined.agreement}`);
     res.json({ ...record, persisted });
+
+    // Same as /analyze: the heavy findings fill in behind the response.
+    if (persisted) {
+      startBackgroundJobs(record.id, { ticker, sessionDate: briefing.sessionDate, analysis });
+    }
   } catch (err) {
     console.error("[rerun] FAILED:", err);
     res.status(500).json({ error: err.message || String(err) });

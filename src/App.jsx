@@ -45,6 +45,13 @@ function isStale(record) {
   if (!b) return true;
   if (!b.sessionMetrics || !Object.keys(b.sessionMetrics).length) return true;
   if (!b.fetchReport) return true;
+  // Chart data. Records made before priceSeries existed pass every other check
+  // (they have feed roles, session metrics) and therefore looked "current" —
+  // right up until you clicked Chart and got an empty screen. A record without
+  // the data its own UI needs IS stale, so it belongs in this check.
+  if (!b.priceSeries?.length) return true;
+  // The multi-session window. Single-session records predate it.
+  if (!b.sessions?.length) return true;
   // Feed roles (SIGNAL/CONFIRMATION/NOISE) only exist in the new schema.
   const anyReview = MODEL_IDS.map((m) => record.analysis?.[m]?.endpointReview).find((r) => r?.length);
   if (anyReview && !anyReview[0].role) return true;
@@ -226,52 +233,69 @@ function TradeInspector({ result, onClose }) {
   );
 }
 
-function BacktestPanel({ analysisId, modelId, rule, existing, onDone }) {
-  const [running, setRunning] = useState(false);
-  const [result, setResult] = useState(existing || null);
-  const [err, setErr] = useState(null);
-  const [inspect, setInspect] = useState(false);
+// Shown while a background job is still working. These steps take minutes, so
+// the honest thing is to say what's running and roughly how long — not to leave
+// a blank panel that looks broken.
+function JobPending({ label, detail }) {
+  return (
+    <div className="px-3 py-2.5 rounded-lg border border-sky-500/40 bg-sky-500/10 flex items-center gap-2">
+      <RefreshCw size={13} className="text-sky-500 animate-spin flex-shrink-0" />
+      <p className="text-xs text-sky-700 dark:text-sky-300">{label}{detail ? ` — ${detail}` : ""}</p>
+    </div>
+  );
+}
 
-  const run = async () => {
-    setRunning(true); setErr(null);
-    try {
-      const res = await fetch(`/api/analyses/${analysisId}/backtest`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ modelId, sessions: 40, holdMinutes: 15 }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Backtest failed");
-      setResult(data); onDone?.(modelId, data);
-    } catch (e) { setErr(e.message); }
-    setRunning(false);
-  };
+function JobSkipped({ detail }) {
+  return (
+    <div className="px-3 py-2.5 rounded-lg border border-zinc-200 dark:border-zinc-800">
+      <p className={`text-xs ${sub}`}>{detail || "Nothing to run."}</p>
+    </div>
+  );
+}
+
+// BACKTEST — now auto-run, so this only ever DISPLAYS a result.
+function BacktestPanel({ record, modelId, rule }) {
+  const [inspect, setInspect] = useState(false);
+  const result = record.backtests?.[modelId];
 
   if (!rule) {
     return (
-      <div className={`mt-4 px-3 py-2.5 rounded-lg border border-zinc-200 dark:border-zinc-800`}>
-        <p className={`text-xs ${sub}`}>No rule proposed — this model concluded nothing here was tradeable. Nothing to backtest, which is a legitimate outcome.</p>
+      <div className="mt-5">
+        <div className="flex items-center gap-2 mb-2">
+          <FlaskConical size={14} className={faint} />
+          <span className={heading}>Backtest</span>
+        </div>
+        <JobSkipped detail="No rule proposed — this model concluded nothing here was tradeable. Nothing to backtest, which is a legitimate outcome." />
       </div>
     );
   }
 
-  const failed = result && /^(DOES NOT|NEVER|INSUFFICIENT)/.test(result.verdict || "");
+  if (!result) {
+    return (
+      <div className="mt-5">
+        <div className="flex items-center gap-2 mb-2">
+          <FlaskConical size={14} className={faint} />
+          <span className={heading}>Backtest</span>
+        </div>
+        <JobPending label="Backtesting this rule across 40 unseen sessions" />
+      </div>
+    );
+  }
+
+  const failed = /^(DOES NOT|NEVER|INSUFFICIENT)/.test(result.verdict || "");
 
   return (
     <div className="mt-5">
       <div className="flex items-center gap-2 mb-2">
         <FlaskConical size={14} className={faint} />
         <span className={heading}>Backtest — does this rule survive other days?</span>
-        {!result && (
-          <button onClick={run} disabled={running}
-            className="ml-auto text-xs px-2.5 py-1 rounded bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 hover:opacity-80 disabled:opacity-40">
-            {running ? "Running 40 sessions…" : "Run backtest"}
-          </button>
-        )}
       </div>
 
-      {err && <p className="text-xs text-red-500 mb-2">{err}</p>}
-
-      {result && (
+      {!result.testable ? (
+        <div className="px-3 py-2.5 rounded-lg border border-amber-500/40 bg-amber-500/10">
+          <p className="text-xs text-amber-700 dark:text-amber-300 leading-relaxed whitespace-pre-line">{result.reason}</p>
+        </div>
+      ) : (
         <div className={`px-3 py-3 rounded-lg border ${failed ? "border-red-500/30 bg-red-500/5" : "border-emerald-500/30 bg-emerald-500/5"}`}>
           <div className={`text-sm font-medium mb-2 ${failed ? "text-red-600 dark:text-red-400" : "text-emerald-600 dark:text-emerald-400"}`}>
             {result.verdict}
@@ -311,33 +335,15 @@ function BacktestPanel({ analysisId, modelId, rule, existing, onDone }) {
         </div>
       )}
 
-      {inspect && result && <TradeInspector result={result} onClose={() => setInspect(false)} />}
+      {inspect && <TradeInspector result={result} onClose={() => setInspect(false)} />}
     </div>
   );
 }
 
-// ---------------------------------------------------------------------------
-// CONFIRMATION ANALYSIS — MEASURES which feeds are signals, which are
-// confirmations, and which are noise, instead of asking a model to guess.
-// ---------------------------------------------------------------------------
-function ConfirmersPanel({ analysisId, modelId, rule, existing, onDone }) {
-  const [running, setRunning] = useState(false);
-  const [result, setResult] = useState(existing || null);
-  const [err, setErr] = useState(null);
-
-  const run = async () => {
-    setRunning(true); setErr(null);
-    try {
-      const res = await fetch(`/api/analyses/${analysisId}/confirmers`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ modelId, sessions: 40 }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Failed");
-      setResult(data); onDone?.(modelId, data);
-    } catch (e) { setErr(e.message); }
-    setRunning(false);
-  };
+// CONFIRMATION ANALYSIS — auto-run in the background.
+function ConfirmersPanel({ record, modelId, rule }) {
+  const result = record.confirmers?.[modelId];
+  const job = record.jobs?.confirmers;
 
   if (!rule) return null;
 
@@ -346,19 +352,12 @@ function ConfirmersPanel({ analysisId, modelId, rule, existing, onDone }) {
       <div className="flex items-center gap-2 mb-2">
         <Target size={14} className={faint} />
         <span className={heading}>Confirmation analysis — what lifts this signal?</span>
-        {!result && (
-          <button onClick={run} disabled={running}
-            className="ml-auto text-xs px-2.5 py-1 rounded bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 hover:opacity-80 disabled:opacity-40">
-            {running ? "Measuring lift… (slow)" : "Find confirmers"}
-          </button>
-        )}
       </div>
 
-      <p className={`text-xs mb-2 ${faint}`}>
-        Tests every other feed as a confirmer: does adding it to the base rule lift the win rate, and does it win on its own? A feed that's worthless alone but lifts the base signal is a CONFIRMATION, not a signal.
-      </p>
-
-      {err && <p className="text-xs text-red-500 mb-2">{err}</p>}
+      {!result && job?.status === "skipped" && <JobSkipped detail={job.detail} />}
+      {!result && job?.status !== "skipped" && (
+        <JobPending label="Measuring every other feed's lift on this rule (slow — many backtests)" />
+      )}
 
       {result && !result.ok && (
         <div className="px-3 py-2.5 rounded-lg border border-zinc-200 dark:border-zinc-800">
@@ -371,7 +370,6 @@ function ConfirmersPanel({ analysisId, modelId, rule, existing, onDone }) {
           <div className="px-3 py-2.5 rounded-lg border border-zinc-200 dark:border-zinc-800 mb-3">
             <p className={`text-sm ${sub} leading-relaxed`}>{result.summary}</p>
           </div>
-
           <div className="space-y-1.5">
             {[...result.confirmations, ...result.signals, ...result.antiConfirmations, ...result.noise].map((r) => (
               <div key={r.key} className={`px-3 py-2 rounded-lg border text-xs ${
@@ -403,24 +401,10 @@ function ConfirmersPanel({ analysisId, modelId, rule, existing, onDone }) {
   );
 }
 
-function RefinePanel({ analysisId, modelId, rule, existing, onDone }) {
-  const [running, setRunning] = useState(false);
-  const [result, setResult] = useState(existing || null);
-  const [err, setErr] = useState(null);
-
-  const run = async () => {
-    setRunning(true); setErr(null);
-    try {
-      const res = await fetch(`/api/analyses/${analysisId}/refine`, {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ modelId, sessions: 60, maxRounds: 4 }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Refinement failed");
-      setResult(data); onDone?.(modelId, data);
-    } catch (e) { setErr(e.message); }
-    setRunning(false);
-  };
+// REFINEMENT LOOP — auto-run in the background.
+function RefinePanel({ record, modelId, rule }) {
+  const result = record.refinements?.[modelId];
+  const job = record.jobs?.refinements;
 
   if (!rule) return null;
   const survived = result && !result.abandoned && result.best;
@@ -430,27 +414,30 @@ function RefinePanel({ analysisId, modelId, rule, existing, onDone }) {
       <div className="flex items-center gap-2 mb-2">
         <RefreshCw size={14} className={faint} />
         <span className={heading}>Refinement loop — learn from losses, revise, retest</span>
-        {!result && (
-          <button onClick={run} disabled={running}
-            className="ml-auto text-xs px-2.5 py-1 rounded bg-zinc-900 dark:bg-zinc-100 text-white dark:text-zinc-900 hover:opacity-80 disabled:opacity-40">
-            {running ? "Refining… (several min)" : "Run refinement"}
-          </button>
-        )}
       </div>
 
-      {err && <p className="text-xs text-red-500 mb-2">{err}</p>}
+      {!result && job?.status === "skipped" && <JobSkipped detail={job.detail} />}
+      {!result && job?.status !== "skipped" && (
+        <JobPending label="Reading its own losing trades, revising the rule, retesting (up to 4 rounds x 60 sessions)" />
+      )}
 
-      {result && (
+      {result?.error && (
+        <div className="px-3 py-2.5 rounded-lg border border-red-500/40 bg-red-500/10">
+          <p className="text-xs text-red-700 dark:text-red-300">{result.conclusion}</p>
+        </div>
+      )}
+
+      {result && !result.error && (
         <>
           <div className={`px-3 py-3 rounded-lg border mb-3 ${survived ? "border-emerald-500/30 bg-emerald-500/5" : "border-zinc-200 dark:border-zinc-800"}`}>
             <div className={`text-sm font-medium ${survived ? "text-emerald-600 dark:text-emerald-400" : sub}`}>{result.conclusion}</div>
           </div>
 
           <div className="space-y-2">
-            {result.history.map((h) => {
+            {result.history?.map((h) => {
               const b = h.backtest;
               return (
-                <div key={h.round} className={`px-3 py-2.5 rounded-lg border border-zinc-200 dark:border-zinc-800`}>
+                <div key={h.round} className="px-3 py-2.5 rounded-lg border border-zinc-200 dark:border-zinc-800">
                   <div className="flex items-center gap-2 mb-1.5">
                     <span className="text-xs font-mono">ROUND {h.round}</span>
                     {h.action && (
@@ -649,12 +636,9 @@ function ModelPanel({ record, modelId, cb, onChart }) {
         </>
       )}
 
-      <BacktestPanel analysisId={record.id} modelId={modelId} rule={a.rule}
-        existing={record.backtests?.[modelId]} onDone={cb.backtest} />
-      <ConfirmersPanel analysisId={record.id} modelId={modelId} rule={a.rule}
-        existing={record.confirmers?.[modelId]} onDone={cb.confirm} />
-      <RefinePanel analysisId={record.id} modelId={modelId} rule={a.rule}
-        existing={record.refinements?.[modelId]} onDone={cb.refine} />
+      <BacktestPanel record={record} modelId={modelId} rule={a.rule} />
+      <ConfirmersPanel record={record} modelId={modelId} rule={a.rule} />
+      <RefinePanel record={record} modelId={modelId} rule={a.rule} />
 
       <div className="mt-6 pt-5 border-t border-zinc-200 dark:border-zinc-800">
         <div className="flex items-center gap-2 mb-2">
@@ -774,6 +758,26 @@ function AnalysisDetail({ record, onClose, cb, onRerun, rerunning, rerunError, o
             </div>
           </div>
         )}
+
+        {/* Background work status. Everything runs automatically now — this
+            tells you what's still cooking rather than leaving panels blank. */}
+        {(() => {
+          const jc = record.jobs?.confirmers?.status;
+          const jr = record.jobs?.refinements?.status;
+          const working = ["queued", "running"].includes(jc) || ["queued", "running"].includes(jr);
+          if (!working) return null;
+          return (
+            <div className="px-5 pt-3">
+              <div className="px-3 py-2.5 rounded-lg border border-sky-500/40 bg-sky-500/10 flex items-center gap-2">
+                <RefreshCw size={14} className="text-sky-500 animate-spin flex-shrink-0" />
+                <p className="text-xs text-sky-700 dark:text-sky-300">
+                  Still working in the background: {jc === "running" ? "measuring confirmers" : jr === "running" ? "running the refinement loop" : "queued"}.
+                  Results appear below as they land — you can close this and come back.
+                </p>
+              </div>
+            </div>
+          );
+        })()}
 
         {record.notes && (
           <div className="px-5 pt-4">
@@ -1009,6 +1013,29 @@ export default function App() {
 
   const open = useMemo(() => records.find((r) => r.id === openId), [records, openId]);
 
+  // POLL while background jobs are still running. Confirmation analysis and the
+  // refinement loop take several minutes; without this, their findings would sit
+  // finished in the database while the UI kept showing a spinner forever.
+  const jobsPending = open && (
+    ["queued", "running"].includes(open.jobs?.confirmers?.status) ||
+    ["queued", "running"].includes(open.jobs?.refinements?.status) ||
+    // Also poll if a rule exists but its backtest hasn't landed yet.
+    MODEL_IDS.some((m) => open.analysis?.[m]?.rule && !open.backtests?.[m])
+  );
+
+  useEffect(() => {
+    if (!openId || !jobsPending) return;
+    const t = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/analyses/${openId}`);
+        if (!res.ok) return;
+        const fresh = await res.json();
+        setRecords((prev) => prev.map((r) => (r.id === openId ? fresh : r)));
+      } catch { /* transient — the next tick retries */ }
+    }, 8000);
+    return () => clearInterval(t);
+  }, [openId, jobsPending]);
+
   const analyze = async (form) => {
     setRunning(true); setError(null);
     try {
@@ -1157,7 +1184,8 @@ export default function App() {
       {showForm && <AnalyzeForm onClose={() => setShowForm(false)} onSubmit={analyze} error={error} running={running} />}
       {open && <AnalysisDetail record={open} onClose={() => setOpenId(null)} cb={cb} onRerun={rerun} rerunning={rerunning} rerunError={rerunError} onDelete={del} onChart={setChartModel} />}
       {open && chartModel && (
-        <ChartView record={open} modelId={chartModel} meta={MODEL_META[chartModel]} onClose={() => setChartModel(null)} />
+        <ChartView record={open} modelId={chartModel} meta={MODEL_META[chartModel]}
+          onClose={() => setChartModel(null)} onRerun={rerun} rerunning={rerunning} />
       )}
     </div>
   );
