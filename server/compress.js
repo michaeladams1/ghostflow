@@ -547,6 +547,35 @@ Object.assign(COMPRESSORS, {
 // ---------------------------------------------------------------------------
 
 import { QD_ENDPOINTS, QD_CONTRACT_ENDPOINTS } from "./quantDataRegistry.js";
+import { BAR_METRICS, barMetricSpec, computeSessionMetrics } from "./metrics.js";
+
+// Builds z-scored events for EVERY bar metric across EVERY time-series feed —
+// not just a hand-picked few. Any bar metric a model can name in a rule must
+// also produce events here, or the rule would reference a signal the backtest
+// can never see. Keeping this driven off BAR_METRICS keeps the two in lockstep.
+function eventsForAllBarMetrics(results) {
+  let all = [];
+  for (const [feed, metrics] of Object.entries(BAR_METRICS)) {
+    const r = results[feed];
+    if (!r?.ok) continue;
+    // The price series and contract price are the P&L instruments, not signals.
+    if (feed === "stock_price_over_time" || feed === "option_price_over_time") continue;
+
+    for (const metric of Object.keys(metrics)) {
+      const spec = barMetricSpec(feed, metric);
+      if (!spec) continue;
+      let series = seriesFrom(r, spec.fn);
+      // Cumulative series must be differenced first — z-scoring a running total
+      // just says "later in the day is more extreme", which is a clock, not a
+      // signal. See the note in metrics.js.
+      if (spec.diff) {
+        series = series.slice(1).map((p, i) => ({ ts: p.ts, value: p.value - series[i].value }));
+      }
+      all = all.concat(detectSignalEvents(series, { endpoint: feed, metric }));
+    }
+  }
+  return all;
+}
 
 export function buildBriefing(bundle, { contract } = {}) {
   const fullRegistry = contract ? [...QD_ENDPOINTS, ...QD_CONTRACT_ENDPOINTS] : QD_ENDPOINTS;
@@ -595,6 +624,16 @@ export function buildBriefing(bundle, { contract } = {}) {
     });
   }
 
+  // EVENTS FOR EVERY BAR METRIC, not just the ones the human-written compressors
+  // happened to emit. A model can name any bar metric in a rule, so every bar
+  // metric must be able to produce an event — otherwise the rule would reference
+  // a signal the backtest is structurally blind to.
+  allEvents = eventsForAllBarMetrics(bundle.results);
+
+  // SESSION METRICS — the regime gates. One scalar per feed per day.
+  const spot = priceSeries.length ? priceSeries[priceSeries.length - 1].value : null;
+  const sessionMetrics = computeSessionMetrics(bundle.results, spot);
+
   // The move(s) we're trying to have predicted, and what fired beforehand.
   const thrusts = detectPriceThrusts(priceSeries);
   allEvents.sort((a, b) => a.ts - b.ts);
@@ -605,6 +644,7 @@ export function buildBriefing(bundle, { contract } = {}) {
     sessionDate: bundle.sessionDate,
     fetchReport: bundle.report,
     endpoints,
+    sessionMetrics,
     timeline: {
       priceThrusts: thrusts,
       totalSignalEvents: allEvents.length,
@@ -648,6 +688,20 @@ export function renderBriefing(b) {
   } else {
     b.timeline.priceThrusts.forEach((t, i) => {
       lines.push(`Thrust ${i + 1}: ${t.direction} ${t.pctMove}% from ${t.startClock} ($${t.startPrice.toFixed(2)}) to ${t.endClock} ($${t.endPrice.toFixed(2)})  [${t.z} sigma vs this session's noise]`);
+    });
+  }
+
+  lines.push(`\n=== SESSION METRICS (measured values — use these to choose realistic rule thresholds) ===`);
+  lines.push(`These are RAW numbers for this one session, computed from the feeds above. They are SESSION GATES: they describe the day's regime (is gamma positive? is skew favouring calls? is OI building?), not a moment in time. Seeing the actual magnitudes here is how you pick a threshold that is neither impossible nor trivially always-true.\n`);
+  const sm = b.sessionMetrics || {};
+  const smKeys = Object.keys(sm).sort();
+  if (!smKeys.length) {
+    lines.push(`(none computed)`);
+  } else {
+    smKeys.forEach((k) => {
+      const v = sm[k];
+      const shown = Math.abs(v) >= 1e6 ? `${(v / 1e6).toFixed(2)}M` : v.toFixed(2);
+      lines.push(`  ${k.padEnd(52)} = ${shown}`);
     });
   }
 

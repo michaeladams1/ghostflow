@@ -1,97 +1,80 @@
-// THE BACKTEST ENGINE.
+// THE BACKTEST ENGINE — all 30 feeds, session gates + intraday triggers.
 //
-// THIS IS THE PIECE THAT MAKES THE WHOLE SYSTEM HONEST.
+// A rule now has two kinds of condition, and they do different jobs:
 //
-// A model looking at one session and finding a signal that "predicted" a move
-// is nearly worthless on its own. Given any chart and 29 feeds, a sufficiently
-// clever model will ALWAYS find some cluster that lines up. That is not
-// analysis, it is curve-fitting to a single anecdote.
+//   SESSION GATE   ("is today a day I should trade at all?")
+//     e.g. exposure_by_strike_gamma.net_gamma < 0   — dealers short gamma, so
+//          moves get AMPLIFIED rather than pinned. A regime, not a moment.
+//     Evaluated ONCE per day against a RAW value. If any gate fails, the whole
+//     day is skipped and no trade is taken.
 //
-// The only way to know whether a rule is real is to run it across many days it
-// has never seen and count what it ACTUALLY returned — including every single
-// time it fired and lost. That is what this file does.
+//   BAR TRIGGER    ("at what minute do I enter?")
+//     e.g. net_drift.netCallPremium > 20   — a 20-sigma premium spike.
+//     Evaluated per-minute against a Z-SCORE (trailing baseline, no lookahead).
 //
-// This is also the clean answer to survivorship bias. We no longer need Michael
-// to hand-pick losing trades to balance the winners: the backtest surfaces the
-// losers automatically, because it takes every single firing of the rule, not
-// the ones anyone remembered.
+// This mirrors how a real trader operates: a regime filter decides whether to
+// be in the market at all, and a trigger decides the moment. Previously only 6
+// feeds were expressible and every condition was treated as a trigger — which
+// made GEX, OI, skew, and dark-pool structure untestable even though the models
+// kept (correctly) reaching for them.
 //
-// LOOKAHEAD SAFETY (the thing that silently ruins backtests):
-//   - Signal z-scores use a TRAILING window only (see compress.js) — a bar's
-//     z-score never depends on bars after it.
-//   - Entry is at the CLOSE of the bar where the rule fires. Not the low of the
-//     day, not some optimal fill. You could actually have gotten this.
-//   - Exit is a fixed horizon after entry, decided in advance — never "sell at
-//     the top", which is the classic way to fake a great backtest.
+// LOOKAHEAD SAFETY:
+//   - Bar z-scores use a TRAILING window only; a bar's score never depends on
+//     later bars.
+//   - Entry is at the CLOSE of the firing bar. Not the day's low, not a perfect
+//     fill. Something you could actually have gotten.
+//   - Exit is a fixed horizon decided in advance — never "sell at the top".
+//   - SESSION GATES ARE THE ONE PLACE LOOKAHEAD COULD SNEAK IN, and it is
+//     handled explicitly: see the note on gate honesty below.
 
 import { fetchFeedsForRule } from "./quantDataClient.js";
 import { buildBriefing } from "./compress.js";
-
-// Rebuilds the per-minute z-scored series for the feeds a rule references, so
-// a rule's conditions can be evaluated bar by bar on any historical day.
-function buildSignalIndex(briefing) {
-  // events already carry {ts, endpoint, metric, value, z} and are lookahead-free.
-  const index = new Map(); // ts -> [events at that minute]
-  for (const e of briefing.timeline.events) {
-    if (!index.has(e.ts)) index.set(e.ts, []);
-    index.get(e.ts).push(e);
-  }
-  return index;
-}
-
-// The exact feed/metric pairs a rule may reference. A model that invents a feed
-// name gets a LOUD error, not a silent zero.
-//
-// WHY THIS EXISTS (a real bug this fixes):
-// GPT proposed conditions on "interval_map.minutes_to_close" and
-// "net_drift.call_premium_drift_z" — neither exists. The backtest matched
-// nothing and dutifully reported "0 trades / NEVER FIRED". GPT read that as
-// "my threshold is too high" and burned two refinement rounds chasing a
-// phantom. A silent zero is indistinguishable from a real result, which makes
-// it the most dangerous kind of bug in a system like this.
-export const VALID_METRICS = {
-  net_drift: ["netCallPremium", "netPutPremium"],
-  net_flow: ["net premium change/min"],
-  dark_flow: ["dark pool notional"],
-  interval_map: ["net gamma exposure"],
-  volatility_drift: ["implied vol"],
-};
+import { BAR_METRICS, SESSION_METRICS, computeSessionMetrics, buildVocabulary } from "./metrics.js";
 
 // Time-of-day is not a feed, but the models keep (correctly) reaching for it —
-// "late-day spikes are exhaustion, not continuation" is a real market intuition.
-// So it is supported as a first-class pseudo-feed rather than left as a trap.
+// "late-day spikes are exhaustion, not continuation" is a real market read.
 export const TIME_FEED = "time_of_day";
 export const TIME_METRICS = ["minutes_since_open", "minutes_to_close"];
 
+// ---------------------------------------------------------------------------
+// VALIDATION. Every failure here previously surfaced as a SILENT "0 trades",
+// which is indistinguishable from a real result and caused GPT to burn two
+// refinement rounds misdiagnosing a phantom.
+// ---------------------------------------------------------------------------
 export function validateRule(rule) {
-  if (!rule?.conditions?.length) {
-    return { valid: false, errors: ["Rule has no conditions."] };
-  }
+  if (!rule?.conditions?.length) return { valid: false, errors: ["Rule has no conditions."] };
+
+  const vocab = buildVocabulary();
   const errors = [];
+
   for (const c of rule.conditions) {
     if (c.feed === TIME_FEED) {
       if (!TIME_METRICS.includes(c.metric)) {
         errors.push(`time_of_day metric "${c.metric}" is invalid. Valid: ${TIME_METRICS.join(", ")}`);
       }
-      continue;
-    }
-    const metrics = VALID_METRICS[c.feed];
-    if (!metrics) {
-      errors.push(`Feed "${c.feed}" does not exist. Valid feeds: ${[...Object.keys(VALID_METRICS), TIME_FEED].join(", ")}`);
-    } else if (!metrics.includes(c.metric)) {
-      errors.push(`Metric "${c.metric}" does not exist on feed "${c.feed}". Valid metrics for ${c.feed}: ${metrics.join(", ")}`);
+    } else {
+      const isBar = vocab.bar[c.feed]?.includes(c.metric);
+      const isSession = vocab.session[c.feed]?.includes(c.metric);
+      if (!isBar && !isSession) {
+        const barOpts = vocab.bar[c.feed];
+        const sessOpts = vocab.session[c.feed];
+        if (!barOpts && !sessOpts) {
+          errors.push(`Feed "${c.feed}" does not exist.`);
+        } else {
+          errors.push(`Metric "${c.metric}" does not exist on feed "${c.feed}". Valid: ${[...(barOpts || []), ...(sessOpts || [])].join(", ")}`);
+        }
+      }
     }
     if (!Number.isFinite(Number(c.threshold))) {
       errors.push(`Threshold on ${c.feed}.${c.metric} is not a number: ${c.threshold}`);
     }
   }
 
-  // CONTRADICTION CHECK — another real bug this catches.
-  // GPT once proposed: minutes_since_open <= 120 AND minutes_since_open >= 240.
+  // CONTRADICTION CHECK. GPT once wrote:
+  //   minutes_since_open <= 120 AND minutes_since_open >= 240
   // No bar can be both under 2 hours and over 4 hours from the open. The rule
-  // was UNSATISFIABLE, so it fired zero times — and GPT read that "0 trades" as
-  // "my thresholds are too extreme" and wasted a round loosening them. An
-  // impossible rule must be rejected as impossible, not reported as a result.
+  // was UNSATISFIABLE, fired zero times, and GPT read that as "thresholds too
+  // extreme" and loosened them. An impossible rule must be called impossible.
   const byField = new Map();
   for (const c of rule.conditions) {
     const key = `${c.feed}.${c.metric}`;
@@ -99,21 +82,41 @@ export function validateRule(rule) {
     byField.get(key).push(c);
   }
   for (const [key, conds] of byField) {
-    let lowerBound = -Infinity, upperBound = Infinity;
+    let lo = -Infinity, hi = Infinity;
     for (const c of conds) {
       const t = Number(c.threshold);
-      if (c.operator === ">" || c.operator === ">=") lowerBound = Math.max(lowerBound, t);
-      if (c.operator === "<" || c.operator === "<=") upperBound = Math.min(upperBound, t);
+      if (c.operator === ">" || c.operator === ">=") lo = Math.max(lo, t);
+      if (c.operator === "<" || c.operator === "<=") hi = Math.min(hi, t);
     }
-    if (lowerBound > upperBound) {
-      errors.push(`CONTRADICTION on ${key}: you require it to be >= ${lowerBound} AND <= ${upperBound} at the same time. No value can satisfy both, so this rule can never fire. This is NOT a threshold problem — it is a logically impossible condition.`);
+    if (lo > hi) {
+      errors.push(`CONTRADICTION on ${key}: requires >= ${lo} AND <= ${hi} simultaneously. No value satisfies both — this rule can NEVER fire. This is not a threshold problem, it is a logically impossible condition.`);
     }
+  }
+
+  // A rule of only session gates has no entry moment — it says WHICH days to
+  // trade but never WHEN. It cannot produce a trade, so it must be rejected
+  // rather than silently returning zero.
+  const vocab2 = buildVocabulary();
+  const hasTrigger = rule.conditions.some((c) =>
+    c.feed !== TIME_FEED && vocab2.bar[c.feed]?.includes(c.metric));
+  if (!hasTrigger && errors.length === 0) {
+    errors.push(`This rule contains only session-level gates (and/or time filters) and no intraday TRIGGER. It specifies which DAYS to trade but never WHEN to enter, so it can never produce a trade. Add at least one bar-level condition (a minute-by-minute feed) to define the entry moment.`);
   }
 
   return { valid: errors.length === 0, errors };
 }
 
-// Minutes since 09:30 / until 16:00, NY time.
+function cmp(subject, op, t) {
+  switch (op) {
+    case ">": return subject > t;
+    case ">=": return subject >= t;
+    case "<": return subject < t;
+    case "<=": return subject <= t;
+    case "==": return subject === t;
+    default: return false;
+  }
+}
+
 function timeOfDay(ts) {
   const [h, m] = new Date(Number(ts))
     .toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "2-digit", minute: "2-digit", hour12: false })
@@ -122,71 +125,75 @@ function timeOfDay(ts) {
   return { minutes_since_open: mins - (9 * 60 + 30), minutes_to_close: (16 * 60) - mins };
 }
 
-// Evaluates one rule against one session, returning every bar where it fired.
-//
-// COOLDOWN — a real bug Claude caught by reading its own backtest:
-// A single premium spike doesn't last one minute; it lasts several. Without a
-// cooldown, one drift event re-triggers the rule on consecutive buckets and
-// gets counted as 5 separate "trades". That inflates the sample size, makes 6
-// real events look like 41 independent draws, and corrupts every statistic
-// downstream. One signal event = ONE trade. The cooldown enforces that.
-function findFirings(rule, briefing, { windowMin = 2, cooldownMin = 30 } = {}) {
-  if (!rule?.conditions?.length) return [];
+function splitConditions(rule) {
+  const vocab = buildVocabulary();
+  const gates = [], triggers = [], timeFilters = [];
+  for (const c of rule.conditions) {
+    if (c.feed === TIME_FEED) timeFilters.push(c);
+    else if (vocab.bar[c.feed]?.includes(c.metric)) triggers.push(c);
+    else gates.push(c);
+  }
+  return { gates, triggers, timeFilters };
+}
 
-  const events = briefing.timeline.events;
-  const signalConds = rule.conditions.filter((c) => c.feed !== TIME_FEED);
-  const timeConds = rule.conditions.filter((c) => c.feed === TIME_FEED);
-  const firings = [];
-  let lastFiringTs = -Infinity;
+// ---------------------------------------------------------------------------
+// FIRINGS: session gates first (skip the day entirely), then bar triggers.
+// COOLDOWN: one signal EVENT = one trade. Without it, a drift spanning 10
+// minutes re-triggers on consecutive buckets and 6 real events masquerade as 41
+// independent draws, inflating the sample and corrupting every statistic.
+// ---------------------------------------------------------------------------
+function findFirings(rule, briefing, sessionMetrics, { windowMin = 2, cooldownMin = 30 } = {}) {
+  const { gates, triggers, timeFilters } = splitConditions(rule);
 
-  const cmp = (subject, op, t) => {
-    switch (op) {
-      case ">": return subject > t;
-      case ">=": return subject >= t;
-      case "<": return subject < t;
-      case "<=": return subject <= t;
-      case "==": return subject === t;
-      default: return false;
+  // --- Session gates: is today even a day we trade? ---
+  for (const g of gates) {
+    const key = `${g.feed}.${g.metric}`;
+    const v = sessionMetrics[key];
+    // A gate whose metric could not be computed is NOT quietly treated as
+    // passing. Unknown is not the same as satisfied — assuming otherwise would
+    // let a rule trade days it explicitly said it wouldn't.
+    if (!Number.isFinite(v)) return { firings: [], gateBlocked: true, gateReason: `${key} unavailable` };
+    if (!cmp(v, g.operator, Number(g.threshold))) {
+      return { firings: [], gateBlocked: true, gateReason: `${key}=${v.toFixed(2)} failed ${g.operator} ${g.threshold}` };
     }
-  };
+  }
+
+  // --- Bar triggers: at what minute? ---
+  const events = briefing.timeline.events;
+  const firings = [];
+  let lastTs = -Infinity;
 
   for (const anchor of events) {
-    if (anchor.ts - lastFiringTs < cooldownMin * 60_000) continue;
+    if (anchor.ts - lastTs < cooldownMin * 60_000) continue;
 
-    // Time-of-day conditions gate the bar itself.
     const tod = timeOfDay(anchor.ts);
-    const timeOk = timeConds.every((c) => cmp(tod[c.metric], c.operator, Number(c.threshold)));
-    if (!timeOk) continue;
+    if (!timeFilters.every((c) => cmp(tod[c.metric], c.operator, Number(c.threshold)))) continue;
 
     const nearby = events.filter((e) => Math.abs(e.ts - anchor.ts) <= windowMin * 60_000);
 
-    const allMet = signalConds.every((cond) => nearby.some((e) => {
+    const allMet = triggers.every((cond) => nearby.some((e) => {
       if (e.endpoint !== cond.feed) return false;
       if (cond.metric && e.metric !== cond.metric) return false;
-      // Thresholds are in sigma (models were told so). Under 100 => z-score.
-      const t = Number(cond.threshold);
-      const subject = Math.abs(t) < 100 ? e.z : e.value;
-      return cmp(subject, cond.operator, t);
+      // Bar triggers are compared in SIGMA — "unusual" only means something
+      // relative to a baseline, and raw premium numbers span many orders of
+      // magnitude across tickers.
+      return cmp(e.z, cond.operator, Number(cond.threshold));
     }));
 
     if (allMet) {
       firings.push({ ts: anchor.ts, clock: anchor.clock });
-      lastFiringTs = anchor.ts;
+      lastTs = anchor.ts;
     }
   }
-  return firings;
+  return { firings, gateBlocked: false };
 }
 
-// Given a firing time, what did the trade actually make?
-// Entry = close of the bar at (or first bar after) the signal.
-// Exit   = close of the bar `holdMinutes` later. Fixed in advance.
 function evaluateTrade(firing, priceBars, { holdMinutes = 15, direction = 1 }) {
   const entryBar = priceBars.find((b) => b.ts >= firing.ts);
   if (!entryBar) return null;
   const exitTs = entryBar.ts + holdMinutes * 60_000;
   const exitBar = [...priceBars].reverse().find((b) => b.ts <= exitTs && b.ts > entryBar.ts);
   if (!exitBar) return null;
-
   const pct = ((exitBar.value - entryBar.value) / entryBar.value) * 100 * direction;
   return {
     entryClock: firing.clock,
@@ -198,32 +205,20 @@ function evaluateTrade(firing, priceBars, { holdMinutes = 15, direction = 1 }) {
 }
 
 function directionOf(rule) {
-  if (!rule?.action) return 1;
-  return rule.action === "BUY_PUT" ? -1 : 1;
+  return rule?.action === "BUY_PUT" ? -1 : 1;
 }
 
 // ---------------------------------------------------------------------------
-// THE MAIN SWEEP: run one rule across many sessions it has never seen.
+// THE MAIN SWEEP.
 // ---------------------------------------------------------------------------
 export async function backtestRule(rule, { ticker, sessions, holdMinutes = 15, onProgress } = {}) {
-  if (!rule || !rule.conditions?.length) {
-    return {
-      testable: false,
-      reason: "This rule has no machine-checkable conditions — it cannot be backtested, which means it can never be proven or disproven. That is a defect in the rule, not in the data.",
-    };
-  }
-
-  // FAIL LOUDLY on invented feeds/metrics. Returning "0 trades" for a rule that
-  // references a nonexistent feed is a lie: it looks exactly like a real result
-  // ("your signal never occurred") when the truth is ("you named a feed that
-  // doesn't exist"). A model cannot learn from a lie.
   const validation = validateRule(rule);
   if (!validation.valid) {
     return {
       testable: false,
       invalidRule: true,
       errors: validation.errors,
-      reason: `RULE REFERENCES THINGS THAT DO NOT EXIST — this was NOT a real backtest result, and it does NOT mean your signal never fired:\n  - ${validation.errors.join("\n  - ")}\nRewrite the rule using only the exact feed and metric names listed above, then it can actually be tested.`,
+      reason: `RULE CANNOT RUN — this is NOT a backtest result and does NOT mean your signal never fired:\n  - ${validation.errors.join("\n  - ")}\nFix the rule using the exact feed/metric names, then it can actually be tested.`,
     };
   }
 
@@ -231,37 +226,58 @@ export async function backtestRule(rule, { ticker, sessions, holdMinutes = 15, o
   const sessionResults = [];
   const errors = [];
   const direction = directionOf(rule);
+  const { gates, triggers } = splitConditions(rule);
 
-  // Only the feeds this rule references get fetched — not all 30. time_of_day
-  // is a computed pseudo-feed, not an endpoint, so it must not be requested.
+  // Fetch ONLY the feeds this rule references (plus price). Pulling all 30 x 60
+  // sessions = ~1800 requests against a 240/min limit, which silently rate-
+  // limited sessions out and made results irreproducible.
   const feedIds = [...new Set(rule.conditions.map((c) => c.feed))].filter((f) => f !== TIME_FEED);
+
+  let gateBlockedDays = 0;
 
   for (const sessionDate of sessions) {
     try {
       const bundle = await fetchFeedsForRule({ ticker, sessionDate, feedIds });
 
-      // A rate-limited session is NOT a session with no signal. Conflating the
-      // two is what made results irreproducible. Record it as a transient
-      // failure so `dataIntegrity` can warn loudly instead of quietly lying.
       if (bundle.report.transientFailure) {
-        errors.push({ sessionDate, error: "TRANSIENT (rate limit / network) — not a real 'no data' result", transient: true });
+        errors.push({ sessionDate, error: "TRANSIENT (rate limit/network) — NOT a real 'no data' result", transient: true });
         continue;
       }
-
-      const briefing = buildBriefing(bundle);
 
       const priceBars = bundle.results.stock_price_over_time?.ok
         ? Object.entries(bundle.results.stock_price_over_time.data.data)
             .map(([ts, v]) => ({ ts: Number(ts), value: v.closePrice }))
             .sort((a, b) => a.ts - b.ts)
         : [];
-
       if (!priceBars.length) {
         errors.push({ sessionDate, error: "no price bars (likely a market holiday)" });
         continue;
       }
 
-      const firings = findFirings(rule, briefing);
+      // GATE HONESTY — the one place lookahead could sneak in.
+      // Session metrics are computed from the WHOLE session's data, so a gate
+      // like "call_put_premium_ratio > 3" technically uses end-of-day totals to
+      // decide whether to trade at 10:00am. That is a REAL limitation and it is
+      // stated plainly rather than hidden: gates derived from positioning that
+      // exists at the OPEN (open interest, gamma exposure, prior-day OI change,
+      // skew, term structure, dark-pool levels from prior sessions) are sound,
+      // because a trader genuinely knows those before the bell. Gates built on
+      // same-day cumulative FLOW (contract_statistics, gainers_losers,
+      // order_flow_*) are NOT knowable at 10:00am and will flatter a backtest.
+      // The models are told this explicitly in the prompt.
+      const spot = priceBars[priceBars.length - 1].value;
+      const sessionMetrics = computeSessionMetrics(bundle.results, spot);
+
+      const briefing = buildBriefing(bundle);
+      const { firings, gateBlocked, gateReason } = findFirings(rule, briefing, sessionMetrics);
+
+      if (gateBlocked) {
+        gateBlockedDays++;
+        sessionResults.push({ sessionDate, firings: 0, trades: 0, gateBlocked: true, gateReason });
+        onProgress?.({ sessionDate, firings: 0, gateBlocked: true, gateReason });
+        continue;
+      }
+
       const dayTrades = firings
         .map((f) => evaluateTrade(f, priceBars, { holdMinutes, direction }))
         .filter(Boolean)
@@ -281,28 +297,25 @@ export async function backtestRule(rule, { ticker, sessions, holdMinutes = 15, o
   const totalReturn = trades.reduce((a, t) => a + t.pctReturn, 0);
   const avgReturn = trades.length ? totalReturn / trades.length : 0;
   const winRate = trades.length ? (wins.length / trades.length) * 100 : 0;
-
   const grossWin = wins.reduce((a, t) => a + t.pctReturn, 0);
   const grossLoss = Math.abs(losses.reduce((a, t) => a + t.pctReturn, 0));
   const profitFactor = grossLoss > 0 ? grossWin / grossLoss : (grossWin > 0 ? Infinity : 0);
 
-  // A rule that fires twice and wins both times proves nothing. Sample size is
-  // reported prominently so a tiny sample cannot masquerade as a strong result.
+  // A rule that fires twice and wins twice proves nothing.
   const enoughData = trades.length >= 20;
-
-  // REPRODUCIBILITY: sessions that failed to fetch were previously dropped in
-  // silence, which meant the same rule on the same dates could return different
-  // numbers on different runs. A backtest you cannot reproduce is worthless, so
-  // failures are now surfaced as a first-class part of the result.
   const sessionsActuallyTested = sessionResults.length;
+
   const dataIntegrity = errors.length === 0
     ? "All requested sessions returned data."
-    : `WARNING: ${errors.length}/${sessions.length} sessions returned no data and were excluded (${errors.map((e) => e.sessionDate).join(", ")}). Results are based on ${sessionsActuallyTested} sessions, not ${sessions.length}. Re-run if this looks like a transient fetch failure rather than market holidays.`;
+    : `WARNING: ${errors.length}/${sessions.length} sessions returned no data (${errors.map((e) => e.sessionDate).join(", ")}). Based on ${sessionsActuallyTested} sessions, not ${sessions.length}.`;
 
   return {
     testable: true,
     rule: rule.description,
     ticker,
+    gateCount: gates.length,
+    triggerCount: triggers.length,
+    gateBlockedDays,
     sessionsRequested: sessions.length,
     sessionsTested: sessionsActuallyTested,
     sessionsWithErrors: errors.length,
@@ -317,11 +330,12 @@ export async function backtestRule(rule, { ticker, sessions, holdMinutes = 15, o
     bestTrade: trades.length ? trades.reduce((a, b) => (b.pctReturn > a.pctReturn ? b : a)) : null,
     worstTrade: trades.length ? trades.reduce((a, b) => (b.pctReturn < a.pctReturn ? b : a)) : null,
     enoughData,
-    // The headline. Written to be read plainly, including when it's bad news.
     verdict: !trades.length
-      ? "NEVER FIRED. This rule's conditions were never met on any tested session. It is not a rule, it is a description of one specific afternoon."
+      ? (gateBlockedDays > 0
+          ? `NEVER FIRED. Your session gates blocked ${gateBlockedDays} of ${sessionsActuallyTested} days outright, and the trigger never fired on the rest. The gates may be too restrictive.`
+          : "NEVER FIRED. Conditions were never met on any tested session. This is not a rule, it is a description of one specific afternoon.")
       : !enoughData
-      ? `INSUFFICIENT SAMPLE. Only ${trades.length} firings across ${sessionsActuallyTested} sessions. Any win rate here is noise — you need 20+ to say anything.`
+      ? `INSUFFICIENT SAMPLE. Only ${trades.length} firings across ${sessionsActuallyTested} sessions${gateBlockedDays ? ` (gates blocked ${gateBlockedDays} days)` : ""}. Any win rate here is noise — you need 20+ to say anything.`
       : winRate >= 55 && avgReturn > 0
       ? `HOLDS UP SO FAR. ${trades.length} trades, ${winRate.toFixed(0)}% win rate, ${avgReturn.toFixed(2)}% average return per trade.`
       : `DOES NOT HOLD UP. ${trades.length} trades, ${winRate.toFixed(0)}% win rate, ${avgReturn.toFixed(2)}% average per trade. The single-day story did not survive contact with other days.`,
@@ -331,9 +345,6 @@ export async function backtestRule(rule, { ticker, sessions, holdMinutes = 15, o
   };
 }
 
-// Generates the list of prior trading sessions to test against (weekdays only;
-// market holidays simply come back with no data and are reported as errors
-// rather than silently skewing the result).
 export function priorSessions(fromDate, count) {
   const out = [];
   const d = new Date(fromDate + "T00:00:00Z");

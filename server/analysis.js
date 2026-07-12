@@ -24,6 +24,7 @@
 
 import { callClaudeWithTools, callGPTWithTools, callGrokWithTools } from "./aiProviders.js";
 import { renderBriefing } from "./compress.js";
+import { ruleVocabularyBlock } from "./vocabulary.js";
 
 const PROVIDERS = { claude: callClaudeWithTools, gpt: callGPTWithTools, grok: callGrokWithTools };
 export const MODEL_IDS = ["claude", "gpt", "grok"];
@@ -72,14 +73,9 @@ Your thesis must be a rule a computer could evaluate on any other day without yo
 If nothing was knowable, set "rule": null and explain why.
 
 === THE ONLY FEEDS AND METRICS A RULE MAY REFERENCE ===
-Rules are executed by code, against these exact strings. Inventing a feed or metric name does NOT create a signal — it creates a rule that cannot run.
-  net_drift          -> "netCallPremium", "netPutPremium"
-  net_flow           -> "net premium change/min"
-  dark_flow          -> "dark pool notional"
-  interval_map       -> "net gamma exposure"
-  volatility_drift   -> "implied vol"
-  time_of_day        -> "minutes_since_open", "minutes_to_close"   (for "avoid the last hour" style filters)
-Thresholds are in SIGMA (z-scores). The other feeds are still essential for your REASONING and your endpointReview — they simply are not yet expressible as automated rule conditions.
+Rules are executed by code against these exact strings. Inventing a feed or metric name does NOT create a signal — it creates a rule that cannot run at all.
+
+${ruleVocabularyBlock()}
 
 === OUTPUT ===
 Respond with ONLY one JSON object. No code fences, no prose around it:

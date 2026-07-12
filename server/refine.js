@@ -32,20 +32,16 @@
 //     4 trades has learned nothing — it has memorized. The engine flags that
 //     explicitly rather than celebrating the win rate.
 
-import { backtestRule, priorSessions, VALID_METRICS, TIME_FEED, TIME_METRICS } from "./backtest.js";
+import { backtestRule, priorSessions } from "./backtest.js";
 import { callClaudeWithTools, callGPTWithTools, callGrokWithTools } from "./aiProviders.js";
+import { ruleVocabularyBlock } from "./vocabulary.js";
 
-// The ONLY feed/metric pairs that exist. Models were previously inventing names
-// like "interval_map.minutes_to_close", which silently matched nothing and got
-// reported back as "0 trades" — indistinguishable from a real result. GPT then
-// misread that as "threshold too high" and burned two rounds chasing a phantom.
-// Now the exact vocabulary is stated up front, and invalid rules are rejected
-// with a loud, specific error instead of a silent zero.
-const FEED_VOCABULARY = [
-  ...Object.entries(VALID_METRICS).map(([feed, metrics]) =>
-    `  ${feed}  ->  metrics: ${metrics.map((m) => `"${m}"`).join(", ")}`),
-  `  ${TIME_FEED}  ->  metrics: ${TIME_METRICS.map((m) => `"${m}"`).join(", ")}  (minutes since 09:30 / until 16:00 — use this for "avoid the last hour" style filters)`,
-].join("\n");
+// The complete rule vocabulary — all 30 feeds, generated from metrics.js so it
+// can never drift out of sync with what the backtest can actually evaluate.
+// Models previously invented names like "interval_map.minutes_to_close", which
+// silently matched nothing and came back as "0 trades" — indistinguishable from
+// a real result, and GPT burned two rounds misdiagnosing it.
+const FEED_VOCABULARY = ruleVocabularyBlock();
 
 const PROVIDERS = { claude: callClaudeWithTools, gpt: callGPTWithTools, grok: callGrokWithTools };
 
@@ -70,6 +66,10 @@ function renderBacktestFeedback(result, availableFeeds) {
     ``,
     `  Rule tested:    ${result.rule}`,
     `  Sessions:       ${result.sessionsTested}`,
+    `  Session gates:  ${result.gateCount ?? 0}   Bar triggers: ${result.triggerCount ?? 0}`,
+    ...(result.gateBlockedDays
+      ? [`  Days BLOCKED by your session gates: ${result.gateBlockedDays} of ${result.sessionsTested}   <-- if this is most of them, your gate is too strict and is starving the sample`]
+      : []),
     `  Times it fired: ${result.totalTrades}   (${result.wins} won, ${result.losses} lost)`,
     `  Win rate:       ${result.winRate}%`,
     `  Avg return:     ${result.avgReturnPct}% per trade`,
@@ -100,7 +100,18 @@ YOUR JOB: figure out WHY it lost, and whether a change can fix it.
 
 The most common failure, and the one to check first: YOUR THRESHOLD WAS TOO LOOSE. If your rule fired 90+ times across 20 sessions, it is firing on ordinary noise, not on a rare event. The signal you originally saw may have been 50 sigma while your threshold only asked for 5 — that is a hundredfold difference in rarity. Tighten it.
 
-The second move: ADD A FILTER. Look at the losing trades versus the winning ones. Is there a feed that was present in the winners and absent in the losers? Time of day? A confirming feed? Gamma regime? Add a condition that removes losers while keeping winners.
+The second move: ADD A FILTER. Look at the losing trades versus the winning ones. Is there something that was true on the winning days and false on the losing ones? You now have TWO kinds of filter available, and they do different jobs:
+
+  SESSION GATE — "don't trade this kind of day at all."
+    e.g. exposure_by_strike_gamma.net_gamma < 0  (dealers are SHORT gamma, so they amplify moves instead of pinning price — a completely different regime).
+    Or: open_interest_change.call_oi_change > 5000 (new call positions actually being OPENED, not just churned).
+    Or: term_structure.front_minus_back_iv > 0 (front-month IV inverted — the market expects a near-term event).
+    These are the ideas you have been reaching for and could not previously express. Now you can.
+
+  BAR TRIGGER — "enter at this exact minute."
+    e.g. net_drift.netCallPremium z > 20 AND dark_flow.notionalValue z > 3 in the same 2-minute window.
+
+Think about WHICH kind your losers call for. If your rule works but only on certain days, that is a GATE problem, not a threshold problem — and tightening the trigger will just starve your sample without fixing anything.
 
 === THE THREE HONEST OPTIONS ===
 You must pick one:
