@@ -51,26 +51,57 @@ function buildBody(ep, { ticker, sessionDate, startDate, endDate, contract }) {
   return body;
 }
 
-export async function fetchEndpoint(ep, params) {
+export async function fetchEndpoint(ep, params, { retries = 3 } = {}) {
   const body = buildBody(ep, params);
   const url = `${BASE}/v1/${ep.surface}/tool/${ep.path}`;
-  try {
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${KEY()}`, "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    const text = await res.text();
-    if (!res.ok) {
-      // A 422 "data-unavailable" is an EXPECTED no-data outcome (e.g. no dark
-      // pool prints that day), not a bug. It's reported honestly as empty
-      // rather than retried or, worse, silently dropped.
-      return { id: ep.id, ok: false, status: res.status, error: text.slice(0, 300), data: null };
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${KEY()}`, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+      // 429 = rate limited. This is TRANSIENT and must be retried, not treated
+      // as "no data" — silently dropping rate-limited sessions is exactly what
+      // made backtests irreproducible (same rule, same dates, different answers).
+      if (res.status === 429) {
+        if (attempt < retries) {
+          const wait = 2000 * Math.pow(2, attempt); // 2s, 4s, 8s
+          await sleep(wait);
+          continue;
+        }
+        return { id: ep.id, ok: false, status: 429, error: "Rate limited after retries", data: null, transient: true };
+      }
+
+      const text = await res.text();
+      if (!res.ok) {
+        // A 422 "data-unavailable" is an EXPECTED no-data outcome (e.g. no dark
+        // pool prints that day), not a bug. Reported honestly as empty.
+        return { id: ep.id, ok: false, status: res.status, error: text.slice(0, 300), data: null };
+      }
+      return { id: ep.id, ok: true, status: res.status, data: JSON.parse(text), error: null };
+    } catch (err) {
+      if (attempt < retries) { await sleep(1000 * (attempt + 1)); continue; }
+      return { id: ep.id, ok: false, status: "NETWORK_ERROR", error: err.message, data: null, transient: true };
     }
-    return { id: ep.id, ok: true, status: res.status, data: JSON.parse(text), error: null };
-  } catch (err) {
-    return { id: ep.id, ok: false, status: "NETWORK_ERROR", error: err.message, data: null };
   }
+}
+
+// Simple in-process cache. A backtest re-fetches the same (ticker, session)
+// data on every refinement round; without this we'd burn the rate limit and
+// the money for identical bytes. Keyed on everything that affects the response.
+const cache = new Map();
+
+export async function fetchEndpointCached(ep, params) {
+  const key = `${ep.id}|${params.ticker}|${params.sessionDate}|${params.startDate}|${params.endDate}`;
+  if (cache.has(key)) return cache.get(key);
+  const result = await fetchEndpoint(ep, params);
+  // Only cache successes — caching a rate-limit failure would poison every
+  // subsequent round with a phantom "no data".
+  if (result.ok) cache.set(key, result);
+  return result;
 }
 
 // Fetches EVERY endpoint in the registry for one symbol + session.
@@ -103,6 +134,54 @@ export async function fetchAllEndpoints({ ticker, sessionDate, startDate, endDat
       failed: failed.map((id) => ({ id, status: results[id].status, error: results[id].error })),
       // If this is false, the models MUST be told the data is incomplete.
       complete: failed.length === 0,
+    },
+  };
+}
+
+// TARGETED FETCH for backtesting.
+//
+// The analysis phase deliberately pulls ALL 30 feeds (Michael's requirement:
+// every model must review everything before forming a view). But a BACKTEST is
+// a different job: it re-runs ONE rule across many days, and that rule
+// references maybe two or three feeds.
+//
+// Pulling all 30 feeds x 20 sessions = ~600 requests against a 240/min limit.
+// That is what was silently rate-limiting sessions out of the backtest and
+// making results irreproducible (89 trades one run, 41 the next).
+//
+// Fetching only what the rule needs (plus the price series, which is the P&L
+// instrument) cuts that to ~60 requests. Ten times fewer, faster, cheaper, and
+// it stays comfortably inside the rate limit.
+export async function fetchFeedsForRule({ ticker, sessionDate, startDate, endDate, feedIds }) {
+  // stock_price_over_time is ALWAYS required — without the underlying's price
+  // there is no P&L to compute, no matter what the rule references.
+  const needed = new Set([...feedIds, "stock_price_over_time"]);
+  const endpoints = QD_ENDPOINTS.filter((e) => needed.has(e.id));
+  const params = { ticker, sessionDate, startDate: startDate || sessionDate, endDate: endDate || sessionDate };
+  const results = {};
+
+  for (let i = 0; i < endpoints.length; i += CONCURRENCY) {
+    const batch = endpoints.slice(i, i + CONCURRENCY);
+    const settled = await Promise.all(batch.map((ep) => fetchEndpointCached(ep, params)));
+    settled.forEach((r) => { results[r.id] = r; });
+    await sleep(DELAY_MS);
+  }
+
+  const attempted = endpoints.map((e) => e.id);
+  const failed = attempted.filter((id) => !results[id].ok);
+
+  return {
+    ticker,
+    sessionDate,
+    results,
+    report: {
+      attempted: attempted.length,
+      succeeded: attempted.length - failed.length,
+      failed: failed.map((id) => ({ id, status: results[id].status, error: results[id].error })),
+      complete: failed.length === 0,
+      // Distinguishes "the market had no data" from "we got rate limited",
+      // because only one of those is a reason to retry.
+      transientFailure: failed.some((id) => results[id].transient),
     },
   };
 }

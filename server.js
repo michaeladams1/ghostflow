@@ -13,6 +13,7 @@ import { readTrades, appendTrade } from "./server/store.js";
 import { fetchAllEndpoints } from "./server/quantDataClient.js";
 import { buildBriefing } from "./server/compress.js";
 import { analyzeAllModels } from "./server/analysis.js";
+import { backtestRule, priorSessions } from "./server/backtest.js";
 import { callClaude, callGPT, callGrok } from "./server/aiProviders.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -90,10 +91,62 @@ app.post("/api/analyze", async (req, res) => {
       agreement: analysis.combined.agreement,
     };
 
-    await appendTrade(record);
-    res.status(201).json(record);
+    // Persistence must NEVER destroy a completed analysis. This run cost ~2
+    // minutes, 30 API pulls, and 3 LLM calls of real money — if the database
+    // is unreachable, the right move is to hand the result back with a warning,
+    // not to 500 and throw the whole thing away.
+    let persisted = true, persistError = null;
+    try {
+      await appendTrade(record);
+    } catch (err) {
+      persisted = false;
+      persistError = err.message;
+      console.error("[analyze] DB write failed (analysis still returned):", err.message);
+    }
+
+    res.status(201).json({ ...record, persisted, persistError });
   } catch (err) {
     console.error("[analyze] FAILED:", err);
+    res.status(500).json({ error: err.message || String(err) });
+  }
+});
+
+// Backtests one model's proposed rule from a stored analysis against N prior
+// sessions it has never seen. This is the step that separates a real rule from
+// a story fitted to one afternoon — and it is deliberately a SEPARATE call,
+// because it's slow (one full feed pull per session) and you won't want it on
+// every analysis.
+app.post("/api/analyses/:id/backtest", async (req, res) => {
+  const { modelId, sessions = 20, holdMinutes = 15 } = req.body;
+  try {
+    const all = await readTrades();
+    const record = all.find((r) => r.id === req.params.id);
+    if (!record) return res.status(404).json({ error: `No analysis with id ${req.params.id}` });
+
+    const rule = record.analysis?.[modelId]?.rule;
+    if (!rule) {
+      return res.status(400).json({ error: `${modelId} proposed no rule for this session (it concluded nothing was tradeable).` });
+    }
+
+    const sessionList = priorSessions(record.sessionDate, sessions);
+    console.log(`[backtest] ${modelId}'s rule on ${record.symbol} across ${sessionList.length} sessions...`);
+
+    const result = await backtestRule(rule, {
+      ticker: record.symbol,
+      sessions: sessionList,
+      holdMinutes,
+    });
+    console.log(`[backtest] ${result.verdict}`);
+
+    // Persist the backtest onto the record, so a rule's real track record
+    // travels with the thesis that produced it and can't be quietly forgotten.
+    record.backtests = record.backtests || {};
+    record.backtests[modelId] = result;
+    await appendTrade(record);
+
+    res.json(result);
+  } catch (err) {
+    console.error("[backtest] FAILED:", err);
     res.status(500).json({ error: err.message });
   }
 });

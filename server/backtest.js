@@ -24,7 +24,7 @@
 //   - Exit is a fixed horizon after entry, decided in advance — never "sell at
 //     the top", which is the classic way to fake a great backtest.
 
-import { fetchAllEndpoints } from "./quantDataClient.js";
+import { fetchFeedsForRule } from "./quantDataClient.js";
 import { buildBriefing } from "./compress.js";
 
 // Rebuilds the per-minute z-scored series for the feeds a rule references, so
@@ -40,45 +40,46 @@ function buildSignalIndex(briefing) {
 }
 
 // Evaluates one rule against one session, returning every bar where it fired.
-// `windowMin` lets conditions co-occur within a few minutes rather than
-// demanding the exact same second, which is how a human would read a cluster.
-function findFirings(rule, briefing, { windowMin = 2 } = {}) {
+//
+// COOLDOWN — a real bug Claude caught by reading its own backtest:
+// A single premium spike doesn't last one minute; it lasts several. Without a
+// cooldown, one drift event re-triggers the rule on consecutive buckets and
+// gets counted as 5 separate "trades". That inflates the sample size, makes 6
+// real events look like 41 independent draws, and corrupts every statistic
+// downstream. One signal event = ONE trade. The cooldown enforces that.
+function findFirings(rule, briefing, { windowMin = 2, cooldownMin = 30 } = {}) {
   if (!rule?.conditions?.length) return [];
 
   const events = briefing.timeline.events;
   const firings = [];
-  const seen = new Set();
+  let lastFiringTs = -Infinity;
 
   for (const anchor of events) {
-    // Gather everything within +/- windowMin of this anchor event.
+    // Still inside the cooldown from the previous firing — this is the SAME
+    // event continuing, not a new independent opportunity.
+    if (anchor.ts - lastFiringTs < cooldownMin * 60_000) continue;
+
     const nearby = events.filter((e) => Math.abs(e.ts - anchor.ts) <= windowMin * 60_000);
 
-    const allMet = rule.conditions.every((cond) => {
-      return nearby.some((e) => {
-        if (e.endpoint !== cond.feed) return false;
-        // Conditions are stated in z-score terms (the models were told to use
-        // sigma), so compare against z, falling back to raw value if a model
-        // gave an absolute threshold instead.
-        const subject = Math.abs(Number(cond.threshold)) < 100 ? e.z : e.value;
-        const t = Number(cond.threshold);
-        switch (cond.operator) {
-          case ">": return subject > t;
-          case ">=": return subject >= t;
-          case "<": return subject < t;
-          case "<=": return subject <= t;
-          case "==": return subject === t;
-          default: return false;
-        }
-      });
-    });
+    const allMet = rule.conditions.every((cond) => nearby.some((e) => {
+      if (e.endpoint !== cond.feed) return false;
+      // Conditions are stated in sigma (the models were told so). Thresholds
+      // under 100 are read as z-scores; larger ones as raw values.
+      const t = Number(cond.threshold);
+      const subject = Math.abs(t) < 100 ? e.z : e.value;
+      switch (cond.operator) {
+        case ">": return subject > t;
+        case ">=": return subject >= t;
+        case "<": return subject < t;
+        case "<=": return subject <= t;
+        case "==": return subject === t;
+        default: return false;
+      }
+    }));
 
     if (allMet) {
-      // De-duplicate: a cluster spanning 3 minutes shouldn't count as 3 trades.
-      const bucket = Math.floor(anchor.ts / (windowMin * 60_000));
-      if (!seen.has(bucket)) {
-        seen.add(bucket);
-        firings.push({ ts: anchor.ts, clock: anchor.clock });
-      }
+      firings.push({ ts: anchor.ts, clock: anchor.clock });
+      lastFiringTs = anchor.ts;
     }
   }
   return firings;
@@ -125,13 +126,23 @@ export async function backtestRule(rule, { ticker, sessions, holdMinutes = 15, o
   const errors = [];
   const direction = directionOf(rule);
 
+  // Only the feeds this rule actually references get fetched — not all 30.
+  const feedIds = [...new Set(rule.conditions.map((c) => c.feed))];
+
   for (const sessionDate of sessions) {
     try {
-      const bundle = await fetchAllEndpoints({ ticker, sessionDate, startDate: sessionDate, endDate: sessionDate });
+      const bundle = await fetchFeedsForRule({ ticker, sessionDate, feedIds });
+
+      // A rate-limited session is NOT a session with no signal. Conflating the
+      // two is what made results irreproducible. Record it as a transient
+      // failure so `dataIntegrity` can warn loudly instead of quietly lying.
+      if (bundle.report.transientFailure) {
+        errors.push({ sessionDate, error: "TRANSIENT (rate limit / network) — not a real 'no data' result", transient: true });
+        continue;
+      }
+
       const briefing = buildBriefing(bundle);
 
-      // The underlying's real minute bars for this day — our P&L instrument.
-      const priceFeed = briefing.endpoints.find((e) => e.id === "stock_price_over_time");
       const priceBars = bundle.results.stock_price_over_time?.ok
         ? Object.entries(bundle.results.stock_price_over_time.data.data)
             .map(([ts, v]) => ({ ts: Number(ts), value: v.closePrice }))
@@ -139,7 +150,7 @@ export async function backtestRule(rule, { ticker, sessions, holdMinutes = 15, o
         : [];
 
       if (!priceBars.length) {
-        errors.push({ sessionDate, error: "no price bars" });
+        errors.push({ sessionDate, error: "no price bars (likely a market holiday)" });
         continue;
       }
 
@@ -172,12 +183,23 @@ export async function backtestRule(rule, { ticker, sessions, holdMinutes = 15, o
   // reported prominently so a tiny sample cannot masquerade as a strong result.
   const enoughData = trades.length >= 20;
 
+  // REPRODUCIBILITY: sessions that failed to fetch were previously dropped in
+  // silence, which meant the same rule on the same dates could return different
+  // numbers on different runs. A backtest you cannot reproduce is worthless, so
+  // failures are now surfaced as a first-class part of the result.
+  const sessionsActuallyTested = sessionResults.length;
+  const dataIntegrity = errors.length === 0
+    ? "All requested sessions returned data."
+    : `WARNING: ${errors.length}/${sessions.length} sessions returned no data and were excluded (${errors.map((e) => e.sessionDate).join(", ")}). Results are based on ${sessionsActuallyTested} sessions, not ${sessions.length}. Re-run if this looks like a transient fetch failure rather than market holidays.`;
+
   return {
     testable: true,
     rule: rule.description,
     ticker,
-    sessionsTested: sessions.length,
+    sessionsRequested: sessions.length,
+    sessionsTested: sessionsActuallyTested,
     sessionsWithErrors: errors.length,
+    dataIntegrity,
     totalTrades: trades.length,
     wins: wins.length,
     losses: losses.length,
@@ -192,7 +214,7 @@ export async function backtestRule(rule, { ticker, sessions, holdMinutes = 15, o
     verdict: !trades.length
       ? "NEVER FIRED. This rule's conditions were never met on any tested session. It is not a rule, it is a description of one specific afternoon."
       : !enoughData
-      ? `INSUFFICIENT SAMPLE. Only ${trades.length} firings across ${sessions.length} sessions. Any win rate here is noise — you need 20+ to say anything.`
+      ? `INSUFFICIENT SAMPLE. Only ${trades.length} firings across ${sessionsActuallyTested} sessions. Any win rate here is noise — you need 20+ to say anything.`
       : winRate >= 55 && avgReturn > 0
       ? `HOLDS UP SO FAR. ${trades.length} trades, ${winRate.toFixed(0)}% win rate, ${avgReturn.toFixed(2)}% average return per trade.`
       : `DOES NOT HOLD UP. ${trades.length} trades, ${winRate.toFixed(0)}% win rate, ${avgReturn.toFixed(2)}% average per trade. The single-day story did not survive contact with other days.`,

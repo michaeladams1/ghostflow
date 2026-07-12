@@ -549,7 +549,12 @@ Object.assign(COMPRESSORS, {
 import { QD_ENDPOINTS, QD_CONTRACT_ENDPOINTS } from "./quantDataRegistry.js";
 
 export function buildBriefing(bundle, { contract } = {}) {
-  const registry = contract ? [...QD_ENDPOINTS, ...QD_CONTRACT_ENDPOINTS] : QD_ENDPOINTS;
+  const fullRegistry = contract ? [...QD_ENDPOINTS, ...QD_CONTRACT_ENDPOINTS] : QD_ENDPOINTS;
+  // A backtest deliberately fetches only the feeds its rule references, so we
+  // must NOT then report the other 27 as "FAILED" — they were never requested.
+  // Only endpoints actually present in the bundle are considered.
+  const registry = fullRegistry.filter((ep) => bundle.results[ep.id] !== undefined);
+
   const endpoints = [];
   let allEvents = [];
   let priceSeries = [];
@@ -603,9 +608,14 @@ export function buildBriefing(bundle, { contract } = {}) {
     timeline: {
       priceThrusts: thrusts,
       totalSignalEvents: allEvents.length,
-      // Capped so the prompt stays readable; the lead/lag table below is the
-      // part that actually matters for entry timing.
-      events: allEvents.slice(0, 120),
+      // CRITICAL DISTINCTION (this was a real bug):
+      //   `events`       = the COMPLETE set. The backtest MUST use this one.
+      //   `promptEvents` = capped, purely so the text prompt stays readable.
+      // Previously the backtest read the capped list and was silently blind to
+      // every signal after the 120th of each day — quietly invalidating results.
+      // Never point computation at the display-truncated list.
+      events: allEvents,
+      promptEvents: allEvents.slice(0, 120),
       leadLag,
     },
     contractSeries,
@@ -641,6 +651,7 @@ export function renderBriefing(b) {
     });
   }
 
+  lines.push(`\n=== SIGNAL EVENTS DETECTED: ${b.timeline.totalSignalEvents} total across all feeds ===`);
   lines.push(`\n=== LEAD/LAG: WHAT FIRED *BEFORE* EACH MOVE ===`);
   lines.push(`Only signals timestamped STRICTLY BEFORE the move's start are listed. Anything at or after the move is a reaction, not a predictor, and is excluded by construction.\n`);
   if (!b.timeline.leadLag.length) {

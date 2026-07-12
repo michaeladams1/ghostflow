@@ -1,373 +1,263 @@
-import { useState, useMemo, useRef, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import {
-  Plus, X, CheckCircle2, XCircle, AlertTriangle, ChevronRight,
-  Users, FileText, LayoutDashboard, Minus, Send, MessageSquare, Clock, Copy, Settings, ExternalLink, Maximize2, Sun, Moon
+  Plus, X, CheckCircle2, XCircle, Minus, ChevronRight, Clock, Search,
+  FileText, LayoutDashboard, Settings, ExternalLink, AlertTriangle, Zap, FlaskConical, Eye, EyeOff
 } from "lucide-react";
 
-// ---------- Design tokens ----------
 const MODEL_META = {
-  claude:   { name: "Claude",   accent: "text-amber-400",   ring: "ring-amber-400/40",   bg: "bg-amber-400",   dot: "bg-amber-400" },
-  gpt:      { name: "GPT",      accent: "text-emerald-400", ring: "ring-emerald-400/40", bg: "bg-emerald-400", dot: "bg-emerald-400" },
-  grok:     { name: "Grok",     accent: "text-violet-400",  ring: "ring-violet-400/40",  bg: "bg-violet-400",  dot: "bg-violet-400" },
-  combined: { name: "Combined", accent: "text-zinc-200",    ring: "ring-zinc-300/30",    bg: "bg-zinc-300",    dot: "bg-zinc-300" },
+  claude: { name: "Claude", accent: "text-amber-400", dot: "bg-amber-400", hex: "#fbbf24" },
+  gpt:    { name: "GPT",    accent: "text-emerald-400", dot: "bg-emerald-400", hex: "#34d399" },
+  grok:   { name: "Grok",   accent: "text-violet-400", dot: "bg-violet-400", hex: "#a78bfa" },
 };
-const MODEL_ORDER = ["claude", "gpt", "grok", "combined"];
-
-// SVG fill/stroke need real color values, not Tailwind class names \u2014 these
-// match the Tailwind accent colors above so a model's chart marker matches
-// its tab color exactly.
-const MODEL_HEX = { claude: "#fbbf24", gpt: "#34d399", grok: "#a78bfa", combined: "#d4d4d8" };
+const MODEL_IDS = ["claude", "gpt", "grok"];
 
 const BILLING_LINKS = [
   { name: "OpenAI (GPT)", url: "https://platform.openai.com/settings/organization/billing/overview", accent: "text-emerald-400", dot: "bg-emerald-400" },
   { name: "Anthropic (Claude)", url: "https://platform.claude.com/dashboard", accent: "text-amber-400", dot: "bg-amber-400" },
-  { name: "xAI (Grok)", url: "https://console.x.ai/team/9213b43e-e5d1-46a8-a0f7-6e18f16e8fe1", accent: "text-violet-400", dot: "bg-violet-400" },
+  { name: "xAI (Grok)", url: "https://console.x.ai", accent: "text-violet-400", dot: "bg-violet-400" },
 ];
 
-const INDICATOR_META = {
-  volume:   { label: "Volume",         color: "#38bdf8" },
-  gex:      { label: "GEX",            color: "#f472b6" },
-  darkpool: { label: "Dark Pool",      color: "#a78bfa" },
-  flow:     { label: "Flow",           color: "#facc15" },
-  iv:       { label: "IV",             color: "#4ade80" },
-  rs:       { label: "Relative Strength", color: "#22d3ee" },
-};
-// Mock example trades have been removed now that the real pipeline (Trade
-// Log -> Databento + Quant Data -> Claude/GPT/Grok analysis) is working.
-// The Trade Log now loads real trades only via GET /api/trades.
-
-const THESES = {
-  claude:   {
-    setup: ["Base n' Break or Wedge Pop off the 10/20 EMA", "Volume \u2265 30-40% above 20-day average on the trigger bar", "IV expanding into the move, not collapsing"],
-    confidence: "Medium \u2014 see Supporting Evidence / Counter-Examples below for the trades this is based on right now.",
-    notes: "Volume threshold is the main open question \u2014 I currently require +30-40% vs the 20-day average, but Grok's bar is stricter and hasn't converged with mine yet.",
-    lastUpdated: "Trade #26",
-  },
-  gpt:      {
-    setup: ["Sustained call/put buying with rising open interest (not just volume)", "Skew shift consistent with dealer hedging pressure", "Flow precedes price, not the reverse"],
-    confidence: "Medium \u2014 see Supporting Evidence / Counter-Examples below for the trades this is based on right now.",
-    notes: "Open interest building (not just volume) is the key discriminator I use \u2014 several near-misses had normal volume but declining OI, which is why that distinction is now a hard requirement.",
-    lastUpdated: "Trade #26",
-  },
-  grok:     {
-    setup: ["Relative strength/weakness vs. sector ETF, especially during a pullback", "Divergence must be fresh, not already priced in for 2+ weeks", "\"Stubborn to the downside\" price action on lower timeframes"],
-    confidence: "Low-Medium \u2014 see Supporting Evidence / Counter-Examples below for the trades this is based on right now.",
-    notes: "I'm the most conservative of the three on volume confirmation, which is why I sometimes dissent from Claude/GPT on the same trade (see Points of Disagreement on individual trades). Not yet resolved into a shared rule.",
-    lastUpdated: "Trade #26",
-  },
-  combined: {
-    setup: ["High-confidence: Base/Wedge structure + confirming volume + confirming flow, all three agree", "Open disagreement: volume threshold for a valid 'pop' (Grok wants a higher bar than Claude/GPT \u2014 tracked, not resolved)"],
-    confidence: "Reflects only trades where at least 2 of 3 analysts agree \u2014 see below for exactly which ones.",
-    notes: "This view merges the 3 individual theses but preserves disagreement rather than averaging it away. A claim only appears here once 2 of 3 analysts independently support it.",
-    lastUpdated: "Trade #26",
-  },
-};
-
-// ---------- Small building blocks ----------
-function VerdictBadge({ verdict }) {
+// ---------- primitives ----------
+function Verdict({ v }) {
   const map = {
-    signal:   { label: "SIGNAL",   cls: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30", Icon: CheckCircle2 },
-    noise:    { label: "NOISE",    cls: "bg-zinc-500/15 text-zinc-400 border-zinc-500/30",           Icon: Minus },
-    contrast: { label: "AVOID \u2014 NEAR-MISS", cls: "bg-amber-500/15 text-amber-400 border-amber-500/30", Icon: AlertTriangle },
-    "low-info": { label: "AVOID \u2014 LOW INFO", cls: "bg-zinc-600/20 text-zinc-500 border-zinc-600/30", Icon: XCircle },
+    tradeable: { label: "TRADEABLE", cls: "bg-emerald-500/15 text-emerald-400 border-emerald-500/30", Icon: CheckCircle2 },
+    not_tradeable: { label: "NOT TRADEABLE", cls: "bg-zinc-500/15 text-zinc-400 border-zinc-500/30", Icon: Minus },
   };
-  const m = map[verdict] || map.noise;
+  const m = map[v] || map.not_tradeable;
   const I = m.Icon;
   return (
-    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-xs font-mono tracking-wide ${m.cls}`}>
+    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border text-xs font-mono ${m.cls}`}>
       <I size={13} /> {m.label}
     </span>
   );
 }
 
-function StatusPill({ status }) {
-  const map = {
-    win: { label: "WIN", cls: "bg-emerald-500/15 text-emerald-400" },
-    "near-miss-loss": { label: "NEAR-MISS LOSS", cls: "bg-amber-500/15 text-amber-400" },
-    "low-info-loss": { label: "LOW-INFO LOSS", cls: "bg-zinc-600/20 text-zinc-500" },
-  };
-  const m = map[status];
-  return <span className={`px-2 py-0.5 rounded text-[11px] font-mono ${m.cls}`}>{m.label}</span>;
-}
+// THE FEED AUDIT — the visual proof that a model actually looked at all 30.
+// Three states, and the distinction between the last two is the whole point:
+//   USED     (green)  — examined AND incorporated into the thesis
+//   EXAMINED (grey)   — looked at, judged irrelevant. This is a GOOD outcome.
+//   SKIPPED  (red)    — the model failed to report on it. A real defect.
+function FeedAudit({ review }) {
+  const [showAll, setShowAll] = useState(false);
+  if (!review?.length) return <p className="text-xs text-zinc-600 italic">No feed review returned.</p>;
 
-function StatCard({ label, value, sub }) {
+  const used = review.filter((r) => r.used);
+  const examined = review.filter((r) => !r.used && r.reviewed);
+  const skipped = review.filter((r) => !r.reviewed);
+  const visible = showAll ? review : [...used, ...skipped];
+
   return (
-    <div className="bg-zinc-900 border border-zinc-800 rounded-lg px-4 py-3">
-      <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono">{label}</div>
-      <div className="text-2xl font-mono text-zinc-100 mt-1">{value}</div>
-      {sub && <div className="text-xs text-zinc-500 mt-0.5">{sub}</div>}
+    <div>
+      <div className="flex items-center gap-3 mb-2 text-[11px] font-mono">
+        <span className="text-emerald-400">{used.length} used</span>
+        <span className="text-zinc-500">{examined.length} examined, not used</span>
+        {skipped.length > 0
+          ? <span className="text-red-400">{skipped.length} SKIPPED</span>
+          : <span className="text-zinc-600">0 skipped</span>}
+        <button onClick={() => setShowAll((s) => !s)}
+          className="ml-auto flex items-center gap-1 text-zinc-500 hover:text-zinc-300">
+          {showAll ? <EyeOff size={12} /> : <Eye size={12} />}
+          {showAll ? "hide" : `show all ${review.length}`}
+        </button>
+      </div>
+
+      {/* Compact strip: one cell per feed, so "did it look at everything?" is answerable at a glance. */}
+      <div className="flex flex-wrap gap-1 mb-3">
+        {review.map((r) => (
+          <span key={r.id} title={`${r.id}: ${r.used ? "USED" : r.reviewed ? "examined, not used" : "SKIPPED"}`}
+            className={`w-2.5 h-2.5 rounded-sm ${!r.reviewed ? "bg-red-500" : r.used ? "bg-emerald-400" : "bg-zinc-700"}`} />
+        ))}
+      </div>
+
+      <div className="space-y-1.5">
+        {visible.map((r) => (
+          <div key={r.id} className={`text-xs px-2.5 py-2 rounded border ${
+            !r.reviewed ? "bg-red-500/5 border-red-500/30"
+            : r.used ? "bg-emerald-500/5 border-emerald-500/20"
+            : "bg-zinc-900 border-zinc-800"}`}>
+            <div className="flex items-center gap-1.5 mb-1">
+              {!r.reviewed ? <XCircle size={12} className="text-red-400 flex-shrink-0" />
+                : r.used ? <CheckCircle2 size={12} className="text-emerald-400 flex-shrink-0" />
+                : <Minus size={12} className="text-zinc-600 flex-shrink-0" />}
+              <span className="font-mono text-zinc-300">{r.id}</span>
+              <span className={`ml-auto text-[10px] font-mono ${!r.reviewed ? "text-red-400" : r.used ? "text-emerald-400" : "text-zinc-600"}`}>
+                {!r.reviewed ? "SKIPPED" : r.used ? "USED" : "not used"}
+              </span>
+            </div>
+            <p className="text-zinc-400 leading-relaxed pl-[18px]">{r.notes}</p>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
 
-// Simple EMA calculation, used for Claude's chart overlay (its thesis is
-// EMA-based, so its tab always shows the EMAs it actually reasons about).
-function computeEMA(closes, period) {
-  const k = 2 / (period + 1);
-  const out = [];
-  let prev = closes[0];
-  closes.forEach((c, i) => {
-    if (i === 0) { out.push(c); prev = c; return; }
-    prev = c * k + prev * (1 - k);
-    out.push(prev);
-  });
-  return out;
-}
+function BacktestPanel({ analysisId, modelId, rule, existing, onDone }) {
+  const [running, setRunning] = useState(false);
+  const [result, setResult] = useState(existing || null);
+  const [err, setErr] = useState(null);
 
-// Interactive candlestick chart with a real crosshair + hover tooltip
-// (TradingView-style), a volume subplot, entry/exit markers, and an optional
-// EMA overlay. Renders whatever bar series it's given — 15-min intraday by
-// default, daily as a fallback when intraday data wasn't available.
-function CandlestickChart({ bars, entryIdx, exitIdx, status, overlay = {}, height = 320, modelEntry = null }) {
-  const [hover, setHover] = useState(null);
-  const svgRef = useRef(null);
-
-  if (!bars || bars.length === 0) {
-    return <div className="text-xs text-zinc-600 italic py-10 text-center border border-zinc-800 rounded-lg">No chart data available.</div>;
-  }
-
-  const w = 900, pad = 30, axisW = 56, axisH = 20;
-  const priceBottom = height - 74;
-  const volumeTop = priceBottom + 16;
-  const volumeBottom = height - 22;
-  const plotRight = w - axisW; // leave room for the right-side price axis
-
-  const highs = bars.map((b) => b.high), lows = bars.map((b) => b.low);
-  const min = Math.min(...lows), max = Math.max(...highs);
-  const x = (i) => pad + (i / Math.max(1, bars.length - 1)) * (plotRight - pad);
-  const yScale = (v) => priceBottom - ((v - min) / (max - min || 1)) * (priceBottom - pad);
-  const candleW = Math.max(2, ((plotRight - pad) / bars.length) * 0.7);
-  const volMax = Math.max(...bars.map((b) => b.volume), 1);
-  const emaSeries = overlay.ema || [];
-
-  // Trend cloud: always-on baseline styling (every tab, not model-specific) —
-  // a shaded ribbon between price and a trend EMA, green when price is
-  // above it (buy zone), red when below (sell zone).
-  const trendEma = computeEMA(bars.map((b) => b.close), 9);
-  const cloudSegments = [];
-  {
-    let start = 0;
-    for (let i = 1; i <= bars.length; i++) {
-      const prevBullish = bars[i - 1].close >= trendEma[i - 1];
-      const currBullish = i < bars.length ? bars[i].close >= trendEma[i] : prevBullish;
-      if (currBullish !== prevBullish || i === bars.length) {
-        cloudSegments.push({ start, end: i - 1, bullish: prevBullish });
-        start = i;
-      }
-    }
-  }
-
-  // Session (day) bands, alternating so each calendar day is visually distinct.
-  const dayBands = [];
-  {
-    let start = 0, curDay = bars[0].date.slice(0, 10);
-    for (let i = 1; i <= bars.length; i++) {
-      const day = i < bars.length ? bars[i].date.slice(0, 10) : null;
-      if (day !== curDay) {
-        dayBands.push({ start, end: i - 1, day: curDay });
-        start = i;
-        curDay = day;
-      }
-    }
-  }
-
-  // Right-side price axis: 5 evenly spaced levels.
-  const priceTicks = Array.from({ length: 5 }, (_, i) => min + ((max - min) * i) / 4);
-
-  // Bottom date/time axis: ~6 evenly spaced bar indices.
-  const timeTickCount = Math.min(6, bars.length);
-  const timeTicks = Array.from({ length: timeTickCount }, (_, i) => Math.round((i / Math.max(1, timeTickCount - 1)) * (bars.length - 1)));
-  const spansMultipleDays = dayBands.length > 1;
-
-  const handleMove = (e) => {
-    if (!svgRef.current) return;
-    const rect = svgRef.current.getBoundingClientRect();
-    // preserveAspectRatio="none" below means rect.width maps 1:1 to the
-    // viewBox width with no letterboxing, so this stays accurate at any size.
-    const relX = ((e.clientX - rect.left) / rect.width) * w;
-    const idx = Math.max(0, Math.min(bars.length - 1, Math.round(((relX - pad) / (plotRight - pad)) * (bars.length - 1))));
-    setHover(idx);
+  const run = async () => {
+    setRunning(true); setErr(null);
+    try {
+      const res = await fetch(`/api/analyses/${analysisId}/backtest`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ modelId, sessions: 20, holdMinutes: 15 }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Backtest failed");
+      setResult(data); onDone?.(modelId, data);
+    } catch (e) { setErr(e.message); }
+    setRunning(false);
   };
 
-  const hoveredBar = hover != null ? bars[hover] : null;
-  const safeEntryIdx = Math.min(entryIdx ?? 0, bars.length - 1);
-  const safeExitIdx = Math.min(exitIdx ?? bars.length - 1, bars.length - 1);
+  if (!rule) {
+    return (
+      <div className="mt-4 px-3 py-2.5 rounded-lg border border-zinc-800 bg-zinc-950/60">
+        <p className="text-xs text-zinc-500">This model proposed no rule — it concluded nothing here was tradeable. Nothing to backtest, which is a legitimate outcome.</p>
+      </div>
+    );
+  }
+
+  // The verdict wording comes straight from the engine, including when it's bad
+  // news. A rule that fails is displayed as prominently as one that passes.
+  const failed = result && (result.verdict?.startsWith("DOES NOT") || result.verdict?.startsWith("NEVER") || result.verdict?.startsWith("INSUFFICIENT"));
 
   return (
-    <div className="relative">
-      <svg ref={svgRef} viewBox={`0 0 ${w} ${height}`} preserveAspectRatio="none" className="w-full cursor-crosshair" style={{ height }}
-        onMouseMove={handleMove} onMouseLeave={() => setHover(null)}>
-        {dayBands.map((band, i) => (
-          i % 2 === 1 ? <rect key={i} x={x(band.start) - candleW} y={pad} width={x(band.end) - x(band.start) + candleW * 2} height={volumeBottom - pad}
-            fill="#888888" opacity="0.06" /> : null
-        ))}
-
-        {priceTicks.map((p, i) => (
-          <g key={i}>
-            <line x1={pad} y1={yScale(p)} x2={plotRight} y2={yScale(p)} stroke="#888888" strokeWidth="1" strokeDasharray="2,3" opacity="0.25" />
-            <text x={plotRight + 6} y={yScale(p)} fontSize="10" fill="#71717a" fontFamily="monospace" dominantBaseline="central">{p.toFixed(2)}</text>
-          </g>
-        ))}
-
-        {cloudSegments.map((seg, si) => {
-          const idxs = [];
-          for (let i = seg.start; i <= seg.end; i++) idxs.push(i);
-          const topPts = idxs.map((i) => `${x(i)},${yScale(bars[i].close)}`);
-          const bottomPts = idxs.slice().reverse().map((i) => `${x(i)},${yScale(trendEma[i])}`);
-          return (
-            <polygon key={si} points={[...topPts, ...bottomPts].join(" ")}
-              fill={seg.bullish ? "#22c55e" : "#ef4444"} opacity="0.16" />
-          );
-        })}
-        <polyline points={trendEma.map((v, i) => `${x(i)},${yScale(v)}`).join(" ")} fill="none" stroke="#0d9488" strokeWidth="1.5" opacity="0.8" />
-
-        {bars.map((b, i) => {
-          const up = b.close >= b.open;
-          const color = up ? "#34d399" : "#f87171";
-          const cx = x(i);
-          const bodyTop = yScale(Math.max(b.open, b.close));
-          const bodyH = Math.max(1, Math.abs(yScale(b.open) - yScale(b.close)));
-          return (
-            <g key={i}>
-              <line x1={cx} y1={yScale(b.high)} x2={cx} y2={yScale(b.low)} stroke={color} strokeWidth="1" />
-              <rect x={cx - candleW / 2} y={bodyTop} width={candleW} height={bodyH} fill={color} />
-            </g>
-          );
-        })}
-
-        {emaSeries.map((s, si) => (
-          <polyline key={si} points={s.data.map((v, i) => `${x(i)},${yScale(v)}`).join(" ")} fill="none" stroke={s.color} strokeWidth="1.5" opacity="0.85" />
-        ))}
-        {emaSeries.length > 0 && (
-          <text x={plotRight} y={pad - 8} fontSize="10" fontFamily="monospace" textAnchor="end" fill="#a1a1aa">
-            {emaSeries.map((s) => `EMA${s.period}`).join("  ")}
-          </text>
+    <div className="mt-4">
+      <div className="flex items-center gap-2 mb-2">
+        <FlaskConical size={14} className="text-zinc-500" />
+        <span className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono">Backtest — does this rule survive other days?</span>
+        {!result && (
+          <button onClick={run} disabled={running}
+            className="ml-auto text-xs px-2.5 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-200 disabled:opacity-50">
+            {running ? "Running 20 sessions…" : "Run backtest"}
+          </button>
         )}
+      </div>
 
-        {(() => {
-          const exitBar = bars[safeExitIdx];
-          const exitAnchorY = yScale(exitBar.high);
-          const tagW = 44, tagH = 20;
-          const exitTagY = exitAnchorY - 10 - tagH; // SELL tag sits above its anchor, pointing down
+      {err && <p className="text-xs text-red-400 mb-2">{err}</p>}
 
-          // If we have this model's OWN entry pick, the logged entry becomes a
-          // small muted reference marker (fact, not endorsement) and the
-          // model's pick becomes the prominent colored tag. If we don't have
-          // a model pick (combined tab, or data not available yet), fall back
-          // to the original single green BUY tag at the logged entry.
-          const hasModelPick = modelEntry && modelEntry.idx != null;
-          const safeModelIdx = hasModelPick ? Math.min(modelEntry.idx, bars.length - 1) : null;
-          const overlap = hasModelPick && safeModelIdx === safeEntryIdx;
-
-          const entryBar = bars[safeEntryIdx];
-          const entryAnchorY = yScale(entryBar.low);
-          const entryTagY = entryAnchorY + 10;
-          const entryTagW = hasModelPick ? 52 : tagW;
-          const entryX = hasModelPick && overlap ? x(safeEntryIdx) - 30 : x(safeEntryIdx);
-
-          return (
-            <>
-              {hasModelPick ? (
-                <>
-                  {/* Logged entry \u2014 muted reference marker, not a recommendation */}
-                  <line x1={entryX} y1={entryAnchorY} x2={entryX} y2={entryTagY} stroke="#71717a" strokeWidth="1" strokeDasharray="2,2" />
-                  <rect x={entryX - entryTagW / 2} y={entryTagY} width={entryTagW} height={tagH} rx="4" fill="none" stroke="#71717a" strokeWidth="1" />
-                  <text x={entryX} y={entryTagY + tagH / 2 + 1} fontSize="9" fontWeight="600" fill="#a1a1aa" textAnchor="middle" dominantBaseline="central" fontFamily="monospace">LOGGED</text>
-
-                  {/* This model's own, independently-chosen entry pick */}
-                  {(() => {
-                    const pickBar = bars[safeModelIdx];
-                    const pickAnchorY = yScale(pickBar.low);
-                    const pickTagY = pickAnchorY + 10;
-                    const pickTagW = 60;
-                    return (
-                      <>
-                        <line x1={x(safeModelIdx)} y1={pickAnchorY} x2={x(safeModelIdx)} y2={pickTagY} stroke={modelEntry.color} strokeWidth="1.5" />
-                        <rect x={x(safeModelIdx) - pickTagW / 2} y={pickTagY} width={pickTagW} height={tagH} rx="4" fill={modelEntry.color} />
-                        <text x={x(safeModelIdx)} y={pickTagY + tagH / 2 + 1} fontSize="9" fontWeight="700" fill="#052e16" textAnchor="middle" dominantBaseline="central" fontFamily="monospace">{modelEntry.label}</text>
-                      </>
-                    );
-                  })()}
-                </>
-              ) : (
-                <>
-                  <line x1={x(safeEntryIdx)} y1={entryAnchorY} x2={x(safeEntryIdx)} y2={entryTagY} stroke="#22c55e" strokeWidth="1.5" />
-                  <rect x={x(safeEntryIdx) - tagW / 2} y={entryTagY} width={tagW} height={tagH} rx="4" fill="#22c55e" />
-                  <text x={x(safeEntryIdx)} y={entryTagY + tagH / 2 + 1} fontSize="10" fontWeight="700" fill="#052e16" textAnchor="middle" dominantBaseline="central" fontFamily="monospace">BUY</text>
-                </>
-              )}
-
-              <line x1={x(safeExitIdx)} y1={exitAnchorY} x2={x(safeExitIdx)} y2={exitTagY + tagH} stroke="#ef4444" strokeWidth="1.5" />
-              <rect x={x(safeExitIdx) - tagW / 2} y={exitTagY} width={tagW} height={tagH} rx="4" fill="#ef4444" />
-              <text x={x(safeExitIdx)} y={exitTagY + tagH / 2 + 1} fontSize="10" fontWeight="700" fill="#450a0a" textAnchor="middle" dominantBaseline="central" fontFamily="monospace">SELL</text>
-            </>
-          );
-        })()}
-
-        <text x={pad} y={volumeTop - 4} fontSize="9" fill="#71717a" fontFamily="monospace">VOLUME</text>
-        {bars.map((b, i) => {
-          const barW = candleW;
-          const barH = (b.volume / volMax) * (volumeBottom - volumeTop);
-          const up = b.close >= b.open;
-          return <rect key={i} x={x(i) - barW / 2} y={volumeBottom - barH} width={barW} height={barH}
-            fill={up ? "#34d399" : "#f87171"} opacity={overlay.emphasizeVolume ? 0.95 : 0.5} />;
-        })}
-
-        {timeTicks.map((idx, i) => {
-          const bar = bars[idx];
-          const label = spansMultipleDays
-            ? new Date(bar.date).toLocaleDateString(undefined, { month: "short", day: "numeric" })
-            : new Date(bar.date).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
-          return (
-            <g key={i}>
-              <line x1={x(idx)} y1={pad} x2={x(idx)} y2={volumeBottom} stroke="#888888" strokeWidth="1" strokeDasharray="2,3" opacity="0.15" />
-              <text x={x(idx)} y={height - 6} fontSize="9" fill="#71717a" fontFamily="monospace" textAnchor="middle">{label}</text>
-            </g>
-          );
-        })}
-
-        {hover != null && (
-          <>
-            <line x1={x(hover)} y1={pad} x2={x(hover)} y2={volumeBottom} stroke="#a1a1aa" strokeWidth="1" strokeDasharray="3,3" />
-            <line x1={pad} y1={yScale(bars[hover].close)} x2={plotRight} y2={yScale(bars[hover].close)} stroke="#a1a1aa" strokeWidth="1" strokeDasharray="3,3" opacity="0.5" />
-          </>
-        )}
-      </svg>
-
-      {hoveredBar && (
-        <div className="absolute top-1 left-1 bg-zinc-950/95 border border-zinc-800 rounded px-2 py-1 text-[10px] font-mono text-zinc-300 pointer-events-none">
-          <div className="text-zinc-500">{new Date(hoveredBar.date).toLocaleString()}</div>
-          <div>O {hoveredBar.open.toFixed(2)} H {hoveredBar.high.toFixed(2)} L {hoveredBar.low.toFixed(2)} C {hoveredBar.close.toFixed(2)}</div>
-          <div className="text-zinc-500">Vol {Math.round(hoveredBar.volume).toLocaleString()}</div>
+      {result && (
+        <div className={`px-3 py-3 rounded-lg border ${failed ? "bg-red-500/5 border-red-500/30" : "bg-emerald-500/5 border-emerald-500/30"}`}>
+          <div className={`text-sm font-medium mb-2 ${failed ? "text-red-400" : "text-emerald-400"}`}>
+            {result.verdict}
+          </div>
+          {result.totalTrades > 0 && (
+            <div className="grid grid-cols-4 gap-2 text-center">
+              {[["Trades", result.totalTrades], ["Win rate", `${result.winRate}%`],
+                ["Avg/trade", `${result.avgReturnPct}%`], ["Profit factor", result.profitFactor]].map(([k, v]) => (
+                <div key={k}>
+                  <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-mono">{k}</div>
+                  <div className="text-sm font-mono text-zinc-200">{v}</div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
   );
 }
 
-function IndicatorLegend({ flags = [] }) {
-  if (flags.length === 0) {
-    return <p className="text-xs text-zinc-600 italic">No indicator combination flagged — no real setup detected here.</p>;
+function ModelPanel({ record, modelId, onBacktestDone }) {
+  const a = record.analysis?.[modelId];
+  if (!a) return <p className="text-sm text-zinc-500">No analysis.</p>;
+  if (a.failed) {
+    return (
+      <div className="px-3 py-3 rounded-lg border border-red-500/30 bg-red-500/5">
+        <p className="text-sm text-red-400">{a.reasoning}</p>
+        <p className="text-xs text-zinc-500 mt-1">This model has NO opinion on this session — it is excluded from the agreement count, not counted as a vote.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-3">
+        <Verdict v={a.verdict} />
+        {a.confidence > 0 && <span className="text-xs font-mono text-zinc-500">confidence {a.confidence}%</span>}
+      </div>
+
+      {a.entry?.timestamp ? (
+        <div className="mb-4 px-3 py-2.5 rounded-lg border border-zinc-800 bg-zinc-950/60">
+          <div className="flex items-center gap-1.5 mb-1">
+            <Zap size={13} style={{ color: MODEL_META[modelId].hex }} />
+            <span className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono">Entry it would have taken</span>
+          </div>
+          <div className="text-lg font-mono text-zinc-100">
+            {a.entry.timestamp}
+            {a.entry.leadMinutes != null && <span className="text-xs text-zinc-500 ml-2">{a.entry.leadMinutes} min before the move</span>}
+          </div>
+          <p className="text-sm text-zinc-400 mt-1 leading-relaxed">{a.entry.reasoning}</p>
+          {a.entry.corroboratingFeeds?.length > 0 && (
+            <div className="flex flex-wrap gap-1 mt-2">
+              {a.entry.corroboratingFeeds.map((f) => (
+                <span key={f} className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400">{f}</span>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="mb-4 px-3 py-2.5 rounded-lg border border-zinc-800 bg-zinc-950/60">
+          <p className="text-sm text-zinc-400">No defensible entry. This model concluded the move was not knowable in advance — a legitimate and useful finding.</p>
+        </div>
+      )}
+
+      <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono mb-1">Reasoning</div>
+      <p className="text-sm text-zinc-300 leading-relaxed mb-4">{a.reasoning}</p>
+
+      {a.rule && (
+        <>
+          <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono mb-1">Proposed rule</div>
+          <p className="text-sm text-zinc-300 leading-relaxed mb-2 font-mono bg-zinc-900 border border-zinc-800 rounded px-2.5 py-2">{a.rule.description}</p>
+        </>
+      )}
+
+      {a.falsification && (
+        <>
+          <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono mb-1">What would prove it wrong</div>
+          <p className="text-sm text-zinc-400 leading-relaxed mb-4">{a.falsification}</p>
+        </>
+      )}
+
+      <BacktestPanel analysisId={record.id} modelId={modelId} rule={a.rule}
+        existing={record.backtests?.[modelId]} onDone={onBacktestDone} />
+
+      <div className="mt-5">
+        <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono mb-2">
+          Feed audit — all {a.endpointReview?.length ?? 0} data feeds
+        </div>
+        <FeedAudit review={a.endpointReview} />
+      </div>
+    </div>
+  );
+}
+
+function Timeline({ timeline }) {
+  if (!timeline?.priceThrusts?.length) {
+    return <p className="text-xs text-zinc-500 italic">No statistically significant price move detected this session.</p>;
   }
   return (
     <div className="space-y-2">
-      {flags.map((f, i) => {
-        const meta = INDICATOR_META[f.type] || { color: "#a1a1aa", label: f.type };
+      {timeline.priceThrusts.map((t, i) => {
+        const ll = timeline.leadLag?.[i];
         return (
-          <div key={i} className="text-xs font-mono px-2.5 py-2 rounded bg-zinc-900 border border-zinc-800">
-            <div className="flex items-center gap-1.5 mb-1">
-              <span className="w-2 h-2 rounded-sm flex-shrink-0" style={{ background: meta.color }} />
-              <span className="text-zinc-400">{meta.label}:</span>
-              <span className="text-zinc-200">{f.label}</span>
+          <div key={i} className="px-3 py-2 rounded border border-zinc-800 bg-zinc-900">
+            <div className="flex items-center gap-2 text-sm font-mono">
+              <span className={t.direction === "UP" ? "text-emerald-400" : "text-red-400"}>
+                {t.direction} {t.pctMove}%
+              </span>
+              <span className="text-zinc-500">{t.startClock} → {t.endClock}</span>
+              <span className="text-zinc-600 text-xs ml-auto">{t.z}σ</span>
             </div>
-            {(f.value || f.baseline) && (
-              <div className="text-zinc-500 pl-3.5">
-                {f.value && <span className="text-zinc-300">{f.value}</span>}
-                {f.value && f.baseline && <span> vs </span>}
-                {f.baseline && <span>{f.baseline}</span>}
+            {ll && (
+              <div className="text-xs text-zinc-500 mt-1">
+                {ll.precursorCount === 0
+                  ? "Nothing fired in advance — this move was likely not knowable."
+                  : `${ll.precursorCount} precursor signals across ${ll.corroborationScore} feeds: ${ll.corroboratingFeeds.join(", ")}`}
               </div>
             )}
-            {f.source && <div className="text-zinc-600 pl-3.5 italic mt-0.5">Source: {f.source}</div>}
           </div>
         );
       })}
@@ -375,780 +265,214 @@ function IndicatorLegend({ flags = [] }) {
   );
 }
 
-
-// ---------- Per-trade, per-model Q&A ----------
-// Scoped ONLY to this trade + this model's analysis + this model's thesis excerpt.
-// PROTOTYPE NOTE: this is a canned keyword-matched responder, not a live model call.
-// In the real system this becomes an actual API call to that model, with a system
-// prompt containing only: this trade's pulled data, this model's analysis, and the
-// relevant slice of this model's thesis document \u2014 nothing else.
-function mockReply(trade, modelId, question) {
-  const a = trade.analysis[modelId];
-  const thesis = THESES[modelId];
-  const q = question.toLowerCase();
-
-  if (q.includes("why") && (q.includes("buy") || q.includes("enter") || q.includes("this") || q.includes("do"))) {
-    return a.text;
-  }
-  if (q.includes("exit") || q.includes("sell") || q.includes("out")) {
-    return a.verdict === "signal"
-      ? `Exit was tied to price reaching the target zone shown on the chart. In this thesis, once a trade like this extends the way ${trade.symbol} did, ${MODEL_META[modelId].name === "Combined" ? "the group" : MODEL_META[modelId].name} treats further upside as lower-probability and books the win rather than pushing for more.`
-      : `There wasn't a clean exit thesis here \u2014 this trade didn't confirm the setup in the first place, so the "exit" is really just where the stop got taken.`;
-  }
-  if (q.includes("not") || q.includes("avoid") || q.includes("risk") || q.includes("why not")) {
-    return a.verdict === "signal" || a.verdict === "noise"
-      ? `The main risk I flagged going in: ${a.flags[0] ? a.flags[0].label.toLowerCase() : "confirmation was thinner than my strongest setups"}. That's why confidence here is ${a.confidence}%, not higher.`
-      : `I'd avoid this one. ${a.text}`;
-  }
-  if (q.includes("indicator") || q.includes("gex") || q.includes("volume") || q.includes("dark pool") || q.includes("flow")) {
-    return a.flags.length
-      ? `The specific combination I weighted here: ${a.flags.map((f) => (INDICATOR_META[f.type] || {}).label + " (" + f.label + ")").join(", ")}.`
-      : `No indicator combination cleared my bar on this trade \u2014 that's exactly why it's flagged as low information rather than a real counter-example.`;
-  }
-  return `On this specific trade: ${a.text} This ties into the broader thesis (${thesis.confidence}), but my answer above is scoped to ${trade.symbol} only \u2014 ask me about the thesis in general from the Theses tab.`;
-}
-
-function ChatPanel({ trade, modelId }) {
-  const [messages, setMessages] = useState([
-    { role: "assistant", text: `Ask me anything about this ${trade.symbol} trade \u2014 why I entered, why not something else, what I'd need to see to be more confident. I'll only use this trade's data and my own thesis.` },
-  ]);
-  const [input, setInput] = useState("");
-  const endRef = useRef(null);
-
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
-
-  const send = () => {
-    const text = input.trim();
-    if (!text) return;
-    const reply = mockReply(trade, modelId, text);
-    setMessages((m) => [...m, { role: "user", text }, { role: "assistant", text: reply }]);
-    setInput("");
-  };
+function AnalysisDetail({ record, onClose, onBacktestDone }) {
+  const [tab, setTab] = useState("claude");
+  const combined = record.analysis?.combined;
 
   return (
-    <div className="border border-zinc-800 rounded-lg mt-4">
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-zinc-800 bg-zinc-900/50">
-        <MessageSquare size={14} className={MODEL_META[modelId].accent} />
-        <span className="text-xs font-mono text-zinc-400">Ask {MODEL_META[modelId].name} about this trade only</span>
-        <span className="ml-auto text-[10px] font-mono text-zinc-600">prototype — canned replies</span>
-      </div>
-      <div className="max-h-56 overflow-y-auto px-3 py-2 space-y-2">
-        {messages.map((m, i) => (
-          <div key={i} className={`text-sm ${m.role === "user" ? "text-zinc-300 pl-4" : "text-zinc-400"}`}>
-            <span className={`text-[11px] font-mono mr-2 ${m.role === "user" ? "text-zinc-600" : MODEL_META[modelId].accent}`}>
-              {m.role === "user" ? "you" : MODEL_META[modelId].name.toLowerCase()}
-            </span>
-            {m.text}
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+      <div className="bg-zinc-950 border border-zinc-800 rounded-xl w-full max-w-3xl max-h-[92vh] overflow-y-auto">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-800 sticky top-0 bg-zinc-950 z-10">
+          <div className="flex items-center gap-3">
+            <h3 className="text-zinc-100 font-semibold text-lg">{record.symbol}</h3>
+            <span className="text-xs font-mono text-zinc-500">{record.sessionDate}</span>
+            {combined && <Verdict v={combined.verdict} />}
+            <span className="text-xs font-mono text-zinc-600">agreement {record.agreement}</span>
           </div>
-        ))}
-        <div ref={endRef} />
-      </div>
-      <div className="flex gap-2 p-2 border-t border-zinc-800">
-        <input
-          value={input}
-          onChange={(e) => setInput(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && send()}
-          placeholder="Why this trade, and not another setup?"
-          className="flex-1 bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-sm text-zinc-100 focus:outline-none focus:ring-2 focus:ring-emerald-500/40"
-        />
-        <button onClick={send} className="px-3 py-1.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300">
-          <Send size={14} />
-        </button>
+          <button onClick={onClose} className="text-zinc-500 hover:text-zinc-300"><X size={18} /></button>
+        </div>
+
+        <div className="px-5 py-4 border-b border-zinc-800">
+          <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono mb-2">
+            Price moves detected (computed, not opinion)
+          </div>
+          <Timeline timeline={record.briefing?.timeline} />
+          {record.briefing?.fetchReport && (
+            <p className="text-[11px] font-mono text-zinc-600 mt-2">
+              {record.briefing.fetchReport.succeeded}/{record.briefing.fetchReport.attempted} feeds fetched successfully
+            </p>
+          )}
+        </div>
+
+        <div className="flex gap-1 px-5 pt-4 border-b border-zinc-800">
+          {MODEL_IDS.map((m) => {
+            const a = record.analysis?.[m];
+            return (
+              <button key={m} onClick={() => setTab(m)}
+                className={`flex items-center gap-1.5 px-3 py-2 -mb-px border-b-2 text-sm font-medium transition
+                  ${tab === m ? "border-current " + MODEL_META[m].accent : "border-transparent text-zinc-500 hover:text-zinc-300"}`}>
+                <span className={`w-1.5 h-1.5 rounded-full ${MODEL_META[m].dot}`} />
+                {MODEL_META[m].name}
+                {a && !a.failed && <span className="text-[10px] text-zinc-600">{a.usedCount}/{a.endpointReview?.length}</span>}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="p-5">
+          <ModelPanel record={record} modelId={tab} onBacktestDone={onBacktestDone} />
+        </div>
       </div>
     </div>
   );
 }
 
-// ---------- Log Trade form ----------
-function LogTradeForm({ onClose, onSubmit, error }) {
-  const [form, setForm] = useState({ symbol: "", direction: "CALL", outcome: "win", entryDate: "", exitDate: "", entryPrice: "", exitPrice: "", notes: "" });
-  const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
+function AnalyzeForm({ onClose, onSubmit, error, running }) {
+  const [mode, setMode] = useState("stock");
+  const [f, setF] = useState({ symbol: "", sessionDate: "", strikePrice: "", contractType: "CALL", expirationDate: "" });
+  const set = (k) => (e) => setF((s) => ({ ...s, [k]: e.target.value }));
+
   return (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
       <div className="bg-zinc-950 border border-zinc-800 rounded-xl w-full max-w-md p-5">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-zinc-100 font-semibold">Log a trade</h3>
+          <h3 className="text-zinc-100 font-semibold">Analyze a session</h3>
           <button onClick={onClose} className="text-zinc-500 hover:text-zinc-300"><X size={18} /></button>
         </div>
+
+        <div className="flex gap-1 mb-4 p-1 bg-zinc-900 rounded-lg">
+          {[["stock", "Stock"], ["options", "Options"]].map(([k, label]) => (
+            <button key={k} onClick={() => setMode(k)}
+              className={`flex-1 py-1.5 rounded text-sm font-medium ${mode === k ? "bg-zinc-800 text-zinc-100" : "text-zinc-500 hover:text-zinc-300"}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+
         <div className="space-y-3">
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="text-xs text-zinc-500 font-mono">SYMBOL</label>
-              <input value={form.symbol} onChange={set("symbol")} placeholder="AAPL"
+              <input value={f.symbol} onChange={set("symbol")} placeholder="META"
                 className="w-full mt-1 bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-zinc-100 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/40" />
             </div>
             <div>
-              <label className="text-xs text-zinc-500 font-mono">DIRECTION</label>
-              <select value={form.direction} onChange={set("direction")}
-                className="w-full mt-1 bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-zinc-100 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/40">
-                <option>CALL</option><option>PUT</option>
-              </select>
-            </div>
-          </div>
-          <div>
-            <label className="text-xs text-zinc-500 font-mono">OUTCOME</label>
-            <select value={form.outcome} onChange={set("outcome")}
-              className="w-full mt-1 bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-zinc-100 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/40">
-              <option value="win">Win</option>
-              <option value="loss">Loss (near-miss or not — the analysts will judge)</option>
-            </select>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs text-zinc-500 font-mono">ENTRY DATE</label>
-              <input type="date" value={form.entryDate} onChange={set("entryDate")}
-                className="w-full mt-1 bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-zinc-100 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/40" />
-            </div>
-            <div>
-              <label className="text-xs text-zinc-500 font-mono">EXIT DATE</label>
-              <input type="date" value={form.exitDate} onChange={set("exitDate")}
+              <label className="text-xs text-zinc-500 font-mono">SESSION DATE</label>
+              <input type="date" value={f.sessionDate} onChange={set("sessionDate")}
                 className="w-full mt-1 bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-zinc-100 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/40" />
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="text-xs text-zinc-500 font-mono">ENTRY PRICE</label>
-              <input value={form.entryPrice} onChange={set("entryPrice")} placeholder="187.20"
-                className="w-full mt-1 bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-zinc-100 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/40" />
+
+          {mode === "options" && (
+            <div className="grid grid-cols-3 gap-3">
+              <div>
+                <label className="text-xs text-zinc-500 font-mono">STRIKE</label>
+                <input value={f.strikePrice} onChange={set("strikePrice")} placeholder="700"
+                  className="w-full mt-1 bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-zinc-100 text-sm" />
+              </div>
+              <div>
+                <label className="text-xs text-zinc-500 font-mono">TYPE</label>
+                <select value={f.contractType} onChange={set("contractType")}
+                  className="w-full mt-1 bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-zinc-100 text-sm">
+                  <option>CALL</option><option>PUT</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-xs text-zinc-500 font-mono">EXPIRY</label>
+                <input type="date" value={f.expirationDate} onChange={set("expirationDate")}
+                  className="w-full mt-1 bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-zinc-100 text-sm" />
+              </div>
             </div>
-            <div>
-              <label className="text-xs text-zinc-500 font-mono">EXIT PRICE</label>
-              <input value={form.exitPrice} onChange={set("exitPrice")} placeholder="204.60"
-                className="w-full mt-1 bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-zinc-100 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/40" />
-            </div>
-          </div>
-          <div>
-            <label className="text-xs text-zinc-500 font-mono">NOTES (optional)</label>
-            <textarea value={form.notes} onChange={set("notes")} rows={2}
-              className="w-full mt-1 bg-zinc-900 border border-zinc-800 rounded px-2 py-1.5 text-zinc-100 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500/40" />
-          </div>
+          )}
         </div>
-        <div className="flex gap-2 mt-5">
-          <button onClick={onClose} className="flex-1 py-2 rounded border border-zinc-800 text-zinc-400 text-sm hover:bg-zinc-900">Cancel</button>
-          <button
-            onClick={async () => { const ok = await onSubmit(form); if (ok) onClose(); }}
-            disabled={!form.symbol}
-            className="flex-1 py-2 rounded bg-emerald-600 text-zinc-950 text-sm font-medium hover:bg-emerald-500 disabled:opacity-40 disabled:hover:bg-emerald-600">
-            Log trade
-          </button>
-        </div>
+
+        <button
+          onClick={() => onSubmit({
+            symbol: f.symbol, sessionDate: f.sessionDate,
+            contract: mode === "options" && f.strikePrice && f.expirationDate
+              ? { strikePrice: f.strikePrice, contractType: f.contractType, expirationDate: f.expirationDate }
+              : null,
+          })}
+          disabled={!f.symbol || !f.sessionDate || running}
+          className="w-full mt-5 py-2 rounded bg-emerald-600 text-zinc-950 text-sm font-medium hover:bg-emerald-500 disabled:opacity-40">
+          {running ? "Pulling 30 feeds, running 3 analysts…" : "Analyze"}
+        </button>
+
         {error && <p className="text-xs text-red-400 mt-2">{error}</p>}
         <p className="text-[11px] text-zinc-600 mt-3 leading-relaxed">
-          Logging a trade now pulls real historical price data (Databento) and options flow (Quant Data) for this symbol.
-          AI thesis analysis isn't wired up yet — that's the next build phase.
+          You give a symbol and a date. The system finds the moves itself, then asks all 3 analysts whether they were knowable in advance — using only data that existed before each move. Takes ~1-2 min.
         </p>
       </div>
     </div>
   );
 }
 
-// ---------- Trade detail: 4 fully independent panels ----------
-// Each model tab is self-contained: its own chart + indicator overlay + verdict +
-// justification + its own scoped chat. Nothing is shared between tabs except the
-// underlying trade record (symbol/dates/prices) — each model's read is independent.
-
-// Picks which bar series + entry/exit indices to chart, and which overlay to
-// apply for the given model. Claude's thesis is EMA-based, so its tab always
-// shows the EMAs it actually reasons about. GPT's thesis is flow/volume-based,
-// so its tab emphasizes the volume subplot. Grok's thesis is relative-strength
-// based, but we don't have a real benchmark (QQQ) series fetched yet — flagged
-// honestly rather than faked.
-function useChartConfig(trade, modelId) {
-  const usingIntraday = !!trade.intradayBars?.length;
-  const bars = usingIntraday ? trade.intradayBars : trade.bars;
-  // entryIdx/exitIdx here are Michael's ACTUAL logged trade \u2014 context only,
-  // rendered as a muted reference marker, never as "this model endorses this".
-  const entryIdx = usingIntraday ? trade.intradayEntryIdx : trade.entryIdx;
-  const exitIdx = usingIntraday ? trade.intradayExitIdx : trade.exitIdx;
-  const overlay = {};
-  if (bars && modelId === "claude") {
-    const closes = bars.map((b) => b.close);
-    overlay.ema = [
-      { period: 10, color: "#fbbf24", data: computeEMA(closes, 10) },
-      { period: 20, color: "#f59e0b", data: computeEMA(closes, 20) },
-    ];
-  }
-  if (modelId === "gpt") overlay.emphasizeVolume = true;
-
-  // This model's OWN, independently-chosen, lookahead-free entry pick \u2014
-  // only meaningful on an individual model tab (not "combined", which has no
-  // single opinion of its own). Falls back to null if the model didn't
-  // return a usable date, or a chart couldn't index it (e.g. still "pending").
-  let modelEntry = null;
-  const a = trade.analysis?.[modelId];
-  if (a && modelId !== "combined") {
-    const idx = usingIntraday ? a.suggestedEntryIntradayIdx : a.suggestedEntryIdx;
-    if (idx != null && bars && idx < bars.length) {
-      modelEntry = { idx, color: MODEL_HEX[modelId], label: `${MODEL_META[modelId].name.toUpperCase()} PICK` };
-    }
-  }
-
-  return { bars, entryIdx, exitIdx, overlay, modelEntry };
-}
-
-// Shows this model's own, independently-chosen, lookahead-free entry pick —
-// deliberately separate from the "what explained the move" text above it,
-// so the two questions ("what happened" vs "when would I have gotten in")
-// never get blended into one justification.
-function OwnEntryPick({ modelId, suggestedEntry, trade }) {
-  if (!suggestedEntry || !suggestedEntry.date) {
-    return (
-      <p className="text-xs text-zinc-600 italic mb-4">
-        {MODEL_META[modelId].name} didn't return a usable entry pick for this trade.
-      </p>
-    );
-  }
-  const differsFromLogged = suggestedEntry.date.slice(0, 10) !== (trade.entryDate || "").slice(0, 10);
-  return (
-    <div className="mb-4 px-3 py-2.5 rounded-lg border border-zinc-800 bg-zinc-950/60">
-      <div className="flex items-center gap-1.5 mb-1.5">
-        <span className="w-2 h-2 rounded-sm flex-shrink-0" style={{ background: MODEL_HEX[modelId] }} />
-        <span className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono">{MODEL_META[modelId].name}'s own entry pick</span>
-      </div>
-      <div className="text-sm font-mono text-zinc-200 mb-1">
-        {new Date(suggestedEntry.date).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}
-        {differsFromLogged && <span className="ml-2 text-[11px] text-zinc-500 font-sans">(differs from your logged entry — expected)</span>}
-      </div>
-      <p className="text-sm text-zinc-400 leading-relaxed">{suggestedEntry.reasoning}</p>
-    </div>
-  );
-}
-
-// Combined tab: no single "combined entry" exists (it can't be averaged),
-// so instead this lists each responding model's own pick side by side —
-// the point is to make agreement or disagreement on timing visible, not to
-// force a consensus.
-function CombinedEntryComparison({ trade }) {
-  const entries = trade.analysis?.combined?.suggestedEntries || {};
-  const models = MODEL_ORDER.filter((m) => m !== "combined" && entries[m]);
-  if (!models.length) return null;
-  return (
-    <div className="mb-4">
-      <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono mb-1.5">Each analyst's own entry pick (not merged)</div>
-      <div className="space-y-2">
-        {models.map((m) => {
-          const e = entries[m];
-          return (
-            <div key={m} className="px-3 py-2 rounded-lg border border-zinc-800 bg-zinc-950/60">
-              <div className="flex items-center gap-1.5 mb-1">
-                <span className="w-2 h-2 rounded-sm flex-shrink-0" style={{ background: MODEL_HEX[m] }} />
-                <span className={`text-xs font-mono ${MODEL_META[m].accent}`}>{MODEL_META[m].name}</span>
-                <span className="text-xs font-mono text-zinc-500 ml-auto">
-                  {e.date ? new Date(e.date).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "no pick returned"}
-                </span>
-              </div>
-              {e.reasoning && <p className="text-xs text-zinc-500 leading-relaxed">{e.reasoning}</p>}
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function AnalysisDetails({ trade, modelId }) {
-  const a = trade.analysis[modelId];
-  return (
-    <div>
-      <div className="flex items-center justify-between mb-2">
-        <VerdictBadge verdict={a.verdict} />
-        {a.confidence > 0 && <span className="text-xs font-mono text-zinc-500">confidence {a.confidence}%</span>}
-      </div>
-      <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono mb-1">What explains the move</div>
-      <p className="text-sm text-zinc-300 leading-relaxed mb-3">{a.text}</p>
-      {modelId === "combined" ? <CombinedEntryComparison trade={trade} /> : <OwnEntryPick modelId={modelId} suggestedEntry={a.suggestedEntry} trade={trade} />}
-      <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono mb-1.5">Indicator combination used</div>
-      <IndicatorLegend flags={a.flags} />
-      <ChatPanel trade={trade} modelId={modelId} />
-    </div>
-  );
-}
-
-function ModelPanel({ trade, modelId, onExpand }) {
-  const { bars, entryIdx, exitIdx, overlay, modelEntry } = useChartConfig(trade, modelId);
-  return (
-    <div>
-      <div className="flex items-center justify-between mb-1">
-        <span className="text-[11px] font-mono text-zinc-600">{trade.intradayBars?.length ? "15-min bars" : "daily bars"}</span>
-        <button onClick={onExpand} className="flex items-center gap-1 text-[11px] font-mono text-zinc-500 hover:text-zinc-300 px-2 py-1 rounded border border-zinc-800 hover:bg-zinc-900">
-          <Maximize2 size={12} /> Expand
-        </button>
-      </div>
-      <CandlestickChart bars={bars} entryIdx={entryIdx} exitIdx={exitIdx} status={trade.status} overlay={overlay} modelEntry={modelEntry} height={280} />
-      <div className="flex justify-between text-xs font-mono text-zinc-500 mt-1 px-1 mb-3">
-        <span>{trade.entryDate} · ${trade.entryPrice}</span>
-        <span>{trade.exitDate} · ${trade.exitPrice}</span>
-      </div>
-      <AnalysisDetails trade={trade} modelId={modelId} />
-    </div>
-  );
-}
-
-// Full-screen expanded view: chart takes 70% of the width, commentary 30%,
-// per your request to make the chart big and interactive like a real
-// trading terminal rather than squeezed into a small modal panel.
-function ExpandedChartView({ trade, modelId, onClose }) {
-  const { bars, entryIdx, exitIdx, overlay, modelEntry } = useChartConfig(trade, modelId);
-  return (
-    <div className="fixed inset-0 bg-black z-[60] flex flex-col">
-      <div className="flex items-center justify-between px-5 py-3 border-b border-zinc-800">
-        <div className="flex items-center gap-2">
-          <span className={`w-2 h-2 rounded-full ${MODEL_META[modelId].dot}`} />
-          <span className={`font-semibold ${MODEL_META[modelId].accent}`}>{MODEL_META[modelId].name}</span>
-          <span className="text-zinc-500 font-mono text-sm">{trade.symbol} {trade.direction}</span>
-        </div>
-        <button onClick={onClose} className="text-zinc-500 hover:text-zinc-300"><X size={20} /></button>
-      </div>
-      <div className="grid grid-cols-10 flex-1 overflow-hidden">
-        <div className="col-span-7 p-5 overflow-y-auto border-r border-zinc-800">
-          <CandlestickChart bars={bars} entryIdx={entryIdx} exitIdx={exitIdx} status={trade.status} overlay={overlay} modelEntry={modelEntry} height={560} />
-          <div className="flex justify-between text-xs font-mono text-zinc-500 mt-2 px-1">
-            <span>{trade.entryDate} · ${trade.entryPrice}</span>
-            <span>{trade.exitDate} · ${trade.exitPrice}</span>
-          </div>
-        </div>
-        <div className="col-span-3 p-5 overflow-y-auto">
-          <AnalysisDetails trade={trade} modelId={modelId} />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function TradeDetail({ trade, onClose }) {
-  const [tab, setTab] = useState("combined");
-  const [expanded, setExpanded] = useState(false);
-  return (
-    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-      <div className="bg-zinc-950 border border-zinc-800 rounded-xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-800 sticky top-0 bg-zinc-950 z-10">
-          <div className="flex items-center gap-3">
-            <h3 className="text-zinc-100 font-semibold text-lg">{trade.symbol} <span className="text-zinc-500 font-mono text-sm">{trade.direction}</span></h3>
-            <StatusPill status={trade.status} />
-            <span className="text-xs text-zinc-600 font-mono">agreement {trade.agreement}</span>
-          </div>
-          <button onClick={onClose} className="text-zinc-500 hover:text-zinc-300"><X size={18} /></button>
-        </div>
-
-        <div className="flex gap-1 px-5 pt-4 border-b border-zinc-800">
-          {MODEL_ORDER.map((m) => (
-            <button key={m} onClick={() => setTab(m)}
-              className={`flex items-center gap-1.5 px-3 py-2 -mb-px border-b-2 text-sm font-medium transition
-                ${tab === m ? "border-current " + MODEL_META[m].accent : "border-transparent text-zinc-500 hover:text-zinc-300"}`}>
-              <span className={`w-1.5 h-1.5 rounded-full ${MODEL_META[m].dot}`} />
-              {MODEL_META[m].name}
-            </button>
-          ))}
-        </div>
-
-        <div className="p-5">
-          <ModelPanel trade={trade} modelId={tab} onExpand={() => setExpanded(true)} />
-        </div>
-      </div>
-      {expanded && <ExpandedChartView trade={trade} modelId={tab} onClose={() => setExpanded(false)} />}
-    </div>
-  );
-}
-
-function copyToClipboard(text) {
-  if (navigator.clipboard) navigator.clipboard.writeText(text).catch(() => {});
-}
-
-function daysBetween(a, b) {
-  if (!a || !b) return null;
-  const diff = (new Date(b) - new Date(a)) / 86400000;
-  return Number.isFinite(diff) ? Math.round(diff) : null;
-}
-
-function returnPct(entry, exit) {
-  const e = Number(entry), x = Number(exit);
-  if (!e || !x) return null;
-  return ((x - e) / e) * 100;
-}
-
-// A compact per-trade summary widget, styled after a backtest-result card:
-// status header + id, then a metric grid, then a "view trade" action.
-function TradeCard({ trade, onOpen }) {
-  const combined = trade.analysis?.combined;
-  const isPending = trade.analysisStatus === "pending" || combined?.verdict === "pending";
-  const ret = returnPct(trade.entryPrice, trade.exitPrice);
-  const held = daysBetween(trade.entryDate, trade.exitDate);
-  const flagCount = combined?.flags?.length ?? 0;
-
-  const headerMeta = isPending
-    ? { Icon: Clock, cls: "text-zinc-400", label: "Awaiting AI analysis" }
-    : trade.status === "win"
-    ? { Icon: CheckCircle2, cls: "text-emerald-400", label: "Analysis complete" }
-    : trade.status === "near-miss-loss"
-    ? { Icon: AlertTriangle, cls: "text-amber-400", label: "Analysis complete \u2014 counter-example" }
-    : { Icon: Minus, cls: "text-zinc-500", label: "Analysis complete \u2014 low info" };
-  const HeaderIcon = headerMeta.Icon;
+function AnalysisCard({ record, onOpen }) {
+  const c = record.analysis?.combined;
+  const thrusts = record.briefing?.timeline?.priceThrusts?.length ?? 0;
+  const entries = c?.entries ? Object.values(c.entries).filter((e) => e?.timestamp) : [];
 
   return (
     <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 flex flex-col">
       <div className="flex items-center justify-between mb-3">
-        <div className={`flex items-center gap-1.5 text-sm font-medium ${headerMeta.cls}`}>
-          <HeaderIcon size={15} /> {headerMeta.label}
-        </div>
-        <button
-          onClick={() => copyToClipboard(trade.id)}
-          className="flex items-center gap-1 text-[11px] font-mono text-zinc-600 hover:text-zinc-400 bg-zinc-950 border border-zinc-800 rounded px-1.5 py-0.5"
-          title="Copy trade ID">
-          ID: {String(trade.id).slice(-6)} <Copy size={11} />
-        </button>
+        {c ? <Verdict v={c.verdict} /> : <span className="text-xs text-zinc-500 font-mono">pending</span>}
+        <span className="text-[11px] font-mono text-zinc-600">agreement {record.agreement}</span>
       </div>
+      <div className="text-base font-semibold text-zinc-100">{record.symbol}</div>
+      <div className="text-xs font-mono text-zinc-500 mb-3">{record.sessionDate}</div>
 
-      <div className="text-base font-semibold text-zinc-100 mb-1">
-        {trade.symbol} <span className="text-zinc-500 font-mono text-sm">{trade.direction}</span>
-      </div>
-      <div className="text-xs font-mono text-zinc-500 mb-3">
-        {trade.entryDate || "\u2014"} ~ {trade.exitDate || "\u2014"}
-      </div>
-
-      <div className="border-t border-zinc-800 pt-3 grid grid-cols-3 gap-y-3 gap-x-2">
+      <div className="border-t border-zinc-800 pt-3 grid grid-cols-3 gap-2">
         <div>
-          <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-mono">Return</div>
-          <div className={`text-sm font-mono font-semibold ${ret == null ? "text-zinc-600" : ret >= 0 ? "text-emerald-400" : "text-red-400"}`}>
-            {ret == null ? "\u2014" : `${ret >= 0 ? "+" : ""}${ret.toFixed(2)}%`}
-          </div>
+          <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-mono">Moves</div>
+          <div className="text-sm font-mono text-zinc-200">{thrusts}</div>
         </div>
         <div>
-          <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-mono">Days held</div>
-          <div className="text-sm font-mono font-semibold text-zinc-200">{held ?? "\u2014"}</div>
+          <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-mono">Entries</div>
+          <div className="text-sm font-mono text-zinc-200">{entries.length}/3</div>
         </div>
         <div>
-          <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-mono">Agreement</div>
-          <div className="text-sm font-mono font-semibold text-zinc-200">{trade.agreement || "\u2014"}</div>
-        </div>
-        <div>
-          <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-mono">Confidence</div>
-          <div className="text-sm font-mono font-semibold text-zinc-200">{combined && combined.confidence > 0 ? `${combined.confidence}%` : "\u2014"}</div>
-        </div>
-        <div>
-          <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-mono">Indicators</div>
-          <div className="text-sm font-mono font-semibold text-zinc-200">{flagCount || "\u2014"}</div>
-        </div>
-        <div>
-          <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-mono">Status</div>
-          <div className="text-sm"><StatusPill status={trade.status} /></div>
+          <div className="text-[10px] uppercase tracking-wider text-zinc-500 font-mono">Feeds</div>
+          <div className="text-sm font-mono text-zinc-200">{record.briefing?.fetchReport?.succeeded ?? "—"}</div>
         </div>
       </div>
 
-      <button onClick={() => onOpen(trade.id)}
-        className="mt-4 w-full flex items-center justify-center gap-1.5 bg-zinc-950 hover:bg-black border border-zinc-800 text-zinc-200 text-sm font-medium py-2 rounded-md transition">
-        View trade <ChevronRight size={14} />
+      <button onClick={() => onOpen(record.id)}
+        className="mt-4 w-full flex items-center justify-center gap-1.5 bg-zinc-950 hover:bg-black border border-zinc-800 text-zinc-200 text-sm font-medium py-2 rounded-md">
+        View analysis <ChevronRight size={14} />
       </button>
     </div>
   );
 }
 
-// ---------- Tabs: Trade Log ----------
-function TradeLogTab({ trades, onOpen, onAdd }) {
-  const [filter, setFilter] = useState("all");
-  const filtered = trades.filter((t) => filter === "all" ? true : t.status === filter);
-  return (
-    <div>
-      <div className="flex items-center justify-between mb-4">
-        <div className="flex gap-1">
-          {[["all", "All"], ["win", "Wins"], ["near-miss-loss", "Near-miss"], ["low-info-loss", "Low-info"]].map(([k, label]) => (
-            <button key={k} onClick={() => setFilter(k)}
-              className={`px-3 py-1.5 rounded-md text-xs font-mono ${filter === k ? "bg-zinc-800 text-zinc-100" : "text-zinc-500 hover:text-zinc-300"}`}>
-              {label}
-            </button>
-          ))}
-        </div>
-        <button onClick={onAdd} className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-500 text-zinc-950 text-sm font-medium px-3 py-1.5 rounded-md">
-          <Plus size={16} /> Log trade
-        </button>
-      </div>
-
-      <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-        {filtered.map((t) => <TradeCard key={t.id} trade={t} onOpen={onOpen} />)}
-        {filtered.length === 0 && (
-          <div className="col-span-full px-4 py-8 text-center text-zinc-600 text-sm border border-zinc-800 rounded-lg">
-            No trades match this filter.
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// A clickable list of trades used to back up a stat — every number in
-// Performance/Theses should be traceable to this kind of list, not a bare figure.
-function TradeMiniList({ trades, onOpen, emptyText = "No trades match." }) {
-  if (trades.length === 0) return <p className="text-xs text-zinc-600 italic px-1">{emptyText}</p>;
-  return (
-    <div className="space-y-1">
-      {trades.map((t) => (
-        <button key={t.id} onClick={() => onOpen(t.id)}
-          className="w-full flex items-center justify-between px-2.5 py-1.5 rounded bg-zinc-950 hover:bg-black border border-zinc-800 text-left">
-          <span className="font-mono text-xs text-zinc-200">{t.symbol} <span className="text-zinc-600">{t.direction}</span></span>
-          <span className="flex items-center gap-2">
-            <StatusPill status={t.status} />
-            <ChevronRight size={12} className="text-zinc-600" />
-          </span>
-        </button>
-      ))}
-    </div>
-  );
-}
-
-// A stat card that expands in place to show the underlying trades behind the number.
-function ExpandableStat({ label, value, sub, isOpen, onToggle, children }) {
-  return (
-    <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
-      <button onClick={onToggle} className="w-full text-left px-4 py-3 hover:bg-zinc-900/60">
-        <div className="flex items-start justify-between">
-          <div>
-            <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono">{label}</div>
-            <div className="text-2xl font-mono text-zinc-100 mt-1">{value}</div>
-            {sub && <div className="text-xs text-zinc-500 mt-0.5">{sub}</div>}
-          </div>
-          <ChevronRight size={16} className={`text-zinc-600 mt-1 transition-transform ${isOpen ? "rotate-90" : ""}`} />
-        </div>
-      </button>
-      {isOpen && <div className="px-3 pb-3 pt-1 border-t border-zinc-800">{children}</div>}
-    </div>
-  );
-}
-
-// ---------- Tabs: Performance ----------
-function PerformanceTab({ trades, onOpen }) {
-  const [expanded, setExpanded] = useState(null);
-  const toggle = (key) => setExpanded((cur) => (cur === key ? null : key));
-
-  const wins = trades.filter((t) => t.status === "win");
-  const nearMiss = trades.filter((t) => t.status === "near-miss-loss");
-  const lowInfo = trades.filter((t) => t.status === "low-info-loss");
-  const total = trades.length;
-  const winRate = total ? Math.round((wins.length / total) * 100) : 0;
-  const fullAgreementTrades = trades.filter((t) => t.agreement === "3/3");
-  const agreementRate = total ? Math.round((fullAgreementTrades.length / total) * 100) : 0;
-  const counterTrades = trades.filter((t) => t.analysis?.combined?.verdict === "contrast");
-
-  return (
-    <div>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-        <ExpandableStat label="Trades logged" value={total} sub={`${wins.length} win / ${nearMiss.length} near-miss / ${lowInfo.length} low-info`}
-          isOpen={expanded === "total"} onToggle={() => toggle("total")}>
-          <TradeMiniList trades={trades} onOpen={onOpen} />
-        </ExpandableStat>
-        <ExpandableStat label="Win rate" value={`${winRate}%`} sub="of logged trades"
-          isOpen={expanded === "winrate"} onToggle={() => toggle("winrate")}>
-          <TradeMiniList trades={wins} onOpen={onOpen} emptyText="No wins logged yet." />
-        </ExpandableStat>
-        <ExpandableStat label="Full agreement" value={`${agreementRate}%`} sub="all 3 analysts aligned"
-          isOpen={expanded === "agreement"} onToggle={() => toggle("agreement")}>
-          <TradeMiniList trades={fullAgreementTrades} onOpen={onOpen} emptyText="No trades with full 3/3 agreement yet." />
-        </ExpandableStat>
-        <ExpandableStat label="Counter-examples" value={counterTrades.length} sub="feeding the shared thesis"
-          isOpen={expanded === "counters"} onToggle={() => toggle("counters")}>
-          <TradeMiniList trades={counterTrades} onOpen={onOpen} emptyText="No counter-examples yet." />
-        </ExpandableStat>
-      </div>
-
-      <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
-        <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono mb-3">
-          Thesis confidence by model <span className="text-zinc-600 normal-case">(computed from the trades below \u2014 click a model to see them)</span>
-        </div>
-        <div className="space-y-3">
-          {MODEL_ORDER.filter((m) => m !== "combined").map((m) => {
-            const supporting = trades.filter((t) => t.analysis?.[m]?.verdict === "signal");
-            const counter = trades.filter((t) => t.analysis?.[m]?.verdict === "contrast");
-            const denom = supporting.length + counter.length;
-            const pct = denom ? Math.round((supporting.length / denom) * 100) : 0;
-            const key = "model-" + m;
-            return (
-              <div key={m}>
-                <button onClick={() => toggle(key)} className="w-full text-left">
-                  <div className="flex justify-between text-xs font-mono mb-1">
-                    <span className={MODEL_META[m].accent}>{MODEL_META[m].name}</span>
-                    <span className="text-zinc-500">{supporting.length} supporting · {counter.length} counter</span>
-                  </div>
-                  <div className="h-2 rounded-full bg-zinc-800 overflow-hidden">
-                    <div className={`h-full ${MODEL_META[m].bg}`} style={{ width: `${pct}%` }} />
-                  </div>
-                </button>
-                {expanded === key && (
-                  <div className="mt-2 grid sm:grid-cols-2 gap-2">
-                    <div>
-                      <div className="text-[10px] uppercase tracking-wider text-zinc-600 font-mono mb-1">Supporting</div>
-                      <TradeMiniList trades={supporting} onOpen={onOpen} emptyText="None yet." />
-                    </div>
-                    <div>
-                      <div className="text-[10px] uppercase tracking-wider text-zinc-600 font-mono mb-1">Counter-examples</div>
-                      <TradeMiniList trades={counter} onOpen={onOpen} emptyText="None yet." />
-                    </div>
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ---------- Tabs: Theses ----------
-// 4 fully independent sub-tabs (Claude/GPT/Grok/Combined), each with the same
-// structure: Setup Conditions, Confidence, Supporting Evidence, Counter-Examples,
-// Notes \u2014 all traceable back to the actual logged trades, not static numbers.
-function ThesesTab({ trades, onOpen }) {
-  const [tab, setTab] = useState("combined");
-  const t = THESES[tab];
-  const supporting = trades.filter((tr) => tr.analysis?.[tab]?.verdict === "signal");
-  const counter = trades.filter((tr) => tr.analysis?.[tab]?.verdict === "contrast");
-
-  return (
-    <div>
-      <div className="flex gap-1 mb-4 border-b border-zinc-800">
-        {MODEL_ORDER.map((m) => (
-          <button key={m} onClick={() => setTab(m)}
-            className={`flex items-center gap-1.5 px-3 py-2 -mb-px border-b-2 text-sm font-medium transition
-              ${tab === m ? "border-current " + MODEL_META[m].accent : "border-transparent text-zinc-500 hover:text-zinc-300"}`}>
-            <span className={`w-1.5 h-1.5 rounded-full ${MODEL_META[m].dot}`} />
-            {MODEL_META[m].name}
-          </button>
-        ))}
-      </div>
-
-      <div className={`bg-zinc-900 border border-zinc-800 rounded-lg p-4 ${tab === "combined" ? "ring-1 " + MODEL_META[tab].ring : ""}`}>
-        <div className="flex items-center gap-2 mb-4">
-          <span className={`w-2 h-2 rounded-full ${MODEL_META[tab].dot}`} />
-          <h4 className={`font-semibold ${MODEL_META[tab].accent}`}>{MODEL_META[tab].name} thesis</h4>
-          <span className="text-[11px] text-zinc-600 font-mono ml-auto">updated {t.lastUpdated}</span>
-        </div>
-
-        <div className="grid md:grid-cols-2 gap-6">
-          <div>
-            <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono mb-1.5">Setup conditions</div>
-            <ul className="space-y-1 mb-4">
-              {t.setup.map((s, i) => (
-                <li key={i} className="text-sm text-zinc-300 flex gap-2">
-                  <span className="text-zinc-600">·</span>{s}
-                </li>
-              ))}
-            </ul>
-
-            <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono mb-1">Confidence</div>
-            <p className="text-sm text-zinc-400 mb-4">{t.confidence}</p>
-
-            <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono mb-1">Notes</div>
-            <p className="text-sm text-zinc-400">{t.notes}</p>
-          </div>
-
-          <div>
-            <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono mb-1.5">
-              Supporting evidence <span className="text-zinc-600 normal-case">({supporting.length})</span>
-            </div>
-            <TradeMiniList trades={supporting} onOpen={onOpen} emptyText="No supporting trades logged yet." />
-
-            <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono mb-1.5 mt-4">
-              Counter-examples <span className="text-zinc-600 normal-case">({counter.length})</span>
-            </div>
-            <TradeMiniList trades={counter} onOpen={onOpen} emptyText="No counter-examples logged yet." />
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ---------- Tabs: Settings ----------
-function SettingsTab() {
-  return (
-    <div className="max-w-xl">
-      <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
-        <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono mb-1">AI provider billing</div>
-        <p className="text-xs text-zinc-500 mb-3">Quick links to top up token balance for each model this system calls.</p>
-        <div className="space-y-2">
-          {BILLING_LINKS.map((l) => (
-            <a key={l.url} href={l.url} target="_blank" rel="noopener noreferrer"
-              className="flex items-center justify-between px-3 py-2.5 rounded bg-zinc-950 hover:bg-black border border-zinc-800">
-              <span className="flex items-center gap-2 text-sm">
-                <span className={`w-2 h-2 rounded-full ${l.dot}`} />
-                <span className={l.accent}>{l.name}</span>
-              </span>
-              <ExternalLink size={14} className="text-zinc-600" />
-            </a>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ---------- App ----------
 export default function App() {
   const [tab, setTab] = useState("log");
-  const [trades, setTrades] = useState([]); // loaded from GET /api/trades — no mock data
-  const [openTradeId, setOpenTradeId] = useState(null);
+  const [records, setRecords] = useState([]);
+  const [openId, setOpenId] = useState(null);
   const [showForm, setShowForm] = useState(false);
-  const [submitError, setSubmitError] = useState(null);
-  const [theme, setTheme] = useState("light"); // sun (light) by default
+  const [error, setError] = useState(null);
+  const [running, setRunning] = useState(false);
 
   useEffect(() => {
-    document.documentElement.classList.toggle("light", theme === "light");
-  }, [theme]);
-
-  useEffect(() => {
-    fetch("/api/trades")
-      .then((r) => r.json())
-      .then((realTrades) => {
-        if (realTrades.length) setTrades((prev) => [...realTrades, ...prev]);
-      })
-      .catch(() => {}); // fine if this fails locally without the server running
+    fetch("/api/analyses").then((r) => r.json())
+      .then((rs) => Array.isArray(rs) && setRecords(rs))
+      .catch(() => {});
   }, []);
 
-  const openTrade = useMemo(() => trades.find((t) => t.id === openTradeId), [trades, openTradeId]);
+  const open = useMemo(() => records.find((r) => r.id === openId), [records, openId]);
 
-  const addTrade = async (form) => {
-    setSubmitError(null);
+  const analyze = async (form) => {
+    setRunning(true); setError(null);
     try {
-      const res = await fetch("/api/trades", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+      const res = await fetch("/api/analyze", {
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(form),
       });
-      if (!res.ok) throw new Error((await res.json()).error || "Failed to log trade");
-      const trade = await res.json();
-      // The server already runs the real 3-model analysis before responding
-      // (see server.js) \u2014 use it directly. Only fall back to a "pending"
-      // placeholder if analysis genuinely didn't complete (analysisStatus
-      // !== "complete"), instead of always overwriting real results with a
-      // stale placeholder that used to make sense before analysis existed.
-      const analysis = trade.analysisStatus === "complete" && trade.analysis
-        ? trade.analysis
-        : Object.fromEntries(MODEL_ORDER.map((m) => [m, {
-            verdict: "pending", confidence: 0, entryIdx: trade.entryIdx, exitIdx: trade.exitIdx, flags: [],
-            suggestedEntry: { date: null, reasoning: "" }, suggestedEntryIdx: null, suggestedEntryIntradayIdx: null,
-            text: trade.dataFetchOk && trade.dataFetchOk.databento
-              ? "Real price data pulled successfully, but AI analysis didn't complete for this trade \u2014 check server logs."
-              : "Data pull had an issue (check server logs) \u2014 this trade is stored but the chart may be incomplete.",
-          }]));
-      const agreement = analysis.combined?.agreement || "\u2014";
-      setTrades((prev) => [
-        {
-          ...trade,
-          status: trade.outcome === "win" ? "win" : "near-miss-loss",
-          agreement,
-          analysis,
-        },
-        ...prev,
-      ]);
-      return true;
-    } catch (err) {
-      setSubmitError(err.message);
-      return false;
-    }
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "Analysis failed");
+      setRecords((p) => [data, ...p]);
+      setShowForm(false);
+      setOpenId(data.id);
+    } catch (e) { setError(e.message); }
+    setRunning(false);
+  };
+
+  const onBacktestDone = (modelId, result) => {
+    setRecords((prev) => prev.map((r) => r.id === openId
+      ? { ...r, backtests: { ...(r.backtests || {}), [modelId]: result } } : r));
   };
 
   const NAV = [
-    { id: "log", label: "Trade Log", Icon: FileText },
-    { id: "performance", label: "Performance", Icon: LayoutDashboard },
-    { id: "theses", label: "Theses", Icon: Users },
+    { id: "log", label: "Analyses", Icon: FileText },
     { id: "settings", label: "Settings", Icon: Settings },
   ];
 
@@ -1158,16 +482,11 @@ export default function App() {
         <div className="flex items-baseline justify-between mb-6">
           <div>
             <h1 className="text-xl font-semibold tracking-tight">GHOSTFLOW</h1>
-            <p className="text-xs text-zinc-500 font-mono mt-0.5">options research · 3-analyst thesis engine</p>
+            <p className="text-xs text-zinc-500 font-mono mt-0.5">signal discovery · 3-analyst engine · 30 live feeds</p>
           </div>
-          <div className="flex items-center gap-2">
-            <button onClick={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
-              className="p-1.5 rounded border border-zinc-800 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900"
-              title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}>
-              {theme === "dark" ? <Moon size={14} /> : <Sun size={14} />}
-            </button>
-            <span className="text-[11px] font-mono text-zinc-600 border border-zinc-800 rounded px-2 py-1">live · real trades only</span>
-          </div>
+          <span className="text-[11px] font-mono text-zinc-600 border border-zinc-800 rounded px-2 py-1">
+            was it knowable in advance?
+          </span>
         </div>
 
         <div className="flex gap-1 mb-6 border-b border-zinc-800">
@@ -1180,14 +499,48 @@ export default function App() {
           ))}
         </div>
 
-        {tab === "log" && <TradeLogTab trades={trades} onOpen={setOpenTradeId} onAdd={() => setShowForm(true)} />}
-        {tab === "performance" && <PerformanceTab trades={trades} onOpen={setOpenTradeId} />}
-        {tab === "theses" && <ThesesTab trades={trades} onOpen={setOpenTradeId} />}
-        {tab === "settings" && <SettingsTab />}
+        {tab === "log" && (
+          <div>
+            <div className="flex items-center justify-between mb-4">
+              <p className="text-xs text-zinc-500">Enter a symbol and a date. The system finds the moves itself.</p>
+              <button onClick={() => setShowForm(true)}
+                className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-500 text-zinc-950 text-sm font-medium px-3 py-1.5 rounded-md">
+                <Search size={16} /> Analyze session
+              </button>
+            </div>
+            <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {records.map((r) => <AnalysisCard key={r.id} record={r} onOpen={setOpenId} />)}
+              {records.length === 0 && (
+                <div className="col-span-full px-4 py-10 text-center text-zinc-600 text-sm border border-zinc-800 rounded-lg">
+                  No analyses yet. Run one to get started.
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {tab === "settings" && (
+          <div className="max-w-xl bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+            <div className="text-[11px] uppercase tracking-wider text-zinc-500 font-mono mb-1">AI provider billing</div>
+            <p className="text-xs text-zinc-500 mb-3">Top up token balance for each model this system calls.</p>
+            <div className="space-y-2">
+              {BILLING_LINKS.map((l) => (
+                <a key={l.url} href={l.url} target="_blank" rel="noopener noreferrer"
+                  className="flex items-center justify-between px-3 py-2.5 rounded bg-zinc-950 hover:bg-black border border-zinc-800">
+                  <span className="flex items-center gap-2 text-sm">
+                    <span className={`w-2 h-2 rounded-full ${l.dot}`} />
+                    <span className={l.accent}>{l.name}</span>
+                  </span>
+                  <ExternalLink size={14} className="text-zinc-600" />
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
-      {openTrade && <TradeDetail trade={openTrade} onClose={() => setOpenTradeId(null)} />}
-      {showForm && <LogTradeForm onClose={() => setShowForm(false)} onSubmit={addTrade} error={submitError} />}
+      {showForm && <AnalyzeForm onClose={() => setShowForm(false)} onSubmit={analyze} error={error} running={running} />}
+      {open && <AnalysisDetail record={open} onClose={() => setOpenId(null)} onBacktestDone={onBacktestDone} />}
     </div>
   );
 }
