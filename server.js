@@ -124,13 +124,8 @@ async function fetchBundlesForDates({ ticker, dates, contract }) {
   return bundles;
 }
 
-// Kept for /rerun, which still runs synchronously (it's launched from the
-// detail view, which has its own spinner and error handling).
-async function fetchSessionWindow({ ticker, sessionDate, contract, sessionCount = 3 }) {
-  const { dates, noDataReason } = await findSessionDates({ ticker, sessionDate, sessionCount });
-  if (!dates.length) return { bundles: [], noDataReason };
-  return { bundles: await fetchBundlesForDates({ ticker, dates, contract }), noDataReason: null };
-}
+// (Both /api/analyze and /rerun share findSessionDates + fetchBundlesForDates
+// in the same fast-probe-then-background shape.)
 
 app.post("/api/analyze", async (req, res) => {
   const { symbol, sessionDate, contract, notes, sessionCount = 3 } = req.body;
@@ -386,59 +381,84 @@ app.post("/api/analyses/:id/rerun", async (req, res) => {
     const contract = old.contract || null;
     const notes = req.body?.notes ?? old.notes ?? null;
 
-    console.log(`[rerun] ${ticker} ${sessionDate} with current engine (3-session window)...`);
-    const { bundles, noDataReason } = await fetchSessionWindow({ ticker, sessionDate, contract, sessionCount: 3 });
-    if (!bundles.length) return res.status(400).json({ error: noDataReason });
+    // SAME ASYNC SHAPE AS /api/analyze: probe fast, flag the record as
+    // analyzing, respond immediately, do the heavy work in the background.
+    // The OLD analysis stays on the record until the new one replaces it, so
+    // the detail view keeps showing something real while the card carries the
+    // ANALYZING badge.
+    console.log(`[rerun] ${ticker} ${sessionDate} — probing session window...`);
+    const { dates, noDataReason } = await findSessionDates({ ticker, sessionDate, sessionCount: 3 });
+    if (!dates.length) return res.status(400).json({ error: noDataReason });
 
-    const briefing = buildMultiBriefing(bundles, { contract });
-    console.log(`[rerun] window ${briefing.window.join(", ")} | ${briefing.timeline.priceThrusts.length} thrusts`);
+    const flagged = await patchRecord(old.id, (rec) => {
+      rec.status = "analyzing";
+      rec.rerunAt = new Date().toISOString();
+      rec.jobs = { ...(rec.jobs || {}), analysis: { status: "running", at: new Date().toISOString() } };
+      // Old findings belong to the old analysis — drop them now so stale
+      // results never sit next to a new verdict.
+      rec.backtests = undefined;
+      rec.refinements = undefined;
+      rec.confirmers = undefined;
+    });
+    if (!flagged) return res.status(404).json({ error: `Record ${old.id} disappeared mid-rerun.` });
 
-    const analysis = await analyzeAllModels(briefing, notes);
+    res.json(flagged);
 
-    const record = {
-      ...old,
-      symbol: ticker,
-      sessionDate: briefing.sessionDate,
-      window: briefing.window,
-      notes,
-      entryDate: undefined,
-      exitDate: undefined,
-      outcome: undefined,
-      rerunAt: new Date().toISOString(),
-      briefing: {
-        endpoints: briefing.endpoints,
-        timeline: briefing.timeline,
-        sessionMetrics: briefing.sessionMetrics,
-        priceSeries: briefing.priceSeries,
-        fetchReport: briefing.fetchReport,
-        window: briefing.window,
-        sessions: briefing.sessions.map((s) => ({
-          sessionDate: s.sessionDate,
-          thrusts: s.timeline.priceThrusts.length,
-          events: s.timeline.totalSignalEvents,
-          feeds: s.fetchReport.succeeded,
-        })),
-      },
-      analysis,
-      agreement: analysis.combined.agreement,
-      backtests: undefined,
-      refinements: undefined,
-      confirmers: undefined,
-    };
+    // ---- Background: the actual re-analysis. ----
+    (async () => {
+      try {
+        console.log(`[rerun:bg] ${ticker} pulling ${dates.length} sessions of feeds...`);
+        const bundles = await fetchBundlesForDates({ ticker, dates, contract });
+        const briefing = buildMultiBriefing(bundles, { contract });
+        console.log(`[rerun:bg] window ${briefing.window.join(", ")} | ${briefing.timeline.priceThrusts.length} thrusts`);
 
-    // Auto-backtest on re-run happens in the background too — same reasoning
-    // as /api/analyze: keeping it inline is what hung the request.
+        const analysis = await analyzeAllModels(briefing, notes);
 
-    let persisted = true;
-    try { await appendTrade(record); } catch (e) { persisted = false; console.error("[rerun] DB write failed:", e.message); }
+        await patchRecord(old.id, (rec) => {
+          rec.symbol = ticker;
+          rec.sessionDate = briefing.sessionDate;
+          rec.window = briefing.window;
+          rec.notes = notes;
+          rec.entryDate = undefined;
+          rec.exitDate = undefined;
+          rec.outcome = undefined;
+          rec.briefing = {
+            endpoints: briefing.endpoints,
+            timeline: briefing.timeline,
+            sessionMetrics: briefing.sessionMetrics,
+            priceSeries: briefing.priceSeries,
+            fetchReport: briefing.fetchReport,
+            window: briefing.window,
+            sessions: briefing.sessions.map((s) => ({
+              sessionDate: s.sessionDate,
+              thrusts: s.timeline.priceThrusts.length,
+              events: s.timeline.totalSignalEvents,
+              feeds: s.fetchReport.succeeded,
+            })),
+          };
+          rec.analysis = analysis;
+          rec.agreement = analysis.combined.agreement;
+          rec.status = "complete";
+          rec.jobs = rec.jobs || {};
+          rec.jobs.analysis = { status: "done", at: new Date().toISOString() };
+        });
 
-    console.log(`[rerun] done. ${analysis.combined.verdict} ${analysis.combined.agreement}`);
-    res.json({ ...record, persisted });
-
-    // Same as /analyze: the heavy findings fill in behind the response.
-    if (persisted) {
-      startBackgroundJobs(record.id, { ticker, sessionDate: briefing.sessionDate, analysis });
-    }
+        console.log(`[rerun:bg] done. ${analysis.combined.verdict} ${analysis.combined.agreement}`);
+        startBackgroundJobs(old.id, { ticker, sessionDate: briefing.sessionDate, analysis });
+      } catch (err) {
+        console.error(`[rerun:bg] FAILED for ${old.id}:`, err);
+        // The OLD analysis is still on the record and still valid — a failed
+        // RE-run must not brick it into the "failed" card state. Restore
+        // "complete" if there's an analysis to show; only mark "failed" if
+        // this was somehow a record with nothing on it.
+        await patchRecord(old.id, (rec) => {
+          rec.status = rec.analysis ? "complete" : "failed";
+          if (!rec.analysis) rec.analysisError = err.message || String(err);
+          rec.jobs = rec.jobs || {};
+          rec.jobs.analysis = { status: "failed", detail: `Re-run failed (previous analysis kept): ${err.message}`, at: new Date().toISOString() };
+        }).catch((e) => console.error("[rerun:bg] couldn't even record the failure:", e.message));
+      }
+    })();
   } catch (err) {
     console.error("[rerun] FAILED:", err);
     res.status(500).json({ error: err.message || String(err) });

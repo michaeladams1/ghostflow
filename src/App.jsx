@@ -745,7 +745,7 @@ function AnalysisDetail({ record, onClose, cb, onRerun, rerunning, rerunError, o
             <div className="px-3 py-2.5 rounded-lg border border-sky-500/40 bg-sky-500/10 flex items-center gap-2">
               <RefreshCw size={14} className="text-sky-500 animate-spin flex-shrink-0" />
               <p className="text-xs text-sky-700 dark:text-sky-300">
-                Re-running: pulling all 30 feeds, rebuilding the timeline, and running all 3 analysts. This takes 1–2 minutes — leave this open.
+                Re-running in the background: pulling all feeds, rebuilding the timeline, and running all 3 analysts. This takes a few minutes — the previous analysis stays visible below until the new one replaces it, and you can safely close this.
               </p>
             </div>
           </div>
@@ -1050,6 +1050,7 @@ export default function App() {
   // refinement loop take several minutes; without this, their findings would sit
   // finished in the database while the UI kept showing a spinner forever.
   const jobsPending = open && (
+    open.status === "analyzing" ||
     ["queued", "running"].includes(open.jobs?.confirmers?.status) ||
     ["queued", "running"].includes(open.jobs?.refinements?.status) ||
     // Also poll if a rule exists but its backtest hasn't landed yet.
@@ -1248,7 +1249,7 @@ export default function App() {
       </div>
 
       {showForm && <AnalyzeForm onClose={() => setShowForm(false)} onSubmit={analyze} error={error} running={running} />}
-      {open && <AnalysisDetail record={open} onClose={() => setOpenId(null)} cb={cb} onRerun={rerun} rerunning={rerunning} rerunError={rerunError} onDelete={del} onChart={setChartModel} />}
+      {open && <AnalysisDetail record={open} onClose={() => setOpenId(null)} cb={cb} onRerun={rerun} rerunning={rerunning || open.status === "analyzing"} rerunError={rerunError} onDelete={del} onChart={setChartModel} />}
       {open && chartModel && (
         <ChartView record={open} modelId={chartModel} meta={MODEL_META[chartModel]}
           onClose={() => setChartModel(null)} onRerun={rerun} rerunning={rerunning} />
