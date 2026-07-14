@@ -16,9 +16,15 @@
 // each model separately re-downloads the same numbers.
 
 import { QD_ENDPOINTS, QD_CONTRACT_ENDPOINTS } from "./quantDataRegistry.js";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const BASE = "https://api.quantdata.us";
 const KEY = () => process.env.QUANTDATA_API_KEY;
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const DISK_CACHE_DIR = path.join(__dirname, "data", "quantdata");
 
 // Quant Data allows 240 requests/minute. We stay comfortably under it with a
 // small delay + limited concurrency, so a backtest sweep can reuse this
@@ -89,19 +95,76 @@ export async function fetchEndpoint(ep, params, { retries = 3 } = {}) {
   }
 }
 
-// Simple in-process cache. A backtest re-fetches the same (ticker, session)
-// data on every refinement round; without this we'd burn the rate limit and
-// the money for identical bytes. Keyed on everything that affects the response.
+// TWO-TIER CACHE: memory (fast, per-process) + disk (survives restarts).
+//
+// WHY DISK: the in-memory cache alone was wiped on every Railway redeploy, so
+// every re-run, backtest sweep, and refinement round re-bought the exact same
+// immutable bytes and re-spent the 240/min rate limit on them. Data for a
+// COMPLETED past session never changes, so it's written to server/data/
+// (git-ignored) and never fetched again — same policy as the Databento cache.
+//
+// WHAT'S NEVER DISK-CACHED:
+//   - endpoints with no time selector (e.g. news) — the response changes
+//     over time even for old queries
+//   - anything whose date range touches today — the session is still growing
 const cache = new Map();
 
+function isDiskCacheable(ep, params) {
+  if (ep.timeSel === "none") return false;
+  const today = new Date().toISOString().slice(0, 10);
+  const effectiveEnd = ep.timeSel === "sessionDateRange"
+    ? (params.endDate || params.sessionDate)
+    : params.sessionDate;
+  return !!effectiveEnd && effectiveEnd < today;
+}
+
+function diskPath(key) {
+  // Keys contain '|' and dates; make a safe flat filename.
+  return path.join(DISK_CACHE_DIR, key.replaceAll("|", "_").replaceAll("/", "-") + ".json");
+}
+
 export async function fetchEndpointCached(ep, params) {
-  const key = `${ep.id}|${params.ticker}|${params.sessionDate}|${params.startDate}|${params.endDate}`;
+  // The contract MUST be part of the key: contract-scoped endpoints send
+  // strike/expiry/type in the body, and without this two different contracts
+  // on the same ticker/session would silently share one cache entry.
+  const c = params.contract
+    ? `${params.contract.expirationDate}-${params.contract.strikePrice}-${params.contract.contractType}`
+    : "";
+  const key = `${ep.id}|${params.ticker}|${params.sessionDate}|${params.startDate}|${params.endDate}|${c}`;
   if (cache.has(key)) return cache.get(key);
+
+  const diskOk = isDiskCacheable(ep, params);
+  if (diskOk) {
+    const file = diskPath(key);
+    if (fs.existsSync(file)) {
+      const result = JSON.parse(fs.readFileSync(file, "utf8"));
+      cache.set(key, result);
+      return result;
+    }
+  }
+
   const result = await fetchEndpoint(ep, params);
   // Only cache successes — caching a rate-limit failure would poison every
   // subsequent round with a phantom "no data".
-  if (result.ok) cache.set(key, result);
+  if (result.ok) {
+    cache.set(key, result);
+    if (diskOk) {
+      fs.mkdirSync(DISK_CACHE_DIR, { recursive: true });
+      fs.writeFileSync(diskPath(key), JSON.stringify(result));
+    }
+  }
   return result;
+}
+
+// CHEAP COVERAGE PROBE: one request for the price feed only. Used before
+// committing to a full 30-feed pull for a session — this is what stops an
+// uncovered ticker (Quant Data's universe is optionable, liquid names) from
+// burning 15 days x 30 feeds of requests just to discover there's nothing.
+export async function probePriceData({ ticker, sessionDate }) {
+  const ep = QD_ENDPOINTS.find((e) => e.id === "stock_price_over_time");
+  const result = await fetchEndpointCached(ep, { ticker, sessionDate });
+  const hasData = result.ok && Object.keys(result.data?.data || {}).length > 0;
+  return { hasData, transient: !!result.transient };
 }
 
 // Fetches EVERY endpoint in the registry for one symbol + session.
@@ -115,7 +178,10 @@ export async function fetchAllEndpoints({ ticker, sessionDate, startDate, endDat
 
   for (let i = 0; i < endpoints.length; i += CONCURRENCY) {
     const batch = endpoints.slice(i, i + CONCURRENCY);
-    const settled = await Promise.all(batch.map((ep) => fetchEndpoint(ep, params)));
+    // Cached (memory + disk for past sessions): analysis pulls were the ONLY
+    // uncached path left, so every re-run and window walk re-bought identical
+    // immutable data and re-spent the rate limit on it.
+    const settled = await Promise.all(batch.map((ep) => fetchEndpointCached(ep, params)));
     settled.forEach((r) => { results[r.id] = r; });
     await sleep(DELAY_MS);
   }

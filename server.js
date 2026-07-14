@@ -10,7 +10,7 @@ import express from "express";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { readTrades, appendTrade, deleteTrade } from "./server/store.js";
-import { fetchAllEndpoints } from "./server/quantDataClient.js";
+import { fetchAllEndpoints, probePriceData } from "./server/quantDataClient.js";
 import { buildBriefing, buildMultiBriefing } from "./server/compress.js";
 import { analyzeAllModels } from "./server/analysis.js";
 import { backtestRule, priorSessions } from "./server/backtest.js";
@@ -61,10 +61,19 @@ app.get("/api/analyses", async (req, res) => {
 // market holidays simply return no data and get skipped, so "3 sessions" always
 // means 3 real sessions of tape — not 3 calendar days. Run on a Tuesday, this
 // pulls Tuesday + Monday + Friday, exactly as a human would look at the tape.
+//
+// PROBE-FIRST: each candidate day is first checked with ONE cheap request for
+// the price feed before committing to the full 30-feed pull. Before this, a
+// ticker outside Quant Data's coverage (their universe is optionable, liquid
+// names — a thin micro-cap like SHPH trades fine on Nasdaq but has nothing
+// there) burned 15 days x 30 feeds of requests just to discover emptiness,
+// then blamed it on "no trading data" as if the ticker didn't exist.
 async function fetchSessionWindow({ ticker, sessionDate, contract, sessionCount = 3 }) {
   const bundles = [];
   const d = new Date(sessionDate + "T00:00:00Z");
   let guard = 0;
+  let weekdaysProbed = 0;
+  let transientProbes = 0;
 
   while (bundles.length < sessionCount && guard < 15) {
     guard++;
@@ -72,24 +81,36 @@ async function fetchSessionWindow({ ticker, sessionDate, contract, sessionCount 
     const dow = d.getUTCDay();
 
     if (dow !== 0 && dow !== 6) {
-      const start = new Date(d);
-      start.setUTCDate(start.getUTCDate() - 15); // lookback for OI history etc.
-      const b = await fetchAllEndpoints({
-        ticker, sessionDate: iso,
-        startDate: start.toISOString().slice(0, 10),
-        endDate: iso,
-        contract,
-      });
-      // A holiday returns no price bars — not a real session, so it doesn't
-      // count toward the window and we keep walking back.
-      const hasPrice = b.results.stock_price_over_time?.ok
-        && Object.keys(b.results.stock_price_over_time.data?.data || {}).length > 0;
-      if (hasPrice) bundles.push(b);
-      else console.log(`[window] ${iso} has no price data (holiday?) — skipping`);
+      weekdaysProbed++;
+      const probe = await probePriceData({ ticker, sessionDate: iso });
+      if (probe.transient) transientProbes++;
+      if (probe.hasData) {
+        const start = new Date(d);
+        start.setUTCDate(start.getUTCDate() - 15); // lookback for OI history etc.
+        bundles.push(await fetchAllEndpoints({
+          ticker, sessionDate: iso,
+          startDate: start.toISOString().slice(0, 10),
+          endDate: iso,
+          contract,
+        }));
+      } else {
+        console.log(`[window] ${iso} has no price data (holiday or not covered) — skipping`);
+      }
     }
     d.setUTCDate(d.getUTCDate() - 1);
   }
-  return bundles;
+
+  // Distinguish the failure modes honestly. A run of 10+ weekdays with zero
+  // price data is not a stretch of holidays — the ticker isn't in Quant
+  // Data's coverage universe, and the error should say so instead of
+  // implying the ticker doesn't trade.
+  let noDataReason = null;
+  if (!bundles.length) {
+    noDataReason = transientProbes > 0
+      ? `Quant Data requests for ${ticker} kept failing (rate limit or network). This is transient — try again in a minute.`
+      : `Quant Data has no price data for ${ticker} on any of the last ${weekdaysProbed} trading days. The ticker may trade fine on an exchange, but it's outside Quant Data's coverage universe (typically optionable, liquid names) — so this options-flow analysis engine has nothing to analyze for it.`;
+  }
+  return { bundles, noDataReason };
 }
 
 app.post("/api/analyze", async (req, res) => {
@@ -102,9 +123,9 @@ app.post("/api/analyze", async (req, res) => {
 
   try {
     console.log(`[analyze] ${ticker} ${sessionDate} — fetching ${sessionCount}-session window...`);
-    const bundles = await fetchSessionWindow({ ticker, sessionDate, contract, sessionCount });
+    const { bundles, noDataReason } = await fetchSessionWindow({ ticker, sessionDate, contract, sessionCount });
     if (!bundles.length) {
-      return res.status(400).json({ error: `No trading data found for ${ticker} on or before ${sessionDate}.` });
+      return res.status(400).json({ error: noDataReason });
     }
 
     const briefing = buildMultiBriefing(bundles, { contract });
@@ -330,8 +351,8 @@ app.post("/api/analyses/:id/rerun", async (req, res) => {
     const notes = req.body?.notes ?? old.notes ?? null;
 
     console.log(`[rerun] ${ticker} ${sessionDate} with current engine (3-session window)...`);
-    const bundles = await fetchSessionWindow({ ticker, sessionDate, contract, sessionCount: 3 });
-    if (!bundles.length) return res.status(400).json({ error: `No trading data for ${ticker} on or before ${sessionDate}.` });
+    const { bundles, noDataReason } = await fetchSessionWindow({ ticker, sessionDate, contract, sessionCount: 3 });
+    if (!bundles.length) return res.status(400).json({ error: noDataReason });
 
     const briefing = buildMultiBriefing(bundles, { contract });
     console.log(`[rerun] window ${briefing.window.join(", ")} | ${briefing.timeline.priceThrusts.length} thrusts`);
