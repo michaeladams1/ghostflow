@@ -78,8 +78,11 @@ function simulateSession(sessionBars, rule, indicatorSeries, sessionDate) {
 
   while (i < sessionBars.length) {
     // --- find next entry from index i onward ---
+    // (Stops one bar before the close: an entry on the day's FINAL bar has no
+    // future bar to exit on, producing a phantom zero-duration "trade" that
+    // pollutes the stats as a 0% loss.)
     let entryIdx = -1, direction = null;
-    for (let j = i; j < sessionBars.length; j++) {
+    for (let j = i; j < sessionBars.length - 1; j++) {
       const bar = sessionBars[j];
       for (const cond of rule.entry.conditions) {
         const indVal = indicatorSeries[cond.indicator]?.[j];
@@ -259,6 +262,8 @@ export function runBacktest(rule, bars, { startingCapital = 25000 } = {}) {
       "No commissions or slippage modeled yet.",
       "Equity marked only at trade close, not intra-bar.",
       "Single symbol only in this version.",
+      "VWAP uses Nasdaq (XNAS) volume, not full-market consolidated volume — the closest available on the current Databento subscription (verified: EQUS.MINI is a small-venue subset with LESS volume than Nasdaq alone; EQUS.SIP/PLUS/ALL not entitled). Tracks consolidated VWAP closely for Nasdaq-listed names like QQQ, but is not identical.",
+      "Entries/exits are evaluated at 1-min bar CLOSES, so entry lands one minute after the paper's 9:31:00 timing.",
     ],
   };
 }

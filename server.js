@@ -93,7 +93,7 @@ async function fetchSessionWindow({ ticker, sessionDate, contract, sessionCount 
 }
 
 app.post("/api/analyze", async (req, res) => {
-  const { symbol, sessionDate, contract, notes, sessionCount = 3, autoBacktest = true } = req.body;
+  const { symbol, sessionDate, contract, notes, sessionCount = 3 } = req.body;
   if (!symbol || !sessionDate) {
     return res.status(400).json({ error: "symbol and sessionDate are required" });
   }
@@ -140,25 +140,13 @@ app.post("/api/analyze", async (req, res) => {
       agreement: analysis.combined.agreement,
     };
 
-    // AUTO-BACKTEST. A rule with no backtest is just a story — and asking the
-    // user to click a button to find out whether the rule loses money made the
-    // most important step optional. It now runs automatically for every model
-    // that proposed a rule.
-    if (autoBacktest) {
-      record.backtests = {};
-      const sessionList = priorSessions(briefing.sessionDate, 40);
-      for (const m of ["claude", "gpt", "grok"]) {
-        const rule = analysis[m]?.rule;
-        if (!rule) continue;
-        try {
-          console.log(`[analyze] auto-backtesting ${m}'s rule...`);
-          record.backtests[m] = await backtestRule(rule, { ticker, sessions: sessionList, holdMinutes: 15 });
-          console.log(`[analyze] ${m}: ${record.backtests[m].verdict}`);
-        } catch (e) {
-          console.error(`[analyze] backtest ${m} failed:`, e.message);
-        }
-      }
-    }
+    // AUTO-BACKTEST NOW RUNS IN THE BACKGROUND (jobs.js), not here.
+    // It used to run inline, which held this HTTP request open for 10-20
+    // minutes (3 models x 40 sessions of feed fetches). If the connection
+    // dropped anywhere in that window, the UI sat on "Pulling 30 feeds..."
+    // forever and the finished analysis never reached the screen. The UI
+    // already polls for rules whose backtest hasn't landed, so the results
+    // fill in the same way confirmers and refinements do.
 
     let persisted = true, persistError = null;
     try {
@@ -376,22 +364,13 @@ app.post("/api/analyses/:id/rerun", async (req, res) => {
       },
       analysis,
       agreement: analysis.combined.agreement,
+      backtests: undefined,
       refinements: undefined,
       confirmers: undefined,
     };
 
-    // Auto-backtest on re-run too — same reasoning: an untested rule is a story.
-    record.backtests = {};
-    const sessionList = priorSessions(briefing.sessionDate, 40);
-    for (const m of ["claude", "gpt", "grok"]) {
-      const rule = analysis[m]?.rule;
-      if (!rule) continue;
-      try {
-        record.backtests[m] = await backtestRule(rule, { ticker, sessions: sessionList, holdMinutes: 15 });
-      } catch (e) {
-        console.error(`[rerun] backtest ${m} failed:`, e.message);
-      }
-    }
+    // Auto-backtest on re-run happens in the background too — same reasoning
+    // as /api/analyze: keeping it inline is what hung the request.
 
     let persisted = true;
     try { await appendTrade(record); } catch (e) { persisted = false; console.error("[rerun] DB write failed:", e.message); }

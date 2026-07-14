@@ -1039,17 +1039,30 @@ export default function App() {
 
   const analyze = async (form) => {
     setRunning(true); setError(null);
+    // ABORT GUARD. The analyze request is legitimately slow (feed pulls + 3 AI
+    // analysts), but it should never be INFINITE. Without this, a dropped
+    // connection left the button on "Pulling 30 feeds..." forever with no way
+    // to recover except a page refresh. 10 minutes is beyond any legitimate
+    // run now that the auto-backtest happens in the background.
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10 * 60 * 1000);
     try {
       const res = await fetch("/api/analyze", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(form),
+        signal: controller.signal,
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Analysis failed");
       setRecords((p) => [data, ...p]);
       setShowForm(false);
       setOpenId(data.id);
-    } catch (e) { setError(e.message); }
+    } catch (e) {
+      setError(e.name === "AbortError"
+        ? "The request took over 10 minutes and was cancelled. The server may still be finishing in the background — refresh in a minute to check the Analyses list before re-running."
+        : e.message);
+    }
+    clearTimeout(timeout);
     setRunning(false);
   };
 

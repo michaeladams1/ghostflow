@@ -47,6 +47,40 @@ async function setJobStatus(id, job, status, detail) {
 }
 
 // ---------------------------------------------------------------------------
+// BACKTESTS: the auto-backtest that used to run INSIDE /api/analyze.
+// It was the single biggest reason the analyze request could hang for 10-20
+// minutes (3 models x 40 sessions of feed fetches) and strand the UI on
+// "Pulling 30 feeds..." forever if the connection dropped. The UI already
+// polls for a rule with no backtest, so moving it here needs no frontend work.
+// Runs FIRST because confirmers/refinement build on the same base rule.
+// ---------------------------------------------------------------------------
+async function runBacktests(id, { ticker, sessionDate, analysis }) {
+  await setJobStatus(id, "backtests", "running");
+  const sessions = priorSessions(sessionDate, 40);
+
+  for (const m of MODELS) {
+    const rule = analysis[m]?.rule;
+    if (!rule) continue;
+    try {
+      console.log(`[job:backtest] ${m} on ${ticker}...`);
+      const result = await backtestRule(rule, { ticker, sessions, holdMinutes: 15 });
+      await patchRecord(id, (rec) => {
+        rec.backtests = rec.backtests || {};
+        rec.backtests[m] = result;
+      });
+      console.log(`[job:backtest] ${m}: ${result.verdict || result.reason}`);
+    } catch (err) {
+      console.error(`[job:backtest] ${m} FAILED:`, err.message);
+      await patchRecord(id, (rec) => {
+        rec.backtests = rec.backtests || {};
+        rec.backtests[m] = { testable: false, reason: `Backtest failed: ${err.message}` };
+      });
+    }
+  }
+  await setJobStatus(id, "backtests", "done");
+}
+
+// ---------------------------------------------------------------------------
 // CONFIRMERS: which feeds actually LIFT the base signal?
 // ---------------------------------------------------------------------------
 async function runConfirmers(id, { ticker, sessionDate, analysis }) {
@@ -113,11 +147,13 @@ export function startBackgroundJobs(id, { ticker, sessionDate, analysis }) {
   if (!anyRule) {
     // Every model passed. There is nothing to test, and saying so explicitly is
     // better than leaving the panels in a permanent "pending" state.
+    setJobStatus(id, "backtests", "skipped", "No model proposed a rule — nothing to backtest.");
     setJobStatus(id, "confirmers", "skipped", "No model proposed a rule — nothing to test.");
     setJobStatus(id, "refinements", "skipped", "No model proposed a rule — nothing to refine.");
     return;
   }
 
+  setJobStatus(id, "backtests", "queued");
   setJobStatus(id, "confirmers", "queued");
   setJobStatus(id, "refinements", "queued");
 
@@ -125,6 +161,7 @@ export function startBackgroundJobs(id, { ticker, sessionDate, analysis }) {
   // running them at once was what caused sessions to get silently dropped.
   (async () => {
     try {
+      await runBacktests(id, { ticker, sessionDate, analysis });
       await runConfirmers(id, { ticker, sessionDate, analysis });
       await runRefinement(id, { ticker, sessionDate, analysis });
       console.log(`[jobs] all background work complete for ${id}`);
