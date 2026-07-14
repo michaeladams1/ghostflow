@@ -5,6 +5,7 @@ import {
   RefreshCw, Target, ListFilter, Table2, LineChart, Users, CalendarDays
 } from "lucide-react";
 import ChartView from "./ChartView.jsx";
+import StrategyLab from "./StrategyLab.jsx";
 
 const MODEL_META = {
   claude: { name: "Claude", accent: "text-amber-500", dot: "bg-amber-500", hex: "#f59e0b" },
@@ -1132,7 +1133,7 @@ export default function App() {
         </div>
 
         <div className="flex gap-1 mb-6 border-b border-zinc-200 dark:border-zinc-800">
-          {[{ id: "log", label: "Analyses", Icon: FileText }, { id: "settings", label: "Settings", Icon: Settings }].map(({ id, label, Icon }) => (
+          {[{ id: "log", label: "Analyses", Icon: FileText }, { id: "strategy", label: "Strategy Lab", Icon: FlaskConical }, { id: "settings", label: "Settings", Icon: Settings }].map(({ id, label, Icon }) => (
             <button key={id} onClick={() => setTab(id)}
               className={`flex items-center gap-1.5 px-3 py-2 text-sm border-b-2 -mb-px
                 ${tab === id ? "border-emerald-500 text-zinc-900 dark:text-zinc-100" : "border-transparent " + faint}`}>
@@ -1160,6 +1161,8 @@ export default function App() {
             </div>
           </div>
         )}
+
+        {tab === "strategy" && <StrategyLab />}
 
         {tab === "settings" && (
           <div className={`max-w-xl ${card} rounded-lg p-4`}>

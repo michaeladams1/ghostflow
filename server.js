@@ -18,6 +18,9 @@ import { refineRule } from "./server/refine.js";
 import { analyzeConfirmers } from "./server/confirmation.js";
 import { startBackgroundJobs } from "./server/jobs.js";
 import { callClaude, callGPT, callGrok } from "./server/aiProviders.js";
+import { parseStrategy } from "./server/strategyParser.js";
+import { fetchOhlcvBars } from "./server/databentoClient.js";
+import { runBacktest, getSessionChart } from "./server/priceBacktest.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DIST_DIR = path.join(__dirname, "dist");
@@ -416,6 +419,76 @@ app.delete("/api/analyses/:id", async (req, res) => {
   } catch (err) {
     console.error("[delete] FAILED:", err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ===========================================================================
+// STRATEGY LAB — a SEPARATE feature from the trade-analysis system above.
+// This tests a strategy IDEA (e.g. a published paper) against real price
+// history BEFORE any real trade is ever placed, rather than analyzing a trade
+// you already made. Three steps, each its own endpoint:
+//   1. /interpret   — AI reads a plain-English description, returns a
+//                     structured rule + a plain-English summary for the user
+//                     to confirm BEFORE anything is backtested.
+//   2. /backtest    — deterministic code (no AI) simulates that exact rule
+//                     against real 1-min Databento bars.
+//   3. /session-chart — full detail for ONE day, for the "inspect this trade"
+//                     view (price + indicator overlay + entry/exit markers).
+// ===========================================================================
+
+app.post("/api/strategy/interpret", async (req, res) => {
+  const { description } = req.body;
+  if (!description || !description.trim()) {
+    return res.status(400).json({ error: "description is required" });
+  }
+  try {
+    const rule = await parseStrategy(description);
+    res.json(rule);
+  } catch (err) {
+    console.error("[strategy/interpret] FAILED:", err);
+    res.status(500).json({ error: err.message || String(err) });
+  }
+});
+
+app.post("/api/strategy/backtest", async (req, res) => {
+  const { rule, startDate, endDate, startingCapital = 25000 } = req.body;
+  if (!rule?.symbols?.length) return res.status(400).json({ error: "rule.symbols must have at least one symbol" });
+  if (!startDate || !endDate) return res.status(400).json({ error: "startDate and endDate are required" });
+
+  const symbol = rule.symbols[0];
+  try {
+    console.log(`[strategy/backtest] fetching ${symbol} bars ${startDate} -> ${endDate}...`);
+    const bars = await fetchOhlcvBars({ symbol, startDate, endDate });
+    if (!bars.length) return res.status(400).json({ error: `No bars returned for ${symbol} in that range.` });
+
+    const result = runBacktest(rule, bars, { startingCapital });
+    console.log(`[strategy/backtest] ${symbol}: ${result.totalTrades} trades, ${result.totalReturnPct}% return`);
+    res.json(result);
+  } catch (err) {
+    console.error("[strategy/backtest] FAILED:", err);
+    res.status(500).json({ error: err.message || String(err) });
+  }
+});
+
+app.post("/api/strategy/session-chart", async (req, res) => {
+  const { rule, sessionDate } = req.body;
+  if (!rule?.symbols?.length || !sessionDate) {
+    return res.status(400).json({ error: "rule and sessionDate are required" });
+  }
+  const symbol = rule.symbols[0];
+  try {
+    // Fetch just this one day (end exclusive, so +1 day).
+    const d = new Date(sessionDate + "T00:00:00Z");
+    d.setUTCDate(d.getUTCDate() + 1);
+    const nextDay = d.toISOString().slice(0, 10);
+
+    const bars = await fetchOhlcvBars({ symbol, startDate: sessionDate, endDate: nextDay });
+    const chart = getSessionChart(rule, bars);
+    if (!chart) return res.status(400).json({ error: `No RTH bars found for ${symbol} on ${sessionDate}.` });
+    res.json(chart);
+  } catch (err) {
+    console.error("[strategy/session-chart] FAILED:", err);
+    res.status(500).json({ error: err.message || String(err) });
   }
 });
 
