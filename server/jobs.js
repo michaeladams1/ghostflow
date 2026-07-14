@@ -30,7 +30,8 @@ const MODELS = ["claude", "gpt", "grok"];
 // Re-reads the record before every write. These jobs run concurrently and each
 // writes a different key; without re-reading, the last writer would clobber the
 // others' results with its own stale snapshot.
-async function patchRecord(id, mutate) {
+// (Exported: server.js's background analysis runner uses the same pattern.)
+export async function patchRecord(id, mutate) {
   const all = await readTrades();
   const rec = all.find((r) => r.id === id);
   if (!rec) return null;

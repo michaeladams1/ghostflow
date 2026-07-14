@@ -942,7 +942,7 @@ function AnalyzeForm({ onClose, onSubmit, error, running }) {
           })}
           disabled={!f.symbol || !f.sessionDate || running}
           className="w-full mt-5 py-2 rounded bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-500 disabled:opacity-40">
-          {running ? "Pulling 30 feeds, running 3 analysts…" : "Analyze"}
+          {running ? "Checking data coverage…" : "Analyze"}
         </button>
 
         {error && <p className="text-xs text-red-500 mt-2">{error}</p>}
@@ -951,21 +951,31 @@ function AnalyzeForm({ onClose, onSubmit, error, running }) {
   );
 }
 
-function AnalysisCard({ record, onOpen }) {
+function AnalysisCard({ record, onOpen, onDelete }) {
   const c = record.analysis?.combined;
   const thrusts = record.briefing?.timeline?.priceThrusts?.length ?? 0;
   const entries = c?.entries ? Object.values(c.entries).filter((e) => e?.timestamp) : [];
   const stale = isStale(record);
+  const analyzing = record.status === "analyzing";
+  const failed = record.status === "failed";
 
   return (
-    <div className={`${card} rounded-lg p-4 flex flex-col ${stale ? "opacity-70" : ""}`}>
+    <div className={`${card} rounded-lg p-4 flex flex-col ${stale && !analyzing && !failed ? "opacity-70" : ""}`}>
       <div className="flex items-center justify-between mb-3">
-        {c ? <Verdict v={c.verdict} /> : <span className={`text-xs font-mono ${faint}`}>pending</span>}
-        <span className={`text-[11px] font-mono ${faint}`}>agreement {record.agreement}</span>
+        {analyzing ? (
+          <span className="flex items-center gap-1.5 text-[11px] font-mono px-1.5 py-0.5 rounded border border-sky-500/40 bg-sky-500/10 text-sky-600 dark:text-sky-400">
+            <RefreshCw size={11} className="animate-spin" /> ANALYZING
+          </span>
+        ) : failed ? (
+          <span className="text-[11px] font-mono px-1.5 py-0.5 rounded border border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400">
+            FAILED
+          </span>
+        ) : c ? <Verdict v={c.verdict} /> : <span className={`text-xs font-mono ${faint}`}>pending</span>}
+        {!analyzing && !failed && <span className={`text-[11px] font-mono ${faint}`}>agreement {record.agreement}</span>}
       </div>
       <div className="flex items-center gap-2">
         <span className="text-base font-semibold">{record.symbol}</span>
-        {stale && (
+        {stale && !analyzing && !failed && (
           <span className="text-[10px] font-mono px-1.5 py-0.5 rounded border border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400">
             STALE
           </span>
@@ -973,19 +983,41 @@ function AnalysisCard({ record, onOpen }) {
       </div>
       <div className={`text-xs font-mono mb-3 ${faint}`}>{record.sessionDate}</div>
 
-      <div className="border-t border-zinc-200 dark:border-zinc-800 pt-3 grid grid-cols-3 gap-2">
-        {[["Moves", thrusts], ["Entries", `${entries.length}/3`], ["Feeds", record.briefing?.fetchReport?.succeeded ?? "—"]].map(([k, v]) => (
-          <div key={k}>
-            <div className={heading}>{k}</div>
-            <div className="text-sm font-mono">{v}</div>
-          </div>
-        ))}
-      </div>
+      {analyzing ? (
+        <div className={`border-t border-zinc-200 dark:border-zinc-800 pt-3 text-xs ${faint}`}>
+          Pulling {record.window?.length ?? 3} sessions of feeds and running 3 analysts. This takes a few minutes — the card fills in on its own.
+        </div>
+      ) : failed ? (
+        <div className="border-t border-zinc-200 dark:border-zinc-800 pt-3 text-xs text-red-600 dark:text-red-400">
+          {record.analysisError || "The analysis failed. Delete this and try again."}
+        </div>
+      ) : (
+        <div className="border-t border-zinc-200 dark:border-zinc-800 pt-3 grid grid-cols-3 gap-2">
+          {[["Moves", thrusts], ["Entries", `${entries.length}/3`], ["Feeds", record.briefing?.fetchReport?.succeeded ?? "—"]].map(([k, v]) => (
+            <div key={k}>
+              <div className={heading}>{k}</div>
+              <div className="text-sm font-mono">{v}</div>
+            </div>
+          ))}
+        </div>
+      )}
 
-      <button onClick={() => onOpen(record.id)}
-        className="mt-4 w-full flex items-center justify-center gap-1.5 border border-zinc-300 dark:border-zinc-700 text-sm font-medium py-2 rounded-md hover:bg-zinc-100 dark:hover:bg-zinc-800">
-        {stale ? "Open & re-run" : "View full analysis"} <ChevronRight size={14} />
-      </button>
+      {analyzing ? (
+        <button disabled
+          className={`mt-4 w-full flex items-center justify-center gap-1.5 border border-zinc-300 dark:border-zinc-700 text-sm font-medium py-2 rounded-md opacity-50 ${faint}`}>
+          <RefreshCw size={13} className="animate-spin" /> Analyzing…
+        </button>
+      ) : failed ? (
+        <button onClick={() => onDelete(record.id)}
+          className="mt-4 w-full flex items-center justify-center gap-1.5 border border-red-400/50 text-red-600 dark:text-red-400 text-sm font-medium py-2 rounded-md hover:bg-red-500/10">
+          <X size={14} /> Delete failed analysis
+        </button>
+      ) : (
+        <button onClick={() => onOpen(record.id)}
+          className="mt-4 w-full flex items-center justify-center gap-1.5 border border-zinc-300 dark:border-zinc-700 text-sm font-medium py-2 rounded-md hover:bg-zinc-100 dark:hover:bg-zinc-800">
+          {stale ? "Open & re-run" : "View full analysis"} <ChevronRight size={14} />
+        </button>
+      )}
     </div>
   );
 }
@@ -1039,13 +1071,12 @@ export default function App() {
 
   const analyze = async (form) => {
     setRunning(true); setError(null);
-    // ABORT GUARD. The analyze request is legitimately slow (feed pulls + 3 AI
-    // analysts), but it should never be INFINITE. Without this, a dropped
-    // connection left the button on "Pulling 30 feeds..." forever with no way
-    // to recover except a page refresh. 10 minutes is beyond any legitimate
-    // run now that the auto-backtest happens in the background.
+    // This request is now FAST: the server only probes data coverage, creates
+    // a stub record, and responds. The heavy work (feed pull + 3 analysts)
+    // runs in the background; the card polls itself full. 60s covers even a
+    // slow probe walk with plenty of margin.
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 10 * 60 * 1000);
+    const timeout = setTimeout(() => controller.abort(), 60 * 1000);
     try {
       const res = await fetch("/api/analyze", {
         method: "POST", headers: { "Content-Type": "application/json" },
@@ -1054,17 +1085,35 @@ export default function App() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Analysis failed");
+      // Popup closes NOW; the new card appears with an "analyzing" badge and
+      // fills in as the background work lands. Deliberately not auto-opened —
+      // there's nothing to look at yet.
       setRecords((p) => [data, ...p]);
       setShowForm(false);
-      setOpenId(data.id);
     } catch (e) {
       setError(e.name === "AbortError"
-        ? "The request took over 10 minutes and was cancelled. The server may still be finishing in the background — refresh in a minute to check the Analyses list before re-running."
+        ? "The server didn't respond within 60 seconds. Check the deployment and try again."
         : e.message);
     }
     clearTimeout(timeout);
     setRunning(false);
   };
+
+  // Poll the whole list while ANY record is still analyzing, so cards fill in
+  // without the user having to open them.
+  const anyAnalyzing = records.some((r) => r.status === "analyzing");
+  useEffect(() => {
+    if (!anyAnalyzing) return;
+    const t = setInterval(async () => {
+      try {
+        const res = await fetch("/api/analyses");
+        if (!res.ok) return;
+        const rs = await res.json();
+        if (Array.isArray(rs)) setRecords(rs);
+      } catch { /* transient — the next tick retries */ }
+    }, 8000);
+    return () => clearInterval(t);
+  }, [anyAnalyzing]);
 
   const patch = (field) => (modelId, result) => {
     setRecords((prev) => prev.map((r) => r.id === openId
@@ -1113,18 +1162,19 @@ export default function App() {
     setRerunning(false);
   };
 
-  const del = async () => {
-    if (!openId) return;
+  const delById = async (id) => {
+    if (!id) return;
     if (!window.confirm("Delete this analysis permanently? This can't be undone.")) return;
     try {
-      const res = await fetch(`/api/analyses/${openId}`, { method: "DELETE" });
+      const res = await fetch(`/api/analyses/${id}`, { method: "DELETE" });
       if (!res.ok) throw new Error(`Delete failed (HTTP ${res.status})`);
-      setRecords((prev) => prev.filter((r) => r.id !== openId));
-      setOpenId(null);
+      setRecords((prev) => prev.filter((r) => r.id !== id));
+      if (openId === id) setOpenId(null);
     } catch (e) {
       setRerunError(e.message);
     }
   };
+  const del = () => delById(openId);
 
   return (
     <div className="min-h-screen bg-white dark:bg-black text-zinc-900 dark:text-zinc-100 font-sans transition-colors">
@@ -1165,7 +1215,7 @@ export default function App() {
               </button>
             </div>
             <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {records.map((r) => <AnalysisCard key={r.id} record={r} onOpen={setOpenId} />)}
+              {records.map((r) => <AnalysisCard key={r.id} record={r} onOpen={setOpenId} onDelete={delById} />)}
               {records.length === 0 && (
                 <div className={`col-span-full px-4 py-10 text-center text-sm rounded-lg border border-zinc-200 dark:border-zinc-800 ${faint}`}>
                   No analyses yet. Run one to get started.

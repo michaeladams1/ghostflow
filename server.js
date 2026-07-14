@@ -16,7 +16,7 @@ import { analyzeAllModels } from "./server/analysis.js";
 import { backtestRule, priorSessions } from "./server/backtest.js";
 import { refineRule } from "./server/refine.js";
 import { analyzeConfirmers } from "./server/confirmation.js";
-import { startBackgroundJobs } from "./server/jobs.js";
+import { startBackgroundJobs, patchRecord } from "./server/jobs.js";
 import { callClaude, callGPT, callGrok } from "./server/aiProviders.js";
 import { parseStrategy } from "./server/strategyParser.js";
 import { fetchOhlcvBars } from "./server/databentoClient.js";
@@ -68,14 +68,18 @@ app.get("/api/analyses", async (req, res) => {
 // names — a thin micro-cap like SHPH trades fine on Nasdaq but has nothing
 // there) burned 15 days x 30 feeds of requests just to discover emptiness,
 // then blamed it on "no trading data" as if the ticker didn't exist.
-async function fetchSessionWindow({ ticker, sessionDate, contract, sessionCount = 3 }) {
-  const bundles = [];
+// PROBE WALK (fast, ~1 request per weekday checked): finds which of the
+// target date and prior days actually have data, WITHOUT pulling any feeds.
+// Kept synchronous in the request so the user gets an instant, honest error
+// for uncovered tickers instead of a stub record that fails minutes later.
+async function findSessionDates({ ticker, sessionDate, sessionCount = 3 }) {
+  const dates = [];
   const d = new Date(sessionDate + "T00:00:00Z");
   let guard = 0;
   let weekdaysProbed = 0;
   let transientProbes = 0;
 
-  while (bundles.length < sessionCount && guard < 15) {
+  while (dates.length < sessionCount && guard < 15) {
     guard++;
     const iso = d.toISOString().slice(0, 10);
     const dow = d.getUTCDay();
@@ -84,18 +88,8 @@ async function fetchSessionWindow({ ticker, sessionDate, contract, sessionCount 
       weekdaysProbed++;
       const probe = await probePriceData({ ticker, sessionDate: iso });
       if (probe.transient) transientProbes++;
-      if (probe.hasData) {
-        const start = new Date(d);
-        start.setUTCDate(start.getUTCDate() - 15); // lookback for OI history etc.
-        bundles.push(await fetchAllEndpoints({
-          ticker, sessionDate: iso,
-          startDate: start.toISOString().slice(0, 10),
-          endDate: iso,
-          contract,
-        }));
-      } else {
-        console.log(`[window] ${iso} has no price data (holiday or not covered) — skipping`);
-      }
+      if (probe.hasData) dates.push(iso);
+      else console.log(`[window] ${iso} has no price data (holiday or not covered) — skipping`);
     }
     d.setUTCDate(d.getUTCDate() - 1);
   }
@@ -105,12 +99,37 @@ async function fetchSessionWindow({ ticker, sessionDate, contract, sessionCount 
   // Data's coverage universe, and the error should say so instead of
   // implying the ticker doesn't trade.
   let noDataReason = null;
-  if (!bundles.length) {
+  if (!dates.length) {
     noDataReason = transientProbes > 0
       ? `Quant Data requests for ${ticker} kept failing (rate limit or network). This is transient — try again in a minute.`
       : `Quant Data has no price data for ${ticker} on any of the last ${weekdaysProbed} trading days. The ticker may trade fine on an exchange, but it's outside Quant Data's coverage universe (typically optionable, liquid names) — so this options-flow analysis engine has nothing to analyze for it.`;
   }
-  return { bundles, noDataReason };
+  return { dates, noDataReason };
+}
+
+// FULL PULL for a known-good list of session dates (the slow part — runs in
+// the background, never inside a request).
+async function fetchBundlesForDates({ ticker, dates, contract }) {
+  const bundles = [];
+  for (const iso of dates) {
+    const start = new Date(iso + "T00:00:00Z");
+    start.setUTCDate(start.getUTCDate() - 15); // lookback for OI history etc.
+    bundles.push(await fetchAllEndpoints({
+      ticker, sessionDate: iso,
+      startDate: start.toISOString().slice(0, 10),
+      endDate: iso,
+      contract,
+    }));
+  }
+  return bundles;
+}
+
+// Kept for /rerun, which still runs synchronously (it's launched from the
+// detail view, which has its own spinner and error handling).
+async function fetchSessionWindow({ ticker, sessionDate, contract, sessionCount = 3 }) {
+  const { dates, noDataReason } = await findSessionDates({ ticker, sessionDate, sessionCount });
+  if (!dates.length) return { bundles: [], noDataReason };
+  return { bundles: await fetchBundlesForDates({ ticker, dates, contract }), noDataReason: null };
 }
 
 app.post("/api/analyze", async (req, res) => {
@@ -122,71 +141,88 @@ app.post("/api/analyze", async (req, res) => {
   const ticker = String(symbol).toUpperCase();
 
   try {
-    console.log(`[analyze] ${ticker} ${sessionDate} — fetching ${sessionCount}-session window...`);
-    const { bundles, noDataReason } = await fetchSessionWindow({ ticker, sessionDate, contract, sessionCount });
-    if (!bundles.length) {
+    // FAST PATH ONLY. Everything in this handler must finish in seconds:
+    // (1) probe which days have data (instant coverage error if none),
+    // (2) create a stub record with status "analyzing",
+    // (3) respond so the popup can close and the card can appear.
+    // The feed pull + 3-analyst review runs in the background and patches the
+    // record as it completes; the UI polls and fills the card in.
+    console.log(`[analyze] ${ticker} ${sessionDate} — probing session window...`);
+    const { dates, noDataReason } = await findSessionDates({ ticker, sessionDate, sessionCount });
+    if (!dates.length) {
       return res.status(400).json({ error: noDataReason });
     }
-
-    const briefing = buildMultiBriefing(bundles, { contract });
-    console.log(`[analyze] window ${briefing.window.join(", ")} | ${briefing.timeline.priceThrusts.length} thrusts | ${briefing.timeline.totalSignalEvents} events`);
-
-    const analysis = await analyzeAllModels(briefing, notes);
-    console.log(`[analyze] ${analysis.combined.verdict} ${analysis.combined.agreement}`);
 
     const record = {
       id: "a" + Date.now(),
       symbol: ticker,
-      sessionDate: briefing.sessionDate,
-      window: briefing.window,
+      sessionDate: dates[0],
+      window: dates,
       contract: contract || null,
       notes: notes || null,
       loggedAt: new Date().toISOString(),
-      briefing: {
-        endpoints: briefing.endpoints,
-        timeline: briefing.timeline,
-        sessionMetrics: briefing.sessionMetrics,
-        priceSeries: briefing.priceSeries,
-        fetchReport: briefing.fetchReport,
-        window: briefing.window,
-        // Compact per-session summary so the UI can show the window honestly.
-        sessions: briefing.sessions.map((s) => ({
-          sessionDate: s.sessionDate,
-          thrusts: s.timeline.priceThrusts.length,
-          events: s.timeline.totalSignalEvents,
-          feeds: s.fetchReport.succeeded,
-        })),
-      },
-      analysis,
-      agreement: analysis.combined.agreement,
+      status: "analyzing",
+      jobs: { analysis: { status: "running", at: new Date().toISOString() } },
     };
 
-    // AUTO-BACKTEST NOW RUNS IN THE BACKGROUND (jobs.js), not here.
-    // It used to run inline, which held this HTTP request open for 10-20
-    // minutes (3 models x 40 sessions of feed fetches). If the connection
-    // dropped anywhere in that window, the UI sat on "Pulling 30 feeds..."
-    // forever and the finished analysis never reached the screen. The UI
-    // already polls for rules whose backtest hasn't landed, so the results
-    // fill in the same way confirmers and refinements do.
-
-    let persisted = true, persistError = null;
+    // The stub MUST persist before we respond — the background runner writes
+    // its results into this row, and the UI polls it. No row, no analysis.
     try {
       await appendTrade(record);
     } catch (err) {
-      persisted = false;
-      persistError = err.message;
-      console.error("[analyze] DB write failed (analysis still returned):", err.message);
+      console.error("[analyze] DB write failed — cannot run in background without persistence:", err.message);
+      return res.status(500).json({ error: `Database unavailable (${err.message}) — the analysis can't run in the background without somewhere to store its results.` });
     }
 
-    // Respond NOW, then keep working. Confirmation analysis and the refinement
-    // loop take many minutes; making them buttons made the most important steps
-    // optional, and making them blocking would time out the request. They run in
-    // the background and write into this record as they finish.
-    res.status(201).json({ ...record, persisted, persistError });
+    res.status(201).json(record);
 
-    if (persisted) {
-      startBackgroundJobs(record.id, { ticker, sessionDate: briefing.sessionDate, analysis });
-    }
+    // ---- Background: the actual work. ----
+    (async () => {
+      try {
+        console.log(`[analyze:bg] ${ticker} pulling ${dates.length} sessions of feeds...`);
+        const bundles = await fetchBundlesForDates({ ticker, dates, contract });
+        const briefing = buildMultiBriefing(bundles, { contract });
+        console.log(`[analyze:bg] window ${briefing.window.join(", ")} | ${briefing.timeline.priceThrusts.length} thrusts | ${briefing.timeline.totalSignalEvents} events`);
+
+        const analysis = await analyzeAllModels(briefing, notes);
+        console.log(`[analyze:bg] ${analysis.combined.verdict} ${analysis.combined.agreement}`);
+
+        await patchRecord(record.id, (rec) => {
+          rec.sessionDate = briefing.sessionDate;
+          rec.window = briefing.window;
+          rec.briefing = {
+            endpoints: briefing.endpoints,
+            timeline: briefing.timeline,
+            sessionMetrics: briefing.sessionMetrics,
+            priceSeries: briefing.priceSeries,
+            fetchReport: briefing.fetchReport,
+            window: briefing.window,
+            // Compact per-session summary so the UI can show the window honestly.
+            sessions: briefing.sessions.map((s) => ({
+              sessionDate: s.sessionDate,
+              thrusts: s.timeline.priceThrusts.length,
+              events: s.timeline.totalSignalEvents,
+              feeds: s.fetchReport.succeeded,
+            })),
+          };
+          rec.analysis = analysis;
+          rec.agreement = analysis.combined.agreement;
+          rec.status = "complete";
+          rec.jobs = rec.jobs || {};
+          rec.jobs.analysis = { status: "done", at: new Date().toISOString() };
+        });
+
+        startBackgroundJobs(record.id, { ticker, sessionDate: briefing.sessionDate, analysis });
+      } catch (err) {
+        console.error(`[analyze:bg] FAILED for ${record.id}:`, err);
+        await patchRecord(record.id, (rec) => {
+          rec.status = "failed";
+          rec.analysisError = err.message || String(err);
+          rec.jobs = rec.jobs || {};
+          rec.jobs.analysis = { status: "failed", detail: err.message, at: new Date().toISOString() };
+        }).catch((e) => console.error("[analyze:bg] couldn't even record the failure:", e.message));
+      }
+    })();
   } catch (err) {
     console.error("[analyze] FAILED:", err);
     res.status(500).json({ error: err.message || String(err) });
