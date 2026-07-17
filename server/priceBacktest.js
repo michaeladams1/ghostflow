@@ -39,6 +39,33 @@ function groupIntoSessions(bars) {
   return [...sessions.entries()].sort(([a], [b]) => (a < b ? -1 : 1));
 }
 
+// Wilder's RSI, standard formula: first `period` changes seeded as a simple
+// average, then smoothed one bar at a time. Bars before the seed point have
+// no defined RSI (not enough history yet in THIS session — indicators reset
+// daily, same as VWAP/SMA/EMA).
+function computeRSISeries(closes, period) {
+  const out = new Array(closes.length).fill(null);
+  if (closes.length <= period) return out;
+
+  let gainSum = 0, lossSum = 0;
+  for (let i = 1; i <= period; i++) {
+    const change = closes[i] - closes[i - 1];
+    if (change >= 0) gainSum += change; else lossSum += -change;
+  }
+  let avgGain = gainSum / period, avgLoss = lossSum / period;
+  out[period] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+
+  for (let i = period + 1; i < closes.length; i++) {
+    const change = closes[i] - closes[i - 1];
+    const gain = change >= 0 ? change : 0;
+    const loss = change < 0 ? -change : 0;
+    avgGain = (avgGain * (period - 1) + gain) / period;
+    avgLoss = (avgLoss * (period - 1) + loss) / period;
+    out[i] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+  }
+  return out;
+}
+
 function computeIndicatorSeries(sessionBars, indicators) {
   const out = {};
   for (const ind of indicators) {
@@ -65,6 +92,9 @@ function computeIndicatorSeries(sessionBars, indicators) {
         prev = prev === null ? b.close : b.close * k + prev * (1 - k);
         return prev;
       });
+    } else if (ind.type === "RSI") {
+      const period = ind.period || 14;
+      out[ind.id] = computeRSISeries(sessionBars.map((b) => b.close), period);
     }
   }
   return out;
@@ -87,10 +117,12 @@ function simulateSession(sessionBars, rule, indicatorSeries, sessionDate) {
       for (const cond of rule.entry.conditions) {
         const indVal = indicatorSeries[cond.indicator]?.[j];
         if (!Number.isFinite(indVal)) continue;
-        const above = bar.close > indVal, below = bar.close < indVal;
-        if ((cond.if === "price_above" && above) || (cond.if === "price_below" && below)) {
-          entryIdx = j; direction = cond.then; break;
-        }
+        let fires = false;
+        if (cond.if === "price_above") fires = bar.close > indVal;
+        else if (cond.if === "price_below") fires = bar.close < indVal;
+        else if (cond.if === "indicator_above") fires = indVal > cond.value;
+        else if (cond.if === "indicator_below") fires = indVal < cond.value;
+        if (fires) { entryIdx = j; direction = cond.then; break; }
       }
       if (entryIdx !== -1) break;
     }
@@ -115,9 +147,25 @@ function simulateSession(sessionBars, rule, indicatorSeries, sessionDate) {
         }
       } else if (rule.exit.stop?.type === "fixed_pct" && pctMove <= -rule.exit.stop.value) {
         exitIdx = k; exitReason = "stop"; break;
+      } else if (rule.exit.stop?.type === "indicator_threshold") {
+        const indVal = indicatorSeries[rule.exit.stop.indicator]?.[k];
+        const { comparison, value } = rule.exit.stop;
+        if (Number.isFinite(indVal)) {
+          if ((comparison === "above" && indVal > value) || (comparison === "below" && indVal < value)) {
+            exitIdx = k; exitReason = "stop"; break;
+          }
+        }
       }
       if (rule.exit.target?.type === "fixed_pct" && pctMove >= rule.exit.target.value) {
         exitIdx = k; exitReason = "target"; break;
+      } else if (rule.exit.target?.type === "indicator_threshold") {
+        const indVal = indicatorSeries[rule.exit.target.indicator]?.[k];
+        const { comparison, value } = rule.exit.target;
+        if (Number.isFinite(indVal)) {
+          if ((comparison === "above" && indVal > value) || (comparison === "below" && indVal < value)) {
+            exitIdx = k; exitReason = "target"; break;
+          }
+        }
       }
     }
 

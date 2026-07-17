@@ -24,23 +24,28 @@ You convert a trading strategy description into this EXACT JSON schema. Output O
   "symbols": string[],              // ticker(s) to test, e.g. ["QQQ","TQQQ"]. If the description doesn't name one, use [] and add a warning.
   "session": "RTH",                 // always "RTH" for now (9:30am-4:00pm ET) — this engine does not yet support extended hours.
   "indicators": [                   // indicators referenced by entry/exit rules
-    { "id": string, "type": "VWAP" | "SMA" | "EMA", "period": number | null }
-    // VWAP has no period (session-anchored, resets daily). SMA/EMA require a period (number of 1-min bars).
+    { "id": string, "type": "VWAP" | "SMA" | "EMA" | "RSI", "period": number | null }
+    // VWAP has no period (session-anchored, resets daily). SMA/EMA/RSI require a period (number of 1-min bars; RSI defaults to 14 if not specified).
   ],
   "entry": {
     "waitBars": number,             // how many 1-min bars to wait after the open before the first possible entry (0 or 1 typically)
     "conditions": [
       { "if": "price_above" | "price_below", "indicator": string, "then": "long" | "short" }
-      // e.g. price above VWAP -> long, price below VWAP -> short. List every condition mentioned.
+      // e.g. price above VWAP -> long, price below VWAP -> short.
+      | { "if": "indicator_above" | "indicator_below", "indicator": string, "value": number, "then": "long" | "short" }
+      // e.g. RSI below 30 -> long, RSI above 70 -> short. Use this form for oscillators like RSI, where the rule compares the INDICATOR to a fixed number, not price to the indicator's line.
+      // List every condition mentioned.
     ]
   },
   "exit": {
     "stop": 
-        { "type": "indicator_cross", "indicator": string }          // exit when a bar CLOSES on the wrong side of the named indicator
+        { "type": "indicator_cross", "indicator": string }          // exit when a bar CLOSES on the wrong side of the named indicator LINE (e.g. price crosses below VWAP)
+      | { "type": "indicator_threshold", "indicator": string, "comparison": "above" | "below", "value": number }  // exit when the indicator's VALUE crosses a fixed number (e.g. RSI rises above 50)
       | { "type": "fixed_pct", "value": number }                     // exit at a fixed % loss from entry
       | { "type": "none" },
     "target":
-        { "type": "fixed_pct", "value": number }
+        { "type": "indicator_threshold", "indicator": string, "comparison": "above" | "below", "value": number }
+      | { "type": "fixed_pct", "value": number }
       | { "type": "none" },
     "endOfDay": boolean             // true if the strategy flattens at the close and never holds overnight (this is the common case)
   },
@@ -50,7 +55,9 @@ You convert a trading strategy description into this EXACT JSON schema. Output O
 
 RULES:
 - If the description is ambiguous about a detail (e.g. exact stop-loss size), pick the most literal reading of the text and note the assumption in "warnings" — do not guess silently.
-- Only use SMA/EMA/VWAP as indicator types. If the description needs an indicator this schema doesn't support (e.g. RSI, Bollinger Bands, options-flow metrics), do NOT invent a fake mapping — list it in "warnings" and omit it from "indicators".
+- Only use SMA/EMA/VWAP/RSI as indicator types. If the description needs an indicator this schema doesn't support (e.g. Bollinger Bands, MACD, options-flow metrics like GEX/dark pool/IV), do NOT invent a fake mapping — list it in "warnings" and omit it from "indicators".
+- All indicators (including RSI) are computed on 1-minute bars WITHIN a single RTH session and reset every day — there is no daily-bar or multi-day indicator support (e.g. "5-day RSI" or "200-day moving average" cannot be expressed; flag these in "warnings").
+- Multi-bar sequential comparisons ("RSI has fallen for 3 consecutive days", "RSI was below 60 three days ago") are NOT supported — only the current bar's indicator value can be compared to a threshold. Flag these in "warnings".
 - "summary" must describe the ACTUAL parsed rule, not marketing language from the source text.
 `.trim();
 
