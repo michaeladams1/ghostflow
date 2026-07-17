@@ -172,6 +172,66 @@ export function detectSignalEvents(series, { endpoint, metric, minZ = 2.5 } = {}
 // and conflating the two is exactly the lookahead bias this system exists to
 // avoid. leadMinutes > 0 always.
 // ---------------------------------------------------------------------------
+
+// PERSISTENT CONDITIONS vs MOMENTARY SIGNALS.
+// Some metrics (a flow spike, a dark-pool burst) are genuinely momentary —
+// one bad minute, then gone. Others (gamma proximity, a standing IV skew) can
+// stay past the z-score threshold for dozens of CONSECUTIVE minutes simply
+// because the underlying condition (price sitting near a gamma wall) hasn't
+// changed. Left alone, that produces 90 near-duplicate rows for one real
+// condition — which both misrepresents it as 90 independent pieces of
+// evidence AND, since only the nearest ~15 rows per move are shown, can crowd
+// out other feeds' genuine one-off signals entirely.
+//
+// This collapses a RUN of same-feed, same-metric, same-direction readings
+// that are contiguous in time into ONE entry describing the whole span — so
+// a model sees "price hugged the gamma wall from 10:15 to 13:40" instead of
+// 92 separate lines, and other feeds get a fair shot at the precursor list.
+function collapseConsecutivePrecursors(precursors, { maxGapMin = 5 } = {}) {
+  const byKey = new Map();
+  for (const p of precursors) {
+    const key = `${p.endpoint}.${p.metric}.${p.direction}`;
+    if (!byKey.has(key)) byKey.set(key, []);
+    byKey.get(key).push(p);
+  }
+
+  const collapsed = [];
+  for (const group of byKey.values()) {
+    const sorted = [...group].sort((a, b) => a.ts - b.ts);
+    let run = [sorted[0]];
+    const flush = () => {
+      if (run.length === 1) {
+        collapsed.push(run[0]);
+      } else {
+        const zs = run.map((r) => r.z);
+        collapsed.push({
+          ...run[0],
+          persistent: true,
+          occurrences: run.length,
+          firstClock: run[0].clock, lastClock: run[run.length - 1].clock,
+          firstLeadMinutes: run[0].leadMinutes, lastLeadMinutes: run[run.length - 1].leadMinutes,
+          minZ: Math.min(...zs), maxZ: Math.max(...zs),
+        });
+      }
+    };
+    for (let i = 1; i < sorted.length; i++) {
+      const gapMin = (sorted[i].ts - sorted[i - 1].ts) / 60_000;
+      if (gapMin <= maxGapMin) {
+        run.push(sorted[i]);
+      } else {
+        flush();
+        run = [sorted[i]];
+      }
+    }
+    flush();
+  }
+
+  // Back to "closest to the move first" so the most temporally relevant
+  // episodes (persistent or momentary) surface first regardless of feed.
+  collapsed.sort((a, b) => (a.leadMinutes ?? a.firstLeadMinutes) - (b.leadMinutes ?? b.firstLeadMinutes));
+  return collapsed;
+}
+
 export function computeLeadLag(thrusts, events, { maxLeadMin = 90 } = {}) {
   return thrusts.map((t) => {
     const precursors = events
@@ -181,7 +241,9 @@ export function computeLeadLag(thrusts, events, { maxLeadMin = 90 } = {}) {
 
     // Which distinct feeds corroborated each other ahead of this move? A move
     // foreshadowed by 4 independent feeds is a very different claim from one
-    // foreshadowed by a single noisy feed.
+    // foreshadowed by a single noisy feed. Computed on the FULL (uncollapsed)
+    // precursor list, so a persistent run still counts as one corroborating
+    // feed, same as a momentary spike would.
     const feeds = [...new Set(precursors.map((p) => p.endpoint))];
 
     return {
@@ -189,7 +251,7 @@ export function computeLeadLag(thrusts, events, { maxLeadMin = 90 } = {}) {
       precursorCount: precursors.length,
       corroboratingFeeds: feeds,
       corroborationScore: feeds.length,
-      precursors: precursors.slice(0, 25),
+      precursors: collapseConsecutivePrecursors(precursors).slice(0, 25),
     };
   });
 }
@@ -809,7 +871,11 @@ export function renderBriefing(b, { full = true } = {}) {
         lines.push(`    NOTHING fired in advance. This move may simply not have been knowable — saying so is a legitimate, valuable conclusion.`);
       }
       ll.precursors.slice(0, 15).forEach((p) => {
-        lines.push(`    ${p.clock}  (${p.leadMinutes} min before)  ${p.endpoint}.${p.metric} = ${p.value}  [${p.z} sigma, ${p.direction}]`);
+        if (p.persistent) {
+          lines.push(`    ${p.firstClock}->${p.lastClock}  (${p.firstLeadMinutes}-${p.lastLeadMinutes} min before)  ${p.endpoint}.${p.metric} PERSISTENT ${p.direction} for ${p.occurrences} straight minutes (z ranged ${p.minZ.toFixed(1)} to ${p.maxZ.toFixed(1)}). This is ONE ongoing condition, not ${p.occurrences} separate signals — describe it as a regime/state (e.g. "price sat near the gamma wall from X to Y"), not as repeated firings.`);
+        } else {
+          lines.push(`    ${p.clock}  (${p.leadMinutes} min before)  ${p.endpoint}.${p.metric} = ${p.value}  [${p.z} sigma, ${p.direction}]`);
+        }
       });
     });
   }
