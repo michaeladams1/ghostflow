@@ -25,6 +25,9 @@ const CASES = [
 
   ["missing comma between array elements (Claude's actual failure shape)",
     '{"endpointReview":[{"id":"net_drift","used":true,"notes":"fired at 13:43"}{"id":"net_flow","used":false,"notes":"nothing"}]}'],
+
+  ["illegal escape sequence (Grok's actual failure shape, e.g. \\sigma)",
+    '{"notes":"dealers in negative \\gamma tend to amplify the move","verdict":"tradeable"}'],
 ];
 
 let pass = 0, fail = 0;

@@ -27,6 +27,11 @@ import { refineRule } from "./refine.js";
 
 const MODELS = ["claude", "gpt", "grok"];
 
+// ~365 calendar days of lookback. priorSessions() only counts weekdays (no
+// weekends/holidays baked into the count itself — those get skipped when a
+// session returns no data), so 365 calendar days ≈ 260 weekdays.
+const BACKTEST_LOOKBACK_SESSIONS = 260;
+
 // Re-reads the record before every write. These jobs run concurrently and each
 // writes a different key; without re-reading, the last writer would clobber the
 // others' results with its own stale snapshot.
@@ -57,7 +62,7 @@ async function setJobStatus(id, job, status, detail) {
 // ---------------------------------------------------------------------------
 async function runBacktests(id, { ticker, sessionDate, analysis }) {
   await setJobStatus(id, "backtests", "running");
-  const sessions = priorSessions(sessionDate, 40);
+  const sessions = priorSessions(sessionDate, BACKTEST_LOOKBACK_SESSIONS);
 
   for (const m of MODELS) {
     const rule = analysis[m]?.rule;
@@ -86,7 +91,7 @@ async function runBacktests(id, { ticker, sessionDate, analysis }) {
 // ---------------------------------------------------------------------------
 async function runConfirmers(id, { ticker, sessionDate, analysis }) {
   await setJobStatus(id, "confirmers", "running");
-  const sessions = priorSessions(sessionDate, 40);
+  const sessions = priorSessions(sessionDate, BACKTEST_LOOKBACK_SESSIONS);
 
   for (const m of MODELS) {
     const rule = analysis[m]?.rule;

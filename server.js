@@ -242,7 +242,7 @@ app.get("/api/analyses/:id", async (req, res) => {
 // because it's slow (one full feed pull per session) and you won't want it on
 // every analysis.
 app.post("/api/analyses/:id/backtest", async (req, res) => {
-  const { modelId, sessions = 20, holdMinutes = 15 } = req.body;
+  const { modelId, sessions = 260, holdMinutes = 15 } = req.body;
   try {
     const all = await readTrades();
     const record = all.find((r) => r.id === req.params.id);
@@ -317,7 +317,7 @@ app.post("/api/analyses/:id/refine", async (req, res) => {
 // the time, but 90% when a volume spike accompanies it" becomes a fact rather
 // than a hunch.
 app.post("/api/analyses/:id/confirmers", async (req, res) => {
-  const { modelId, sessions = 40, holdMinutes = 15 } = req.body;
+  const { modelId, sessions = 260, holdMinutes = 15 } = req.body;
   try {
     const all = await readTrades();
     const record = all.find((r) => r.id === req.params.id);

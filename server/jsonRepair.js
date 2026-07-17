@@ -60,6 +60,35 @@ function repairJson(raw) {
   }
   s = out;
 
+  // ILLEGAL ESCAPE SEQUENCES — a backslash followed by anything other than
+  // the 9 characters JSON allows to be escaped ( " \ / b f n r t u ). Models
+  // do this constantly with things like "\sigma", "\theta", or a Windows path
+  // pasted into a note — none of those are valid JSON escapes, and
+  // JSON.parse rejects the ENTIRE document over one stray backslash ("Bad
+  // escaped character"). The model meant a literal backslash, so we escape
+  // the backslash itself (\X -> \\X), turning it into a legal escaped-
+  // backslash followed by an ordinary character — this cannot change the
+  // meaning of any ALREADY-valid escape sequence, since those are left alone.
+  {
+    const VALID_ESCAPES = new Set(['"', "\\", "/", "b", "f", "n", "r", "t", "u"]);
+    let out2 = "";
+    let inStr = false, esc = false;
+    for (let i = 0; i < s.length; i++) {
+      const ch = s[i];
+      if (esc) { out2 += ch; esc = false; continue; }
+      if (ch === "\\") {
+        if (inStr && !VALID_ESCAPES.has(s[i + 1])) {
+          out2 += "\\\\"; // treat as a literal backslash, not an escape
+          continue;
+        }
+        out2 += ch; esc = true; continue;
+      }
+      if (ch === '"') { inStr = !inStr; out2 += ch; continue; }
+      out2 += ch;
+    }
+    s = out2;
+  }
+
   // Trailing commas before a closing brace/bracket.
   s = s.replace(/,\s*([}\]])/g, "$1");
 
