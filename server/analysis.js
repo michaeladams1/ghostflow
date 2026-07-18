@@ -22,7 +22,7 @@
 //    justified by data that didn't exist yet — enforced by arithmetic in
 //    compress.js, not by asking a model to be careful.
 
-import { callClaudeWithTools, callGPTWithTools, callGrokWithTools } from "./aiProviders.js";
+import { callClaudeWithTools, callGPTWithTools, callGrokWithTools, CONFIGURED_MODELS } from "./aiProviders.js";
 import { renderMultiBriefing } from "./compress.js";
 import { ruleVocabularyBlock } from "./vocabulary.js";
 import { extractJsonWithRepair } from "./jsonRepair.js";
@@ -193,6 +193,7 @@ export async function analyzeWithModel(modelId, briefing, userNotes) {
     verdict: tradeable ? "tradeable" : "not_tradeable",
     confidence: tradeable ? Math.max(0, Math.min(100, Math.round(Number(parsed.confidence) || 0))) : 0,
     reasoning: parsed.verdict_reasoning || "",
+    modelId: CONFIGURED_MODELS[modelId], // the EXACT model string this run actually called — verifiable, not assumed
     endpointReview: review,
     reviewComplete: missing.length === 0,
     missingReviews: missing,

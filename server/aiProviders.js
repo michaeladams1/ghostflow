@@ -13,6 +13,12 @@ const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-5.1";
 const XAI_KEY = process.env.XAI_API_KEY;
 const XAI_MODEL = process.env.XAI_MODEL || "grok-4.3";
 
+// Exported so callers (analysis.js) can record which exact model string was
+// actually used on every analysis, in the database, permanently — not
+// something to trust blindly. Whether an env var override took effect on a
+// given deploy is a verifiable fact from here on, not a guess.
+export const CONFIGURED_MODELS = { claude: ANTHROPIC_MODEL, gpt: OPENAI_MODEL, grok: XAI_MODEL };
+
 // Model names above are current as of this writing but providers rename/retire
 // models frequently. If a call fails with a "model not found" style error,
 // check the provider's current model list and update the *_MODEL env var
