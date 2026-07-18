@@ -516,8 +516,8 @@ function CombinedPanel({ record, onChart }) {
               </div>
               {a.rule && <p className={`text-xs font-mono ${faint} mb-1`}>{a.rule.description}</p>}
               {bt?.testable && (
-                <p className={`text-xs font-mono ${bt.winRate >= 55 && bt.avgReturnPct > 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>
-                  backtest: {bt.totalTrades} trades · {bt.winRate}% win · {bt.avgReturnPct}%/trade
+                <p className={`text-xs font-mono ${bt.enoughData && (bt.profitFactor === "Inf" || bt.profitFactor >= 1.1) ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>
+                  backtest: {bt.totalTrades} trades · {bt.winRate}% win · {bt.avgReturnPct}%/trade · PF {bt.profitFactor}
                 </p>
               )}
               {bt && !bt.testable && <p className={`text-xs ${faint}`}>rule not testable</p>}
