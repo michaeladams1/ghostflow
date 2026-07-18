@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import {
   X, CheckCircle2, XCircle, Minus, ChevronRight, Search, Sun, Moon,
   FileText, Settings, ExternalLink, AlertTriangle, Zap, FlaskConical,
-  RefreshCw, Target, ListFilter, Table2, LineChart, Users, CalendarDays
+  RefreshCw, Target, ListFilter, Table2, LineChart, Users, CalendarDays, Filter
 } from "lucide-react";
 import ChartView from "./ChartView.jsx";
 import StrategyLab from "./StrategyLab.jsx";
@@ -341,7 +341,95 @@ function BacktestPanel({ record, modelId, rule }) {
   );
 }
 
-// CONFIRMATION ANALYSIS — auto-run in the background.
+// PATTERN MINER — auto-run in the background, right after the plain backtest.
+// Strips the rule's gates, backtests the trigger alone for a real sample, then
+// mines a filter that separates winners from losers and validates it against a
+// chronological holdout the mining process never saw. Three possible outcomes:
+// not enough firings to try, a filter that didn't survive the holdout (the
+// overfitting check working correctly), or a confirmed filter with its own
+// narrowed, holdout-validated stats.
+function PatternMinerPanel({ record, modelId, rule }) {
+  const result = record.patternMiner?.[modelId];
+  const job = record.jobs?.patternMiner;
+
+  if (!rule) return null;
+
+  return (
+    <div className="mt-5">
+      <div className="flex items-center gap-2 mb-2">
+        <Filter size={14} className={faint} />
+        <span className={heading}>Negative-pattern miner — what separates winners from losers?</span>
+      </div>
+
+      {!result && job?.status === "skipped" && <JobSkipped detail={job.detail} />}
+      {!result && job?.status !== "skipped" && (
+        <JobPending label="Backtesting the trigger alone (gates stripped), then mining + holdout-validating a filter" />
+      )}
+
+      {result && !result.ok && (
+        <div className="px-3 py-2.5 rounded-lg border border-zinc-200 dark:border-zinc-800">
+          <p className={`text-xs leading-relaxed ${sub}`}>{result.reason}</p>
+        </div>
+      )}
+
+      {result?.ok && (
+        <div className={`px-3 py-3 rounded-lg border ${
+          result.narrowedBacktest ? "border-emerald-500/30 bg-emerald-500/5"
+          : result.bestCandidate ? "border-red-500/30 bg-red-500/5"
+          : "border-zinc-200 dark:border-zinc-800"}`}>
+
+          <p className={`text-[11px] font-mono mb-2 ${faint}`}>
+            trigger alone fired {result.totalFirings}x across {result.sessionsTested} sessions
+            {" · "}mining {result.miningCount} ({result.miningBaselineWinRate}% base) / holdout {result.holdoutCount} ({result.holdoutBaselineWinRate}% base)
+            {" · "}{result.candidatesConsidered} candidates tested
+          </p>
+
+          <div className={`text-sm font-medium mb-2 ${
+            result.narrowedBacktest ? "text-emerald-600 dark:text-emerald-400"
+            : result.bestCandidate ? "text-red-600 dark:text-red-400" : sub}`}>
+            {result.verdict}
+          </div>
+
+          {result.bestCandidate && (
+            <p className={`text-[11px] font-mono mb-2 ${faint}`}>
+              best candidate: {result.bestCandidate.key} {result.bestCandidate.direction === "above" ? ">" : "<"} {result.bestCandidate.threshold}
+              {" — mining "}{result.bestCandidate.miningWinRate}% / {result.bestCandidate.miningRetained} trades ({result.bestCandidate.miningLift > 0 ? "+" : ""}{result.bestCandidate.miningLift}pts)
+              {result.holdout && ` → holdout ${result.holdout.winRate}% / ${result.holdout.retained} trades (${result.holdout.lift > 0 ? "+" : ""}${result.holdout.lift}pts)`}
+            </p>
+          )}
+
+          {result.narrowedBacktest && (
+            <div className="grid grid-cols-4 gap-2 text-center mt-3 pt-3 border-t border-emerald-500/20">
+              {[["Trades", result.narrowedBacktest.totalTrades], ["Win rate", `${result.narrowedBacktest.winRate}%`],
+                ["Profit factor", result.narrowedBacktest.profitFactor],
+                ["Equity", `$${result.narrowedBacktest.startingCapital.toLocaleString()} → $${result.narrowedBacktest.endingEquity.toLocaleString()}`]].map(([k, v]) => (
+                <div key={k}>
+                  <div className={heading}>{k}</div>
+                  <div className="text-sm font-mono">{v}</div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {result.topCandidates?.length > 0 && !result.narrowedBacktest && (
+            <details className="mt-2">
+              <summary className={`text-[11px] cursor-pointer ${faint}`}>show top {result.topCandidates.length} candidates considered</summary>
+              <div className="mt-1.5 space-y-1">
+                {result.topCandidates.map((c, i) => (
+                  <div key={i} className={`text-[11px] font-mono px-2 py-1 rounded bg-zinc-100 dark:bg-zinc-800 ${sub}`}>
+                    {c.key} {c.direction === "above" ? ">" : "<"} {c.threshold} — mining {c.miningWinRate}% / {c.miningRetained} trades ({c.miningLift > 0 ? "+" : ""}{c.miningLift}pts)
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 function ConfirmersPanel({ record, modelId, rule }) {
   const result = record.confirmers?.[modelId];
   const job = record.jobs?.confirmers;
@@ -638,6 +726,7 @@ function ModelPanel({ record, modelId, cb, onChart }) {
       )}
 
       <BacktestPanel record={record} modelId={modelId} rule={a.rule} />
+      <PatternMinerPanel record={record} modelId={modelId} rule={a.rule} />
       <ConfirmersPanel record={record} modelId={modelId} rule={a.rule} />
       <RefinePanel record={record} modelId={modelId} rule={a.rule} />
 
