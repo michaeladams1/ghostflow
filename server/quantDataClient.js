@@ -57,17 +57,29 @@ function buildBody(ep, { ticker, sessionDate, startDate, endDate, contract }) {
   return body;
 }
 
-export async function fetchEndpoint(ep, params, { retries = 3 } = {}) {
+export async function fetchEndpoint(ep, params, { retries = 3, timeoutMs = 20000 } = {}) {
   const body = buildBody(ep, params);
   const url = `${BASE}/v1/${ep.surface}/tool/${ep.path}`;
 
   for (let attempt = 0; attempt <= retries; attempt++) {
+    // TIMEOUT — this is the fix for a real production incident: a single
+    // stalled request (server accepts the connection but never responds, no
+    // error, no reset) left `await fetch()` hanging with NO way to ever
+    // resolve. Retry logic further down NEVER EVEN RAN, because it only
+    // handles responses that actually arrive. One silent stall blocked the
+    // entire sequential background pipeline for 9+ hours. An AbortController
+    // timeout guarantees this call fails instead of hanging forever, which is
+    // what lets the retry loop below actually do its job.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const res = await fetch(url, {
         method: "POST",
         headers: { Authorization: `Bearer ${KEY()}`, "Content-Type": "application/json" },
         body: JSON.stringify(body),
+        signal: controller.signal,
       });
+      clearTimeout(timer);
 
       // 429 = rate limited. This is TRANSIENT and must be retried, not treated
       // as "no data" — silently dropping rate-limited sessions is exactly what
@@ -89,8 +101,15 @@ export async function fetchEndpoint(ep, params, { retries = 3 } = {}) {
       }
       return { id: ep.id, ok: true, status: res.status, data: JSON.parse(text), error: null };
     } catch (err) {
+      clearTimeout(timer);
+      const timedOut = err.name === "AbortError";
       if (attempt < retries) { await sleep(1000 * (attempt + 1)); continue; }
-      return { id: ep.id, ok: false, status: "NETWORK_ERROR", error: err.message, data: null, transient: true };
+      return {
+        id: ep.id, ok: false,
+        status: timedOut ? "TIMEOUT" : "NETWORK_ERROR",
+        error: timedOut ? `Timed out after ${timeoutMs}ms and ${retries} retries` : err.message,
+        data: null, transient: true,
+      };
     }
   }
 }

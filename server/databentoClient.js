@@ -33,6 +33,8 @@ const BASE_URL = "https://hist.databento.com/v0/timeseries.get_range";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CACHE_DIR = path.join(__dirname, "data", "databento");
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
 function cachePath(dataset, symbol, start, end) {
   return path.join(CACHE_DIR, `${dataset}_${symbol}_${start}_${end}.json`.replaceAll("/", "-"));
 }
@@ -72,7 +74,7 @@ function parseBars(rawText) {
   return bars;
 }
 
-async function fetchChunk({ symbol, start, end, dataset }) {
+async function fetchChunk({ symbol, start, end, dataset }, { retries = 2, timeoutMs = 60000 } = {}) {
   const params = new URLSearchParams({
     dataset,
     symbols: symbol,
@@ -85,15 +87,48 @@ async function fetchChunk({ symbol, start, end, dataset }) {
 
   // HTTP Basic Auth: API key as username, empty password.
   const auth = Buffer.from(`${DATABENTO_API_KEY}:`).toString("base64");
-  const res = await fetch(`${BASE_URL}?${params.toString()}`, {
-    headers: { Authorization: `Basic ${auth}` },
-  });
+  const url = `${BASE_URL}?${params.toString()}`;
 
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Databento error ${res.status} (${symbol} ${start}->${end}): ${text.slice(0, 300)}`);
+  // TIMEOUT + RETRY — this request previously had NEITHER. A stalled
+  // connection (server accepts it but never responds) left `await fetch()`
+  // hanging with no possible resolution, and there was no retry loop at all
+  // to fall back on even for an ordinary transient failure. In production
+  // this blocked an entire backtest — and everything sequential after it —
+  // for 9+ hours on ONE unlucky chunk. 60s is generous (a month of 1-minute
+  // bars is a real amount of data to stream), but guarantees this eventually
+  // fails instead of hanging forever.
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const res = await fetch(url, { headers: { Authorization: `Basic ${auth}` }, signal: controller.signal });
+      clearTimeout(timer);
+
+      if (!res.ok) {
+        const text = await res.text();
+        // 5xx/429 are worth retrying; 4xx (bad request, bad auth, bad dataset)
+        // will never succeed on retry — fail fast instead of wasting time.
+        if ((res.status >= 500 || res.status === 429) && attempt < retries) {
+          console.warn(`[databento] HTTP ${res.status} on ${symbol} ${start}->${end}, retrying (${attempt + 1}/${retries})...`);
+          await sleep(2000 * (attempt + 1));
+          continue;
+        }
+        throw new Error(`Databento error ${res.status} (${symbol} ${start}->${end}): ${text.slice(0, 300)}`);
+      }
+      return parseBars(await res.text());
+    } catch (err) {
+      clearTimeout(timer);
+      const timedOut = err.name === "AbortError";
+      if (attempt < retries) {
+        console.warn(`[databento] ${timedOut ? "timed out" : "network error"} on ${symbol} ${start}->${end}, retrying (${attempt + 1}/${retries})...`);
+        await sleep(2000 * (attempt + 1));
+        continue;
+      }
+      throw new Error(timedOut
+        ? `Databento request timed out after ${timeoutMs}ms across ${retries + 1} attempts (${symbol} ${start}->${end})`
+        : err.message);
+    }
   }
-  return parseBars(await res.text());
 }
 
 // Fetch 1-minute OHLCV bars for one symbol between startDate and endDate

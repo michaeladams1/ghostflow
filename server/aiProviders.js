@@ -18,8 +18,31 @@ const XAI_MODEL = process.env.XAI_MODEL || "grok-4.3";
 // check the provider's current model list and update the *_MODEL env var
 // (no code change needed) rather than editing this file.
 
+// TIMEOUT ON EVERY OUTBOUND CALL. Found after a real incident: a stalled
+// connection to a data provider (accepted, never responded, no error) left
+// a plain `await fetch()` hanging with NO possible resolution — no timeout
+// meant no failure, which meant no retry, which meant the entire sequential
+// background pipeline sat blocked for 9+ hours on one unlucky request. AI
+// calls are the same shape of risk (network hiccup, provider-side stall), so
+// every call below goes through this instead of a bare fetch(). 120s is
+// generous — large system prompts + reasoning models are legitimately slow —
+// but guarantees a call eventually FAILS (and gets logged, and the pipeline's
+// existing per-model try/catch moves on) instead of hanging forever.
+async function fetchWithTimeout(url, options, timeoutMs = 120000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } catch (err) {
+    if (err.name === "AbortError") throw new Error(`Request to ${url} timed out after ${timeoutMs}ms`);
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function callClaude(prompt, { system } = {}) {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
+  const res = await fetchWithTimeout("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
       "x-api-key": ANTHROPIC_KEY,
@@ -48,7 +71,7 @@ export async function callGPT(prompt, { system } = {}) {
   const messages = [];
   if (system) messages.push({ role: "system", content: system });
   messages.push({ role: "user", content: prompt });
-  const res = await fetch("https://api.openai.com/v1/chat/completions", {
+  const res = await fetchWithTimeout("https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: { Authorization: `Bearer ${OPENAI_KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify({ model: OPENAI_MODEL, messages }),
@@ -62,7 +85,7 @@ export async function callGrok(prompt, { system } = {}) {
   const messages = [];
   if (system) messages.push({ role: "system", content: system });
   messages.push({ role: "user", content: prompt });
-  const res = await fetch("https://api.x.ai/v1/chat/completions", {
+  const res = await fetchWithTimeout("https://api.x.ai/v1/chat/completions", {
     method: "POST",
     headers: { Authorization: `Bearer ${XAI_KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify({ model: XAI_MODEL, messages }),
@@ -93,7 +116,7 @@ export async function callClaudeWithTools(system, userPrompt, tools, executeTool
     const body = { model: ANTHROPIC_MODEL, max_tokens: MAX_TOKENS, system, messages };
     if (claudeTools.length) body.tools = claudeTools; // omit `tools` entirely when empty — an empty array is rejected
 
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
+    const res = await fetchWithTimeout("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -126,7 +149,7 @@ export async function callGPTWithTools(system, userPrompt, tools, executeTool) {
   for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
     const body = { model: OPENAI_MODEL, messages };
     if (openaiTools.length) body.tools = openaiTools;
-    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+    const res = await fetchWithTimeout("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: { Authorization: `Bearer ${OPENAI_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -155,7 +178,7 @@ export async function callGrokWithTools(system, userPrompt, tools, executeTool) 
   for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
     const body = { model: XAI_MODEL, messages };
     if (xaiTools.length) body.tools = xaiTools;
-    const res = await fetch("https://api.x.ai/v1/chat/completions", {
+    const res = await fetchWithTimeout("https://api.x.ai/v1/chat/completions", {
       method: "POST",
       headers: { Authorization: `Bearer ${XAI_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify(body),
