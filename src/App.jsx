@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import {
   X, CheckCircle2, XCircle, Minus, ChevronRight, Search, Sun, Moon,
   FileText, Settings, ExternalLink, AlertTriangle, Zap, FlaskConical,
-  RefreshCw, Target, ListFilter, Table2, LineChart, Users, CalendarDays, Filter
+  RefreshCw, Target, ListFilter, Table2, LineChart, Users, CalendarDays, Filter, Star
 } from "lucide-react";
 import ChartView from "./ChartView.jsx";
 import StrategyLab from "./StrategyLab.jsx";
@@ -1063,7 +1063,7 @@ function stillVerifying(record) {
   return null;
 }
 
-function AnalysisCard({ record, onOpen, onDelete }) {
+function AnalysisCard({ record, onOpen, onDelete, onToggleStar }) {
   const c = record.analysis?.combined;
   const thrusts = record.briefing?.timeline?.priceThrusts?.length ?? 0;
   const entries = c?.entries ? Object.values(c.entries).filter((e) => e?.timestamp) : [];
@@ -1073,8 +1073,13 @@ function AnalysisCard({ record, onOpen, onDelete }) {
   const verifying = !analyzing && !failed && stillVerifying(record);
 
   return (
-    <div className={`${card} rounded-lg p-4 flex flex-col ${stale && !analyzing && !failed ? "opacity-70" : ""}`}>
-      <div className="flex items-center justify-between mb-3">
+    <div className={`${card} rounded-lg p-4 flex flex-col relative ${stale && !analyzing && !failed ? "opacity-70" : ""}`}>
+      <button onClick={() => onToggleStar(record.id, !record.starred)}
+        title={record.starred ? "Unstar" : "Star — come back to this one"}
+        className={`absolute top-3 right-3 p-1 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800 ${record.starred ? "text-amber-500" : faint}`}>
+        <Star size={16} className={record.starred ? "fill-current" : ""} />
+      </button>
+      <div className="flex items-center justify-between mb-3 pr-7">
         <div className="flex items-center gap-1.5">
           {analyzing ? (
             <span className="flex items-center gap-1.5 text-[11px] font-mono px-1.5 py-0.5 rounded border border-sky-500/40 bg-sky-500/10 text-sky-600 dark:text-sky-400">
@@ -1153,6 +1158,7 @@ export default function App() {
   const [showForm, setShowForm] = useState(false);
   const [error, setError] = useState(null);
   const [running, setRunning] = useState(false);
+  const [starredOnly, setStarredOnly] = useState(false);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", dark);
@@ -1303,6 +1309,31 @@ export default function App() {
   };
   const del = () => delById(openId);
 
+  // STARRING — a plain "come back to this one" marker. Optimistic (updates
+  // local state immediately, doesn't wait on the network) since it's a low-
+  // stakes toggle and the click should feel instant; a failed request just
+  // reverts silently on the next full list refresh rather than blocking the UI.
+  const toggleStar = async (id, next) => {
+    setRecords((prev) => prev.map((r) => (r.id === id ? { ...r, starred: next } : r)));
+    try {
+      const res = await fetch(`/api/analyses/${id}/star`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ starred: next }),
+      });
+      if (!res.ok) throw new Error();
+    } catch {
+      // Revert on failure — don't leave the UI claiming a star that didn't save.
+      setRecords((prev) => prev.map((r) => (r.id === id ? { ...r, starred: !next } : r)));
+    }
+  };
+
+  // Starred cards float to the top (stable sort — everything else keeps its
+  // original order, which is already newest-first from the API).
+  const visibleRecords = useMemo(() => {
+    const list = starredOnly ? records.filter((r) => r.starred) : records;
+    return [...list].sort((a, b) => (b.starred ? 1 : 0) - (a.starred ? 1 : 0));
+  }, [records, starredOnly]);
+
   return (
     <div className="min-h-screen bg-white dark:bg-black text-zinc-900 dark:text-zinc-100 font-sans transition-colors">
       <div className="max-w-5xl mx-auto px-4 py-6">
@@ -1336,16 +1367,23 @@ export default function App() {
           <div>
             <div className="flex items-center justify-between mb-4">
               <p className={`text-xs ${faint}`}>Enter a symbol and a date. The system finds the moves itself.</p>
-              <button onClick={() => setShowForm(true)}
-                className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium px-3 py-1.5 rounded-md">
-                <Search size={16} /> Analyze session
-              </button>
+              <div className="flex items-center gap-2">
+                <button onClick={() => setStarredOnly((v) => !v)}
+                  className={`flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-md border ${
+                    starredOnly ? "border-amber-400 bg-amber-400/10 text-amber-600 dark:text-amber-400" : "border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800"}`}>
+                  <Star size={14} className={starredOnly ? "fill-current" : ""} /> Starred only
+                </button>
+                <button onClick={() => setShowForm(true)}
+                  className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium px-3 py-1.5 rounded-md">
+                  <Search size={16} /> Analyze session
+                </button>
+              </div>
             </div>
             <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
-              {records.map((r) => <AnalysisCard key={r.id} record={r} onOpen={setOpenId} onDelete={delById} />)}
-              {records.length === 0 && (
+              {visibleRecords.map((r) => <AnalysisCard key={r.id} record={r} onOpen={setOpenId} onDelete={delById} onToggleStar={toggleStar} />)}
+              {visibleRecords.length === 0 && (
                 <div className={`col-span-full px-4 py-10 text-center text-sm rounded-lg border border-zinc-200 dark:border-zinc-800 ${faint}`}>
-                  No analyses yet. Run one to get started.
+                  {starredOnly ? "No starred analyses yet — click the star on any card to pin it here." : "No analyses yet. Run one to get started."}
                 </div>
               )}
             </div>

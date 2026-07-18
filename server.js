@@ -511,6 +511,25 @@ app.delete("/api/analyses/:id", async (req, res) => {
   }
 });
 
+// Star/unstar a record — a plain marker for "I want to come back to this one,"
+// nothing more. Useful once the log has more entries than fit on screen at
+// once (e.g. loading 10 trades in at a time), so the ones worth a closer look
+// don't get lost in the pile.
+app.post("/api/analyses/:id/star", async (req, res) => {
+  try {
+    const { starred } = req.body;
+    const all = await readTrades();
+    const record = all.find((r) => r.id === req.params.id);
+    if (!record) return res.status(404).json({ error: `No analysis with id ${req.params.id}` });
+    record.starred = !!starred;
+    await appendTrade(record);
+    res.json({ id: record.id, starred: record.starred });
+  } catch (err) {
+    console.error("[star] FAILED:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ===========================================================================
 // STRATEGY LAB — a SEPARATE feature from the trade-analysis system above.
 // This tests a strategy IDEA (e.g. a published paper) against real price
