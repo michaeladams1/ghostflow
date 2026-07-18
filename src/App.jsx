@@ -1090,11 +1090,6 @@ function AnalysisCard({ record, onOpen, onDelete, onToggleStar }) {
               FAILED
             </span>
           ) : c ? <Verdict v={c.verdict} /> : <span className={`text-xs font-mono ${faint}`}>pending</span>}
-          {verifying && (
-            <span className="flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded border border-sky-500/40 bg-sky-500/10 text-sky-600 dark:text-sky-400">
-              <RefreshCw size={10} className="animate-spin" /> {verifying}
-            </span>
-          )}
         </div>
         {!analyzing && !failed && <span className={`text-[11px] font-mono ${faint}`}>agreement {record.agreement}</span>}
       </div>
@@ -1106,7 +1101,12 @@ function AnalysisCard({ record, onOpen, onDelete, onToggleStar }) {
           </span>
         )}
       </div>
-      <div className={`text-xs font-mono mb-3 ${faint}`}>{record.sessionDate}</div>
+      <div className={`text-xs font-mono ${verifying ? "mb-1.5" : "mb-3"} ${faint}`}>{record.sessionDate}</div>
+      {verifying && (
+        <span className="inline-flex items-center gap-1 self-start text-[10px] font-mono px-1.5 py-0.5 rounded border border-sky-500/40 bg-sky-500/10 text-sky-600 dark:text-sky-400 mb-3">
+          <RefreshCw size={10} className="animate-spin" /> {verifying}
+        </span>
+      )}
 
       {analyzing ? (
         <div className={`border-t border-zinc-200 dark:border-zinc-800 pt-3 text-xs ${faint}`}>
