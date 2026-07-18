@@ -233,7 +233,7 @@ function directionOf(rule) {
 // ---------------------------------------------------------------------------
 // THE MAIN SWEEP.
 // ---------------------------------------------------------------------------
-export async function backtestRule(rule, { ticker, sessions, holdMinutes = 15, onProgress } = {}) {
+export async function backtestRule(rule, { ticker, sessions, holdMinutes = 15, startingCapital = 10000, onProgress } = {}) {
   const validation = validateRule(rule);
   if (!validation.valid) {
     return {
@@ -336,6 +336,36 @@ export async function backtestRule(rule, { ticker, sessions, holdMinutes = 15, o
   const grossLoss = Math.abs(losses.reduce((a, t) => a + t.pctReturn, 0));
   const profitFactor = grossLoss > 0 ? grossWin / grossLoss : (grossWin > 0 ? Infinity : 0);
 
+  // EXPECTANCY, NOT JUST WIN RATE. A 50% win-rate strategy that wins +3% on
+  // average and loses -0.5% on average is genuinely excellent — its per-trade
+  // expectancy is strongly positive even though it loses the coin flip half
+  // the time. avgReturnPct (the mean pctReturn across ALL trades) already IS
+  // that expectancy in percentage terms, and profitFactor > 1 is mathematically
+  // the same condition as avgReturn > 0 (both just ask "did total wins beat
+  // total losses"). Neither needs a win-rate floor bolted on top of it — doing
+  // so rejects real, asymmetric edges for no statistical reason.
+  const avgWinPct = wins.length ? +(grossWin / wins.length).toFixed(3) : 0;
+  const avgLossPct = losses.length ? +(-grossLoss / losses.length).toFixed(3) : 0;
+
+  // ---- DOLLAR EQUITY CURVE. Win rate and avg % return don't tell you what
+  // this would have actually done to real money. Simulate it: full account
+  // compounded sequentially through every trade, same "full_equity" sizing
+  // Strategy Lab already uses, so the two parts of the app agree on what a
+  // backtest means. Trades are already in chronological order (sessions were
+  // looped in order, and firings within a session are time-sorted). ----
+  let equity = startingCapital;
+  let peakEquity = startingCapital;
+  let maxDrawdownPct = 0;
+  const equityCurve = trades.map((t) => {
+    equity *= 1 + t.pctReturn / 100;
+    peakEquity = Math.max(peakEquity, equity);
+    const drawdownPct = peakEquity > 0 ? ((equity - peakEquity) / peakEquity) * 100 : 0;
+    maxDrawdownPct = Math.min(maxDrawdownPct, drawdownPct);
+    return { sessionDate: t.sessionDate, entryClock: t.entryClock, equity: +equity.toFixed(2) };
+  });
+  const endingEquity = +equity.toFixed(2);
+  const totalPnlDollars = +(endingEquity - startingCapital).toFixed(2);
+
   // A rule that fires twice and wins twice proves nothing.
   const enoughData = trades.length >= 20;
   const sessionsActuallyTested = sessionResults.length;
@@ -366,6 +396,12 @@ export async function backtestRule(rule, { ticker, sessions, holdMinutes = 15, o
     warnings.push(`LOOKAHEAD BIAS: ${lookahead.join(", ")} are SAME-DAY CUMULATIVE totals. Gating on them uses the full day's data to decide whether to trade earlier that same day — information you would NOT have had at entry. These results are optimistic and NOT tradeable as-is.`);
   }
 
+  // "HOLDS UP" now means real expectancy (profitFactor meaningfully above 1),
+  // not a win-rate floor. 1.1 rather than exactly 1.0 as the bar, so a coin-flip
+  // result that's barely profitable by rounding noise doesn't get celebrated.
+  const expectancyPositive = profitFactor !== "Inf" && profitFactor >= 1.1;
+  const expectancyPositiveOrInf = profitFactor === Infinity || expectancyPositive;
+
   return {
     testable: true,
     rule: rule.description,
@@ -385,20 +421,28 @@ export async function backtestRule(rule, { ticker, sessions, holdMinutes = 15, o
     losses: losses.length,
     winRate: +winRate.toFixed(1),
     avgReturnPct: +avgReturn.toFixed(3),
+    avgWinPct,
+    avgLossPct,
     totalReturnPct: +totalReturn.toFixed(2),
     profitFactor: profitFactor === Infinity ? "Inf" : +profitFactor.toFixed(2),
     bestTrade: trades.length ? trades.reduce((a, b) => (b.pctReturn > a.pctReturn ? b : a)) : null,
     worstTrade: trades.length ? trades.reduce((a, b) => (b.pctReturn < a.pctReturn ? b : a)) : null,
     enoughData,
+    // ---- Dollar equity, compounded, full-account sizing ----
+    startingCapital,
+    endingEquity,
+    totalPnlDollars,
+    maxDrawdownPct: +maxDrawdownPct.toFixed(2),
+    equityCurve,
     verdict: !trades.length
       ? (gateBlockedDays > 0
           ? `NEVER FIRED. Your session gates blocked ${gateBlockedDays} of ${sessionsActuallyTested} days outright, and the trigger never fired on the rest. The gates may be too restrictive.`
           : "NEVER FIRED. Conditions were never met on any tested session. This is not a rule, it is a description of one specific afternoon.")
       : !enoughData
       ? `INSUFFICIENT SAMPLE. Only ${trades.length} firings across ${sessionsActuallyTested} sessions${gateBlockedDays ? ` (gates blocked ${gateBlockedDays} days)` : ""}. Any win rate here is noise — you need 20+ to say anything.`
-      : winRate >= 55 && avgReturn > 0
-      ? `HOLDS UP SO FAR. ${trades.length} trades, ${winRate.toFixed(0)}% win rate, ${avgReturn.toFixed(2)}% average return per trade.`
-      : `DOES NOT HOLD UP. ${trades.length} trades, ${winRate.toFixed(0)}% win rate, ${avgReturn.toFixed(2)}% average per trade. The single-day story did not survive contact with other days.`,
+      : expectancyPositiveOrInf
+      ? `HOLDS UP SO FAR. ${trades.length} trades, ${winRate.toFixed(0)}% win rate (avg win ${avgWinPct >= 0 ? "+" : ""}${avgWinPct}%, avg loss ${avgLossPct}%), profit factor ${profitFactor === Infinity ? "Inf" : profitFactor.toFixed(2)}. $${startingCapital.toLocaleString()} -> $${endingEquity.toLocaleString()} (${totalPnlDollars >= 0 ? "+" : ""}${((totalPnlDollars / startingCapital) * 100).toFixed(1)}%), max drawdown ${maxDrawdownPct.toFixed(1)}%.`
+      : `DOES NOT HOLD UP. ${trades.length} trades, ${winRate.toFixed(0)}% win rate (avg win ${avgWinPct >= 0 ? "+" : ""}${avgWinPct}%, avg loss ${avgLossPct}%), profit factor ${profitFactor === Infinity ? "Inf" : profitFactor.toFixed(2)}. $${startingCapital.toLocaleString()} -> $${endingEquity.toLocaleString()}. The single-day story did not survive contact with other days.`,
     trades,
     sessionResults,
     errors,
