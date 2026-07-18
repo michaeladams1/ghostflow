@@ -1040,6 +1040,29 @@ function AnalyzeForm({ onClose, onSubmit, error, running }) {
   );
 }
 
+// After the top-level 3-analyst review finishes, four more background jobs
+// still run in sequence (backtest -> pattern miner -> confirmers ->
+// refinement) — each one can flip a "TRADEABLE" verdict on its own. The card
+// grid only ever showed the top-level status, so a card looked finished the
+// moment the review landed even though the verdict hadn't actually been
+// checked against anything yet. This surfaces whichever of those four is
+// still queued/running, so the card honestly says "still being verified"
+// instead of looking done.
+const BACKGROUND_JOB_ORDER = [
+  ["backtests", "backtesting"],
+  ["patternMiner", "mining patterns"],
+  ["confirmers", "confirming"],
+  ["refinements", "refining"],
+];
+function stillVerifying(record) {
+  if (!record.jobs) return null;
+  for (const [key, label] of BACKGROUND_JOB_ORDER) {
+    const status = record.jobs[key]?.status;
+    if (status === "queued" || status === "running") return label;
+  }
+  return null;
+}
+
 function AnalysisCard({ record, onOpen, onDelete }) {
   const c = record.analysis?.combined;
   const thrusts = record.briefing?.timeline?.priceThrusts?.length ?? 0;
@@ -1047,19 +1070,27 @@ function AnalysisCard({ record, onOpen, onDelete }) {
   const stale = isStale(record);
   const analyzing = record.status === "analyzing";
   const failed = record.status === "failed";
+  const verifying = !analyzing && !failed && stillVerifying(record);
 
   return (
     <div className={`${card} rounded-lg p-4 flex flex-col ${stale && !analyzing && !failed ? "opacity-70" : ""}`}>
       <div className="flex items-center justify-between mb-3">
-        {analyzing ? (
-          <span className="flex items-center gap-1.5 text-[11px] font-mono px-1.5 py-0.5 rounded border border-sky-500/40 bg-sky-500/10 text-sky-600 dark:text-sky-400">
-            <RefreshCw size={11} className="animate-spin" /> ANALYZING
-          </span>
-        ) : failed ? (
-          <span className="text-[11px] font-mono px-1.5 py-0.5 rounded border border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400">
-            FAILED
-          </span>
-        ) : c ? <Verdict v={c.verdict} /> : <span className={`text-xs font-mono ${faint}`}>pending</span>}
+        <div className="flex items-center gap-1.5">
+          {analyzing ? (
+            <span className="flex items-center gap-1.5 text-[11px] font-mono px-1.5 py-0.5 rounded border border-sky-500/40 bg-sky-500/10 text-sky-600 dark:text-sky-400">
+              <RefreshCw size={11} className="animate-spin" /> ANALYZING
+            </span>
+          ) : failed ? (
+            <span className="text-[11px] font-mono px-1.5 py-0.5 rounded border border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400">
+              FAILED
+            </span>
+          ) : c ? <Verdict v={c.verdict} /> : <span className={`text-xs font-mono ${faint}`}>pending</span>}
+          {verifying && (
+            <span className="flex items-center gap-1 text-[10px] font-mono px-1.5 py-0.5 rounded border border-sky-500/40 bg-sky-500/10 text-sky-600 dark:text-sky-400">
+              <RefreshCw size={10} className="animate-spin" /> {verifying}
+            </span>
+          )}
+        </div>
         {!analyzing && !failed && <span className={`text-[11px] font-mono ${faint}`}>agreement {record.agreement}</span>}
       </div>
       <div className="flex items-center gap-2">
@@ -1140,6 +1171,7 @@ export default function App() {
   // finished in the database while the UI kept showing a spinner forever.
   const jobsPending = open && (
     open.status === "analyzing" ||
+    ["queued", "running"].includes(open.jobs?.patternMiner?.status) ||
     ["queued", "running"].includes(open.jobs?.confirmers?.status) ||
     ["queued", "running"].includes(open.jobs?.refinements?.status) ||
     // Also poll if a rule exists but its backtest hasn't landed yet.
@@ -1190,8 +1222,13 @@ export default function App() {
   };
 
   // Poll the whole list while ANY record is still analyzing, so cards fill in
-  // without the user having to open them.
-  const anyAnalyzing = records.some((r) => r.status === "analyzing");
+  // without the user having to open them. This used to stop the moment the
+  // top-level 3-analyst review finished — but backtest/patternMiner/confirmers/
+  // refinement all still run AFTER that, for several more minutes, entirely in
+  // the background. Without checking those too, the list would freeze showing
+  // a "done" card (e.g. TRADEABLE) while real verification was still running
+  // server-side, invisible until a manual page reload.
+  const anyAnalyzing = records.some((r) => r.status === "analyzing" || stillVerifying(r));
   useEffect(() => {
     if (!anyAnalyzing) return;
     const t = setInterval(async () => {
