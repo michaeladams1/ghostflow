@@ -108,6 +108,15 @@ const MAX_TOOL_ITERATIONS = 8;
 // can burn its whole budget before emitting any text). 16k gives real headroom.
 const MAX_TOKENS = 16000;
 
+// These calls carry the large system prompt (29-feed review, full rule
+// vocabulary, falsification instructions) and produce a long structured
+// response — a real, legitimately slow call, not a stall. The first live
+// run after adding timeouts actually hit the general 120s default here and
+// got killed mid-response. 240s gives real reasoning room while still
+// guaranteeing this can never again hang the multi-hour way the untimed
+// version did.
+const TOOL_CALL_TIMEOUT_MS = 240000;
+
 export async function callClaudeWithTools(system, userPrompt, tools, executeTool) {
   const claudeTools = tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters }));
   let messages = [{ role: "user", content: userPrompt }];
@@ -120,7 +129,7 @@ export async function callClaudeWithTools(system, userPrompt, tools, executeTool
       method: "POST",
       headers: { "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
       body: JSON.stringify(body),
-    });
+    }, TOOL_CALL_TIMEOUT_MS);
     if (!res.ok) throw new Error(`Claude error ${res.status}: ${await res.text()}`);
     const data = await res.json();
 
@@ -153,7 +162,7 @@ export async function callGPTWithTools(system, userPrompt, tools, executeTool) {
       method: "POST",
       headers: { Authorization: `Bearer ${OPENAI_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify(body),
-    });
+    }, TOOL_CALL_TIMEOUT_MS);
     if (!res.ok) throw new Error(`GPT error ${res.status}: ${await res.text()}`);
     const data = await res.json();
     const msg = data.choices[0].message;
@@ -182,7 +191,7 @@ export async function callGrokWithTools(system, userPrompt, tools, executeTool) 
       method: "POST",
       headers: { Authorization: `Bearer ${XAI_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify(body),
-    });
+    }, TOOL_CALL_TIMEOUT_MS);
     if (!res.ok) throw new Error(`Grok error ${res.status}: ${await res.text()}`);
     const data = await res.json();
     const msg = data.choices[0].message;
