@@ -16,6 +16,7 @@ import { analyzeAllModels } from "./server/analysis.js";
 import { backtestRule, priorSessions } from "./server/backtest.js";
 import { refineRule } from "./server/refine.js";
 import { analyzeConfirmers } from "./server/confirmation.js";
+import { mineNegativePattern } from "./server/patternMiner.js";
 import { startBackgroundJobs, patchRecord } from "./server/jobs.js";
 import { callClaude, callGPT, callGrok } from "./server/aiProviders.js";
 import { parseStrategy } from "./server/strategyParser.js";
@@ -341,6 +342,38 @@ app.post("/api/analyses/:id/confirmers", async (req, res) => {
     res.json(result);
   } catch (err) {
     console.error("[confirmers] FAILED:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PATTERN MINER: strips the model's rule down to its trigger alone (no
+// session gates), backtests that ungated trigger for a real firing sample,
+// then mines a filter that separates winners from losers — validated against
+// a chronological holdout so a mining-window coincidence can't pass as real.
+// See server/patternMiner.js for the full reasoning.
+app.post("/api/analyses/:id/pattern-miner", async (req, res) => {
+  const { modelId, sessions = 260, holdMinutes = 15 } = req.body;
+  try {
+    const all = await readTrades();
+    const record = all.find((r) => r.id === req.params.id);
+    if (!record) return res.status(404).json({ error: `No analysis with id ${req.params.id}` });
+
+    const rule = record.analysis?.[modelId]?.rule;
+    if (!rule) return res.status(400).json({ error: `${modelId} proposed no rule — nothing to mine.` });
+
+    console.log(`[patternMiner] ${modelId} on ${record.symbol}, ${sessions} sessions...`);
+    const result = await mineNegativePattern(rule, {
+      ticker: record.symbol, fromDate: record.sessionDate, sessions, holdMinutes,
+    });
+    console.log(`[patternMiner] ${result.verdict || result.reason}`);
+
+    record.patternMiner = record.patternMiner || {};
+    record.patternMiner[modelId] = result;
+    try { await appendTrade(record); } catch (e) { console.error("[patternMiner] DB write failed:", e.message); }
+
+    res.json(result);
+  } catch (err) {
+    console.error("[patternMiner] FAILED:", err);
     res.status(500).json({ error: err.message });
   }
 });

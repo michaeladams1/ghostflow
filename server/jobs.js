@@ -24,6 +24,7 @@ import { readTrades, appendTrade } from "./store.js";
 import { backtestRule, priorSessions } from "./backtest.js";
 import { analyzeConfirmers } from "./confirmation.js";
 import { refineRule } from "./refine.js";
+import { mineNegativePattern } from "./patternMiner.js";
 
 const MODELS = ["claude", "gpt", "grok"];
 
@@ -84,6 +85,43 @@ async function runBacktests(id, { ticker, sessionDate, analysis }) {
     }
   }
   await setJobStatus(id, "backtests", "done");
+}
+
+// ---------------------------------------------------------------------------
+// PATTERN MINER: the "step 4" Michael described — of the times the trigger
+// fired (gates stripped, so there's a real sample), what separated winners
+// from losers? Mines a filter on the first 70% chronologically, validates it
+// against the untouched last 30%, and only reports it as real if it survives
+// that holdout. Runs on the SAME rule the plain backtest just tested, so it's
+// natural to do it right after — but it deliberately reruns the trigger
+// ungated rather than reusing runBacktests' gated result, since the whole
+// point is to get a sample the gates would otherwise have starved.
+// ---------------------------------------------------------------------------
+async function runPatternMiner(id, { ticker, sessionDate, analysis }) {
+  await setJobStatus(id, "patternMiner", "running");
+
+  for (const m of MODELS) {
+    const rule = analysis[m]?.rule;
+    if (!rule) continue;
+    try {
+      console.log(`[job:patternMiner] ${m} on ${ticker}...`);
+      const result = await mineNegativePattern(rule, {
+        ticker, fromDate: sessionDate, sessions: BACKTEST_LOOKBACK_SESSIONS, holdMinutes: 15,
+      });
+      await patchRecord(id, (rec) => {
+        rec.patternMiner = rec.patternMiner || {};
+        rec.patternMiner[m] = result;
+      });
+      console.log(`[job:patternMiner] ${m}: ${result.verdict || result.reason}`);
+    } catch (err) {
+      console.error(`[job:patternMiner] ${m} FAILED:`, err.message);
+      await patchRecord(id, (rec) => {
+        rec.patternMiner = rec.patternMiner || {};
+        rec.patternMiner[m] = { ok: false, reason: `Pattern mining failed: ${err.message}` };
+      });
+    }
+  }
+  await setJobStatus(id, "patternMiner", "done");
 }
 
 // ---------------------------------------------------------------------------
@@ -154,12 +192,14 @@ export function startBackgroundJobs(id, { ticker, sessionDate, analysis }) {
     // Every model passed. There is nothing to test, and saying so explicitly is
     // better than leaving the panels in a permanent "pending" state.
     setJobStatus(id, "backtests", "skipped", "No model proposed a rule — nothing to backtest.");
+    setJobStatus(id, "patternMiner", "skipped", "No model proposed a rule — nothing to mine.");
     setJobStatus(id, "confirmers", "skipped", "No model proposed a rule — nothing to test.");
     setJobStatus(id, "refinements", "skipped", "No model proposed a rule — nothing to refine.");
     return;
   }
 
   setJobStatus(id, "backtests", "queued");
+  setJobStatus(id, "patternMiner", "queued");
   setJobStatus(id, "confirmers", "queued");
   setJobStatus(id, "refinements", "queued");
 
@@ -168,6 +208,7 @@ export function startBackgroundJobs(id, { ticker, sessionDate, analysis }) {
   (async () => {
     try {
       await runBacktests(id, { ticker, sessionDate, analysis });
+      await runPatternMiner(id, { ticker, sessionDate, analysis });
       await runConfirmers(id, { ticker, sessionDate, analysis });
       await runRefinement(id, { ticker, sessionDate, analysis });
       console.log(`[jobs] all background work complete for ${id}`);

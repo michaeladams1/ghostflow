@@ -113,7 +113,7 @@ export function validateRule(rule) {
 // reached for it even after being warned in the prompt. So it is also caught
 // here in code: the rule still runs, but the result carries a loud warning
 // rather than pretending to be tradeable.
-const LOOKAHEAD_GATE_FEEDS = new Set([
+export const LOOKAHEAD_GATE_FEEDS = new Set([
   "contract_statistics", "contract_trade_side_statistics", "gainers_losers",
   "order_flow_consolidated", "order_flow_unconsolidated", "equity_prints",
   "heat_map", "market_share", "news_articles", "stock_price_over_time",
@@ -147,7 +147,7 @@ function timeOfDay(ts) {
   return { minutes_since_open: mins - (9 * 60 + 30), minutes_to_close: (16 * 60) - mins };
 }
 
-function splitConditions(rule) {
+export function splitConditions(rule) {
   const vocab = buildVocabulary();
   const gates = [], triggers = [], timeFilters = [];
   for (const c of rule.conditions) {
@@ -218,12 +218,30 @@ function evaluateTrade(firing, priceBars, { holdMinutes = 15, direction = 1 }) {
   if (!exitBar) return null;
   const pct = ((exitBar.value - entryBar.value) / entryBar.value) * 100 * direction;
   return {
+    entryTs: entryBar.ts,
     entryClock: firing.clock,
     entryPrice: +entryBar.value.toFixed(2),
     exitPrice: +exitBar.value.toFixed(2),
     pctReturn: +pct.toFixed(3),
     win: pct > 0,
   };
+}
+
+// Snapshots every bar metric's most extreme reading in the window BEFORE (never
+// after) a trade's entry — for the negative-pattern miner in patternMiner.js,
+// which needs to ask "what was true near entry?" for every trade a rule
+// produced, not just the feeds the rule itself referenced. Strictly backward-
+// looking (e.ts > entryTs is skipped outright) so this cannot become a second,
+// quieter place for lookahead bias to sneak in.
+function snapshotBarMetricsBeforeEntry(events, entryTs, { windowMin = 10 } = {}) {
+  const snap = {};
+  for (const e of events) {
+    if (e.ts > entryTs) continue;
+    if (entryTs - e.ts > windowMin * 60_000) continue;
+    const key = `${e.endpoint}.${e.metric}`;
+    if (!(key in snap) || Math.abs(e.z) > Math.abs(snap[key])) snap[key] = e.z;
+  }
+  return snap;
 }
 
 function directionOf(rule) {
@@ -233,7 +251,7 @@ function directionOf(rule) {
 // ---------------------------------------------------------------------------
 // THE MAIN SWEEP.
 // ---------------------------------------------------------------------------
-export async function backtestRule(rule, { ticker, sessions, holdMinutes = 15, startingCapital = 10000, onProgress } = {}) {
+export async function backtestRule(rule, { ticker, sessions, holdMinutes = 15, startingCapital = 10000, captureSnapshots = false, onProgress } = {}) {
   const validation = validateRule(rule);
   if (!validation.valid) {
     return {
@@ -316,7 +334,14 @@ export async function backtestRule(rule, { ticker, sessions, holdMinutes = 15, s
       const dayTrades = firings
         .map((f) => evaluateTrade(f, priceBars, { holdMinutes, direction }))
         .filter(Boolean)
-        .map((t) => ({ ...t, sessionDate }));
+        .map((t) => ({
+          ...t,
+          sessionDate,
+          ...(captureSnapshots ? {
+            sessionMetricsSnapshot: sessionMetrics,
+            nearbyBarSnapshot: snapshotBarMetricsBeforeEntry(briefing.timeline.events, t.entryTs, { windowMin: 10 }),
+          } : {}),
+        }));
 
       trades.push(...dayTrades);
       sessionResults.push({ sessionDate, firings: firings.length, trades: dayTrades.length });
