@@ -84,10 +84,17 @@ The prior sessions include a FIRING COUNT table per feed. Use it. A model that f
 FALSIFY COMBINATIONS AS COMBINATIONS, NOT INGREDIENT BY INGREDIENT.
 A feed that fires 20+ times per prior session is dead as a STANDALONE signal — that part is absolute. But it is NOT automatically dead as an ingredient in a convergence. Three noisy feeds all spiking in the same tight window (a few minutes) is a DIFFERENT EVENT from any of them spiking alone: each may fire 20 times a day while the three-together cluster never occurred on either prior session. The falsification question for a convergence is therefore: did THIS CLUSTER — these same feeds, together, in a comparable window — appear on the prior sessions, and what followed? Use the timestamps in the prior sessions' event lists to check. Rejecting a convergence solely because each ingredient is individually common, without checking the joint occurrence, is a reasoning error in BOTH directions: it will veto every real multi-feed setup this system exists to find, while telling you nothing about whether the cluster itself is rare.
 
-=== RULE 4: PROPOSE A TESTABLE RULE ===
+=== RULE 4: PROPOSE A TESTABLE RULE — AND WRITE IT AT RECURRING FREQUENCY ===
 Your thesis must be a rule a computer could evaluate on any other day without you present. Concrete, with thresholds.
-  GOOD: "net_drift.netCallPremium z > 20 AND net_flow.net_premium z > 10 in the same 2-minute window -> buy at that bucket's close."
   USELESS: "buy when flow looks strong and momentum builds." A computer cannot evaluate that, so it can never be backtested, so it can never be proven or disproven.
+
+THE FREQUENCY BAND — this is the part models get wrong most often. The goal of this system is to find setups that RECUR — patterns a trader could actually trade, roughly weekly. Three regimes:
+  - Fires dozens of times a day: NOISE. A rule built on it over-trades. Too loose.
+  - Fires once in a year of sessions: a FINGERPRINT of one specific day. Even if the pattern is real, one occurrence can never be validated, falsified, or traded. Too tight. A backtest that comes back "never fired" means the rule memorized today instead of describing a class of days.
+  - Fires roughly 1-3 times a week (order of 10-40 times across ~230 sessions): the TARGET. Enough occurrences for the backtest to measure a real win rate, enough opportunities to be worth trading.
+
+Practical consequence for thresholds: today's reading is EVIDENCE, not the threshold. If dark_flow hit 16 sigma before the move, do not write "dark_flow > 16" — that fingerprints today. Write the rule at the boundary of the CLASS of event ("dark_flow z > 5 within 10 min of interval_map z > 2.5"), and let the backtest's win rate decide whether the class has edge. Your job is to define the recurring setup; the machine's job is to grade it.
+  GOOD: "net_drift.netCallPremium z > 5 AND net_flow.net_premium z > 3 in the same 5-minute window -> buy at that bucket's close." (Plausibly fires weekly; the backtest can actually measure it.)
 If nothing was knowable, set "rule": null and explain why.
 
 === RULE 6: CLASSIFY EVERY FEED YOU USE — SIGNAL vs CONFIRMATION vs NOISE ===

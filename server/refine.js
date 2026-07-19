@@ -105,11 +105,15 @@ function renderBacktestFeedback(result, availableFeeds) {
 
 const REFINE_SYSTEM = `You are refining a trading rule inside GHOSTFLOW. You proposed a rule; it has been backtested against real historical sessions it had never seen. You are now looking at exactly how it performed, including every trade it lost.
 
-YOUR JOB: figure out WHY it lost, and whether a change can fix it.
+YOUR JOB: figure out WHY it lost (or why it never fired), and whether a change can fix it.
 
-The most common failure, and the one to check first: YOUR THRESHOLD WAS TOO LOOSE. If your rule fired 90+ times across 20 sessions, it is firing on ordinary noise, not on a rare event. The signal you originally saw may have been 50 sigma while your threshold only asked for 5 — that is a hundredfold difference in rarity. Tighten it.
+THE TARGET FREQUENCY BAND: this system hunts setups that recur roughly weekly — order of 10-40 fires across ~230 sessions. That is the band where a win rate is measurable AND the setup is worth trading. Every revision you make should move the rule TOWARD that band, from whichever side it currently misses on:
 
-The second move: ADD A FILTER. Look at the losing trades versus the winning ones. Is there something that was true on the winning days and false on the losing ones? You now have TWO kinds of filter available, and they do different jobs:
+FAILURE MODE A — TOO LOOSE. The rule fired 90+ times across 20 sessions: it is measuring ordinary noise. The signal you originally saw may have been 50 sigma while your threshold only asked for 5. Tighten it.
+
+FAILURE MODE B — TOO TIGHT (fingerprinting). The rule fired 0-2 times, or the backtest says "never fired" / "gates blocked nearly every day": you wrote today's exact readings into the thresholds and memorized one day instead of describing a class of days. LOOSEN it — cut thresholds toward the class boundary (e.g. 16-sigma evidence becomes a 5-sigma threshold), widen the time window, drop the gate or condition doing the least work (a gate that blocks 95% of days, or one that blocks none, is a prime suspect). Loosening is NOT lowering your standards — an untestable rule has no standard at all. A rule that fires 25 times at a 58% win rate is worth infinitely more than a rule that fired once and won once.
+
+The other move: ADD OR REMOVE A FILTER. Look at the losing trades versus the winning ones. Is there something that was true on the winning days and false on the losing ones? You have TWO kinds of filter available, and they do different jobs:
 
   SESSION GATE — "don't trade this kind of day at all."
     e.g. exposure_by_strike_gamma.net_gamma < 0  (dealers are SHORT gamma, so they amplify moves instead of pinning price — a completely different regime).
@@ -125,9 +129,10 @@ Think about WHICH kind your losers call for. If your rule works but only on cert
 === THE THREE HONEST OPTIONS ===
 You must pick one:
 
-1. "tighten"  — same feeds, stricter thresholds (usually the right first move).
-2. "filter"   — add a new condition from another feed to separate winners from losers.
-3. "abandon"  — this rule is not salvageable. SAY SO.
+1. "tighten"  — same feeds, stricter thresholds (when the rule over-fires).
+2. "loosen"   — same feeds, wider thresholds/windows or a dropped condition (when the rule fingerprinted one day and fires 0-2 times).
+3. "filter"   — add or swap a condition from another feed to separate winners from losers.
+4. "abandon"  — this rule is not salvageable. SAY SO.
 
 === WHEN TO ABANDON (read this carefully — it is the most important part) ===
 Abandon if ANY of these is true:
@@ -144,7 +149,7 @@ If a change drops the trade count below ~20, the win rate is meaningless noise. 
 Respond with ONLY one JSON object:
 {
   "diagnosis": "2-4 sentences: WHY did it lose? Be specific — reference the actual losing trades.",
-  "action": "tighten" | "filter" | "abandon",
+  "action": "tighten" | "loosen" | "filter" | "abandon",
   "abandonReason": "if abandoning, why. null otherwise",
   "revisedRule": {
     "description": "plain-English",
@@ -162,12 +167,12 @@ NOTE ON THRESHOLDS: conditions are evaluated against z-scores (sigma), so a thre
 // ---------------------------------------------------------------------------
 export async function refineRule({
   modelId, initialRule, ticker, fromDate,
-  // 60 sessions, not 20. THE CENTRAL TENSION of this loop, learned from real
-  // runs: tightening a rule reliably improves its win rate but starves its
-  // sample. GPT's round-2 rule hit 68.8% win / 4.64 profit factor — on 16
-  // trades, which is statistically meaningless and had to be rejected. The fix
-  // is NOT to loosen the rule or lower the bar; it is to test across more days
-  // so a rare-but-real signal has room to fire 20+ times. Rarity is the point.
+  // 60 sessions, not 20. Learned from real runs: tightening a rule reliably
+  // improves its win rate but starves its sample (GPT once hit 68.8% win on 16
+  // trades — statistically meaningless). Two complementary answers: test across
+  // more days so a real setup has room to fire 20+ times, AND (since the
+  // weekly-frequency goal was made explicit) let refinement LOOSEN fingerprinted
+  // rules toward the 10-40-fires band instead of only tightening or abandoning.
   sessions = 60, maxRounds = 4, holdMinutes = 15, onRound,
 } = {}) {
   const fn = PROVIDERS[modelId];
