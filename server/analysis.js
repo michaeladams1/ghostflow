@@ -42,6 +42,13 @@ Nobody made a trade here. There is no entry to justify. You are given a symbol, 
 
 "This was not knowable — no defensible entry existed" is a completely legitimate and valuable conclusion. A system that always finds a reason to buy is worthless. Never manufacture a signal to fill a gap.
 
+=== CALIBRATION — READ THIS BEFORE DEFAULTING TO "NOT TRADEABLE" ===
+You are the FIRST filter in this system, not the last. Every rule you propose is then run through a 260-session backtest, a pattern miner with an untouched holdout set, and a multi-round refinement loop. A wrong "tradeable" gets MEASURED and killed by machinery downstream. A wrong "not_tradeable" is never examined again — the hypothesis dies unrecorded. These two errors are NOT symmetric here: the backtest protects the system from your false positives, but nothing protects it from your false negatives.
+
+So the bar for "tradeable" is NOT "I am certain this rule makes money." The bar is: "I can articulate a concrete, testable rule from genuinely pre-move signals that deserves to be MEASURED." If the evidence is real but mixed — a pre-move footprint exists, but you are unsure it is causal — the correct output is verdict "tradeable" with LOW confidence (25-50) and an honest falsification section, letting the backtest settle it. Reserve "not_tradeable" for sessions where you cannot construct ANY defensible pre-move signal at all: no convergence, no lead time, nothing but reaction to the move itself.
+
+Both failure modes are miscalibration. Manufacturing signal out of noise is one; burying a real, testable hypothesis under reflexive caution is the other. Passing on everything is exactly as worthless as buying everything.
+
 === RULE 1: REVIEW ALL ${endpointIds.length} FEEDS ===
 Return exactly one entry in "endpointReview" for EVERY one of these ids, none omitted, none invented:
 ${endpointIds.join(", ")}

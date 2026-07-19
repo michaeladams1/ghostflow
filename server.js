@@ -606,7 +606,48 @@ app.get("*", (req, res) => res.sendFile(path.join(DIST_DIR, "index.html")));
 app.listen(PORT, () => {
   console.log(`GHOSTFLOW on port ${PORT}${!USER || !PASS ? " (WARNING: no auth)" : " (auth enabled)"}`);
   runAIProviderHealthCheck();
+  cleanupStaleJobs();
 });
+
+// STALE JOB CLEANUP. Background jobs are in-process — if the server restarts
+// (deploy, crash, Railway maintenance) mid-job, the job is GONE but its
+// persisted status still says "running". The card then wears a "confirming"
+// badge forever for work nobody is doing. On boot, nothing can legitimately
+// be running yet, so anything persisted as running/queued is provably dead:
+// mark it stale so the UI stops lying. Same logic for records stuck on
+// status "analyzing" — that analysis loop died with the old process too.
+async function cleanupStaleJobs() {
+  const JOB_KEYS = ["analysis", "backtests", "patternMiner", "confirmers", "refinements"];
+  try {
+    const all = await readTrades();
+    for (const rec of all) {
+      let dirty = false;
+      for (const key of JOB_KEYS) {
+        const job = rec.jobs?.[key];
+        if (job && (job.status === "running" || job.status === "queued")) {
+          job.status = "stale";
+          job.detail = "Server restarted while this job was in flight — the job is gone. Re-run the analysis to redo it.";
+          job.at = new Date().toISOString();
+          dirty = true;
+        }
+      }
+      if (rec.status === "analyzing") {
+        // A rerun keeps the old analysis on the record — restore "complete"
+        // if there is one to show, exactly like a failed rerun does.
+        rec.status = rec.analysis ? "complete" : "failed";
+        if (!rec.analysis) rec.analysisError = "Server restarted mid-analysis.";
+        dirty = true;
+      }
+      if (dirty) {
+        await appendTrade(rec);
+        console.log(`[startup] cleared stale job state on ${rec.symbol} ${rec.sessionDate} (${rec.id})`);
+      }
+    }
+  } catch (err) {
+    // DB might not be up yet — never let cleanup take the server down.
+    console.error("[startup] stale-job cleanup failed:", err.message);
+  }
+}
 
 async function runAIProviderHealthCheck() {
   for (const [name, fn] of [["Claude", callClaude], ["GPT", callGPT], ["Grok", callGrok]]) {

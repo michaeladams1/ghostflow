@@ -33,6 +33,15 @@ const MODELS = ["claude", "gpt", "grok"];
 // session returns no data), so 365 calendar days ≈ 260 weekdays.
 const BACKTEST_LOOKBACK_SESSIONS = 260;
 
+// CONFIRMERS GET A SHORTER WINDOW — ON PURPOSE.
+// The confirmers job is combinatorial: ~17 candidate feeds x 2 backtests each
+// x N sessions x up to 3 models. When the lookback was raised from 40 to 260
+// sessions for the plain backtest, this job silently inherited the raise and
+// became ~6.5x slower — hours of grinding per analysis (the stuck-"confirming"
+// cards). 60 sessions (~3 months) is enough to measure lift directionally;
+// the winner still gets validated by the full-depth backtest and refinement.
+const CONFIRMER_LOOKBACK_SESSIONS = 60;
+
 // Re-reads the record before every write. These jobs run concurrently and each
 // writes a different key; without re-reading, the last writer would clobber the
 // others' results with its own stale snapshot.
@@ -129,7 +138,7 @@ async function runPatternMiner(id, { ticker, sessionDate, analysis }) {
 // ---------------------------------------------------------------------------
 async function runConfirmers(id, { ticker, sessionDate, analysis }) {
   await setJobStatus(id, "confirmers", "running");
-  const sessions = priorSessions(sessionDate, BACKTEST_LOOKBACK_SESSIONS);
+  const sessions = priorSessions(sessionDate, CONFIRMER_LOOKBACK_SESSIONS);
 
   for (const m of MODELS) {
     const rule = analysis[m]?.rule;
