@@ -26,11 +26,12 @@ import { callClaudeWithTools, callGPTWithTools, callGrokWithTools, CONFIGURED_MO
 import { renderMultiBriefing } from "./compress.js";
 import { ruleVocabularyBlock } from "./vocabulary.js";
 import { extractJsonWithRepair } from "./jsonRepair.js";
+import { loadThesisDoc, renderThesisForPrompt } from "./thesis.js";
 
 const PROVIDERS = { claude: callClaudeWithTools, gpt: callGPTWithTools, grok: callGrokWithTools };
 export const MODEL_IDS = ["claude", "gpt", "grok"];
 
-function buildPrompt(briefing, userNotes) {
+function buildPrompt(briefing, userNotes, thesisText) {
   const endpointIds = briefing.endpoints.map((e) => e.id);
 
   const system = `You are one of three independent AI analysts in a research system called GHOSTFLOW. You do not know what the other two conclude, and you must not try to match them or to differ from them. Reason from the data and land where it takes you.
@@ -158,7 +159,12 @@ Respond with ONLY one JSON object. No code fences, no prose around it:
 
   const user = `${renderMultiBriefing(briefing, { userNotes })}
 
-Analyze the TARGET session now (${briefing.sessionDate}).
+${thesisText ? `=== YOUR EVOLVING THESIS DOCUMENT (yours alone — the other analysts cannot see it) ===
+This is your accumulated knowledge from every prior trade this system has analyzed, including machine-measured counter-examples. Consult it, TEST today's data against it, and cite it where relevant ("matches my <name> thesis" / "my <name> thesis predicts X but today shows Y"). It is context, not command: if today's data contradicts a thesis, say so plainly — that contradiction is exactly what keeps the document honest. Never force today's session to fit an existing thesis, and never soften a "not knowable" verdict because a thesis wants the trade.
+
+${thesisText}
+
+` : ""}Analyze the TARGET session now (${briefing.sessionDate}).
 - Review all ${endpointIds.length} feeds honestly — including the ones that told you nothing. SHOW THE DEAD ENDS.
 - Classify each feed as SIGNAL, CONFIRMATION, or NOISE.
 - CROSS-CHECK any pattern you find against the prior sessions: did it also fire there without a move following? If so, say so and downgrade it.
@@ -192,7 +198,16 @@ function validateReview(parsed, briefing) {
 
 export async function analyzeWithModel(modelId, briefing, userNotes) {
   const fn = PROVIDERS[modelId];
-  const { system, user } = buildPrompt(briefing, userNotes);
+  // Each analyst gets ITS OWN thesis document — never another model's.
+  // Independence lives in the reasoning; a shared doc would converge all
+  // three onto whichever narrative got written down first.
+  let thesisText = "";
+  try {
+    thesisText = renderThesisForPrompt(await loadThesisDoc(modelId));
+  } catch (err) {
+    console.warn(`[analysis] thesis load failed for ${modelId} (continuing without): ${err.message}`);
+  }
+  const { system, user } = buildPrompt(briefing, userNotes, thesisText);
   const raw = await fn(system, user, [], async () => "no tools");
 
   // A 29-feed review is thousands of words of free text, and ONE stray character

@@ -22,6 +22,7 @@
 
 import { readTrades, appendTrade } from "./store.js";
 import { runOptionSimForFires } from "./optionSim.js";
+import { updateAllTheses } from "./thesis.js";
 import { backtestRule, priorSessions } from "./backtest.js";
 import { analyzeConfirmers } from "./confirmation.js";
 import { refineRule } from "./refine.js";
@@ -342,6 +343,30 @@ async function runOptionSim(id, { ticker, analysis }) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// THESIS UPDATE: the learning step. Each analyst revises its own evolving
+// thesis document against this trade's full measured outcome, then the shared
+// knowledge base is re-merged deterministically. Runs on EVERY analyzed trade
+// — including all-pass trades, because "nothing was knowable here" refines
+// where setups do and don't apply.
+// ---------------------------------------------------------------------------
+async function runThesisUpdate(id) {
+  await setJobStatus(id, "thesis", "running");
+  try {
+    const all = await readTrades();
+    const rec = all.find((r) => r.id === id);
+    if (!rec) { await setJobStatus(id, "thesis", "failed", "record not found"); return; }
+    const results = await updateAllTheses(rec);
+    const failures = Object.entries(results).filter(([, r]) => !r.ok);
+    await setJobStatus(id, "thesis",
+      failures.length === MODELS.length ? "failed" : "done",
+      failures.length ? `${failures.map(([m]) => m).join(", ")} kept previous doc (update failed)` : null);
+  } catch (err) {
+    console.error(`[job:thesis] FAILED:`, err.message);
+    await setJobStatus(id, "thesis", "failed", err.message);
+  }
+}
+
 // Fired after /api/analyze responds. Deliberately NOT awaited by the request —
 // the caller gets its analysis immediately and the findings fill in behind it.
 export function startBackgroundJobs(id, { ticker, sessionDate, analysis }) {
@@ -357,6 +382,10 @@ export function startBackgroundJobs(id, { ticker, sessionDate, analysis }) {
       await setJobStatus(id, "refinements", "skipped", "No model proposed a rule — nothing to refine.");
       await setJobStatus(id, "basket", "skipped", "No model proposed a rule — nothing to basket-test.");
       await setJobStatus(id, "optionSim", "skipped", "No model proposed a rule — nothing to simulate.");
+      // A unanimous pass still teaches: WHERE nothing is knowable is thesis
+      // material (e.g. "thin small caps: repeatedly nothing"). Learn from it.
+      await setJobStatus(id, "thesis", "queued");
+      await runThesisUpdate(id);
     })().catch((err) => console.error(`[jobs] skipped-status writes failed for ${id}:`, err));
     return;
   }
@@ -376,12 +405,14 @@ export function startBackgroundJobs(id, { ticker, sessionDate, analysis }) {
       await setJobStatus(id, "refinements", "queued");
       await setJobStatus(id, "basket", "queued");
       await setJobStatus(id, "optionSim", "queued");
+      await setJobStatus(id, "thesis", "queued");
       await runBacktests(id, { ticker, sessionDate, analysis });
       await runPatternMiner(id, { ticker, sessionDate, analysis });
       await runConfirmers(id, { ticker, sessionDate, analysis });
       await runRefinement(id, { ticker, sessionDate, analysis });
       await runBasketBacktest(id, { ticker, sessionDate, analysis });
       await runOptionSim(id, { ticker, analysis });
+      await runThesisUpdate(id);
       console.log(`[jobs] all background work complete for ${id}`);
     } catch (err) {
       console.error(`[jobs] fatal error for ${id}:`, err);

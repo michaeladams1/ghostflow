@@ -13,6 +13,7 @@ import { readTrades, appendTrade, deleteTrade } from "./server/store.js";
 import { fetchAllEndpoints, probePriceData } from "./server/quantDataClient.js";
 import { buildBriefing, buildMultiBriefing } from "./server/compress.js";
 import { analyzeAllModels } from "./server/analysis.js";
+import { loadAllTheses } from "./server/thesis.js";
 import { backtestRule, priorSessions } from "./server/backtest.js";
 import { refineRule } from "./server/refine.js";
 import { analyzeConfirmers } from "./server/confirmation.js";
@@ -605,6 +606,14 @@ app.post("/api/strategy/session-chart", async (req, res) => {
 app.use(express.static(DIST_DIR));
 app.get("*", (req, res) => res.sendFile(path.join(DIST_DIR, "index.html")));
 
+app.get("/api/theses", async (_req, res) => {
+  try {
+    res.json(await loadAllTheses());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.listen(PORT, () => {
   console.log(`GHOSTFLOW on port ${PORT}${!USER || !PASS ? " (WARNING: no auth)" : " (auth enabled)"}`);
   runAIProviderHealthCheck();
@@ -619,7 +628,7 @@ app.listen(PORT, () => {
 // mark it stale so the UI stops lying. Same logic for records stuck on
 // status "analyzing" — that analysis loop died with the old process too.
 async function cleanupStaleJobs() {
-  const JOB_KEYS = ["analysis", "backtests", "patternMiner", "confirmers", "refinements", "basket", "optionSim"];
+  const JOB_KEYS = ["analysis", "backtests", "patternMiner", "confirmers", "refinements", "basket", "optionSim", "thesis"];
   try {
     const all = await readTrades();
     for (const rec of all) {

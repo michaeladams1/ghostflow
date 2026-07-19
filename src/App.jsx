@@ -633,6 +633,84 @@ function BasketPanel({ record, modelId, rule }) {
 // aggressive premium bought — the pattern picks the contract) and the
 // real-chain class grid (ATM/OTM x near/far), which is what turns one number
 // into "this pattern pays in short-dated ATM and dies in far OTM".
+// THE THESES VIEW — the learning layer made visible. Three documents side by
+// side (never blended), plus the convergence list: setups more than one
+// analyst arrived at independently.
+function ThesesView() {
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  useEffect(() => {
+    fetch("/api/theses").then((r) => r.json()).then(setData).catch((e) => setErr(e.message));
+  }, []);
+
+  if (err) return <p className="text-sm text-red-600 dark:text-red-400 mt-6">Failed to load theses: {err}</p>;
+  if (!data) return <p className={`text-sm mt-6 ${sub}`}>Loading theses…</p>;
+
+  const models = ["claude", "gpt", "grok"];
+  const shared = data.shared?.doc;
+  const empty = models.every((m) => !(data[m]?.doc?.theses?.length));
+
+  return (
+    <div className="mt-6">
+      <p className={`text-sm mb-4 ${sub}`}>
+        Each analyst's evolving thesis document — its only memory between trades, revised after every analysis (passes included). Disagreements are preserved, never blended.
+      </p>
+
+      {empty && (
+        <div className="px-4 py-6 rounded-lg border border-zinc-200 dark:border-zinc-800 text-center">
+          <p className={`text-sm ${sub}`}>No theses yet. They start accumulating with the next analyzed trade (or a re-run of an existing card).</p>
+        </div>
+      )}
+
+      {shared?.convergentSetups?.length > 0 && (
+        <div className="px-3 py-2.5 rounded-lg border border-emerald-500/30 bg-emerald-500/5 mb-4">
+          <div className="text-xs font-medium mb-1">Independent convergence — multiple analysts arrived at the same setup:</div>
+          {shared.convergentSetups.map((c, i) => (
+            <div key={i} className={`text-xs font-mono ${sub}`}>{c.name} · {c.models.join(" + ")}</div>
+          ))}
+        </div>
+      )}
+
+      <div className="grid md:grid-cols-3 gap-4">
+        {models.map((m) => {
+          const doc = data[m]?.doc;
+          return (
+            <div key={m} className="rounded-lg border border-zinc-200 dark:border-zinc-800 p-3">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-sm font-medium capitalize">{m}</span>
+                <span className={`text-[11px] font-mono ${faint}`}>{doc?.tradesSeen || 0} trades seen</span>
+              </div>
+              {!doc?.theses?.length && <p className={`text-xs ${faint}`}>No theses yet.</p>}
+              <div className="space-y-2.5">
+                {(doc?.theses || []).map((t, i) => (
+                  <div key={i} className="px-2.5 py-2 rounded border border-zinc-200 dark:border-zinc-800">
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="text-xs font-medium leading-tight">{t.name}</span>
+                      <span className={`ml-auto text-[10px] font-mono px-1.5 py-0.5 rounded border shrink-0 ${
+                        (t.confidence || 0) >= 50 ? "text-emerald-600 dark:text-emerald-400 border-emerald-500/40"
+                        : "border-zinc-300 dark:border-zinc-700 " + faint}`}>
+                        {t.confidence ?? "?"}/100 · n={t.sampleSize ?? "?"}
+                      </span>
+                    </div>
+                    {t.setupConditions && <p className={`text-[11px] leading-relaxed mb-1 ${sub}`}>{t.setupConditions}</p>}
+                    {t.supportingEvidence?.length > 0 && (
+                      <p className={`text-[10px] font-mono ${faint}`}>for: {t.supportingEvidence.map((e) => `${e.ticker} ${e.sessionDate}`).join(", ")}</p>
+                    )}
+                    {t.counterExamples?.length > 0 && (
+                      <p className="text-[10px] font-mono text-red-600 dark:text-red-400">against: {t.counterExamples.map((e) => `${e.ticker} ${e.sessionDate}`).join(", ")}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+              {doc?.generalNotes && <p className={`text-[11px] mt-2 leading-relaxed ${faint}`}>{doc.generalNotes}</p>}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function OptionSimPanel({ record, modelId, rule }) {
   const result = record.optionSim?.[modelId];
   const job = record.jobs?.optionSim;
@@ -1186,6 +1264,7 @@ const BACKGROUND_JOB_ORDER = [
   ["refinements", "refining"],
   ["basket", "basket testing"],
   ["optionSim", "option P&L"],
+  ["thesis", "updating theses"],
 ];
 function stillVerifying(record) {
   if (!record.jobs) return null;
@@ -1487,7 +1566,7 @@ export default function App() {
         </div>
 
         <div className="flex gap-1 mb-6 border-b border-zinc-200 dark:border-zinc-800">
-          {[{ id: "log", label: "Analyses", Icon: FileText }, { id: "strategy", label: "Strategy Lab", Icon: FlaskConical }, { id: "settings", label: "Settings", Icon: Settings }].map(({ id, label, Icon }) => (
+          {[{ id: "log", label: "Analyses", Icon: FileText }, { id: "strategy", label: "Strategy Lab", Icon: FlaskConical }, { id: "theses", label: "Theses", Icon: Users }, { id: "settings", label: "Settings", Icon: Settings }].map(({ id, label, Icon }) => (
             <button key={id} onClick={() => setTab(id)}
               className={`flex items-center gap-1.5 px-3 py-2 text-sm border-b-2 -mb-px
                 ${tab === id ? "border-emerald-500 text-zinc-900 dark:text-zinc-100" : "border-transparent " + faint}`}>
@@ -1524,6 +1603,7 @@ export default function App() {
         )}
 
         {tab === "strategy" && <StrategyLab />}
+        {tab === "theses" && <ThesesView />}
 
         {tab === "settings" && (
           <div className={`max-w-xl ${card} rounded-lg p-4`}>

@@ -55,6 +55,14 @@ export function ensureSchema() {
       );
       CREATE INDEX IF NOT EXISTS feed_cache_lookup
         ON feed_cache (ticker, session_date, endpoint);
+      -- THE THESIS DOCUMENTS: one evolving doc per analyst plus the 'shared'
+      -- side-by-side merge. This is the learning layer — the only memory that
+      -- carries between trades.
+      CREATE TABLE IF NOT EXISTS theses (
+        model TEXT PRIMARY KEY,
+        doc JSONB NOT NULL,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
     `).catch((err) => {
       schemaReady = null; // allow retry on next call if this failed
       throw err;
