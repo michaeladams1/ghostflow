@@ -36,6 +36,11 @@ function clockToMinutes(clock) {
 export default function ChartView({ record, modelId, meta, onClose, onRerun, rerunning }) {
   const a = record.analysis?.[modelId];
   const price = record.briefing?.priceSeries || [];
+  // Options mode: the actual instrument. Stored by analyses run after the
+  // contract-overlay feature shipped; older records simply won't have it.
+  const contractSeries = record.briefing?.contractSeries || [];
+  const contract = record.contract || null;
+  const hasContract = !!(contract && contractSeries.length > 1);
   const thrusts = record.briefing?.timeline?.priceThrusts || [];
   const events = record.briefing?.timeline?.events || [];
   const [hover, setHover] = useState(null);
@@ -77,7 +82,10 @@ export default function ChartView({ record, modelId, meta, onClose, onRerun, rer
 
   const geom = useMemo(() => {
     if (!price.length) return null;
-    const W = 1000, H = 460, PAD = { l: 56, r: 16, t: 20, b: 34 };
+    // Right padding widens when the contract overlay is present, to make room
+    // for its own axis labels — an option at $0.45 cannot share a $14 stock's
+    // y-scale, so it gets a second scale on the right.
+    const W = 1000, H = 460, PAD = { l: 56, r: hasContract ? 56 : 16, t: 20, b: 34 };
     const prices = price.map((p) => p.price);
     const lo = Math.min(...prices), hi = Math.max(...prices);
     const pad = (hi - lo) * 0.08 || 1;
@@ -89,8 +97,18 @@ export default function ChartView({ record, modelId, meta, onClose, onRerun, rer
     const x = (min) => PAD.l + ((min - t0) / (t1 - t0 || 1)) * (W - PAD.l - PAD.r);
     const y = (v) => PAD.t + (1 - (v - yMin) / (yMax - yMin || 1)) * (H - PAD.t - PAD.b);
 
-    return { W, H, PAD, x, y, yMin, yMax, t0, t1 };
-  }, [price]);
+    // Contract price scale (right axis), independent of the stock scale.
+    let cy = null, cyMin = 0, cyMax = 0;
+    if (hasContract) {
+      const cv = contractSeries.map((p) => p.value);
+      const cLo = Math.min(...cv), cHi = Math.max(...cv);
+      const cPad = (cHi - cLo) * 0.08 || 0.05;
+      cyMin = cLo - cPad; cyMax = cHi + cPad;
+      cy = (v) => PAD.t + (1 - (v - cyMin) / (cyMax - cyMin || 1)) * (H - PAD.t - PAD.b);
+    }
+
+    return { W, H, PAD, x, y, yMin, yMax, t0, t1, cy, cyMin, cyMax };
+  }, [price, contractSeries, hasContract]);
 
   if (!geom) {
     // This analysis predates the chart data being stored. Rather than a dead
@@ -120,8 +138,15 @@ export default function ChartView({ record, modelId, meta, onClose, onRerun, rer
     );
   }
 
-  const { W, H, PAD, x, y, yMin, yMax } = geom;
+  const { W, H, PAD, x, y, yMin, yMax, cy, cyMin, cyMax } = geom;
   const pathD = price.map((p, i) => `${i ? "L" : "M"}${x(clockToMinutes(p.clock))},${y(p.price)}`).join(" ");
+  // The actual instrument (options mode): amber line on its own right-hand
+  // scale. Signal dots stay pinned to the stock line — that is where the
+  // timing evidence lives; this line is what the P&L actually did.
+  const contractPathD = hasContract && cy
+    ? contractSeries.map((p, i) => `${i ? "L" : "M"}${x(clockToMinutes(p.clock))},${cy(p.value)}`).join(" ")
+    : null;
+  const contractLabel = contract ? `${contract.strikePrice}${(contract.contractType || "?")[0]} ${contract.expirationDate}` : null;
 
   // Only the events from feeds THIS model used, in the roles it assigned,
   // above the sigma floor.
@@ -236,6 +261,26 @@ export default function ChartView({ record, modelId, meta, onClose, onRerun, rer
 
             {/* price */}
             <path d={pathD} fill="none" stroke="currentColor" strokeWidth="1.4" className="text-zinc-800 dark:text-zinc-200" />
+
+            {/* THE ACTUAL INSTRUMENT (options mode): the contract's own tape on
+                its own right-hand scale. A 1.7% stock move can be a 40% contract
+                move — this line is the P&L reality the verdict is about. */}
+            {contractPathD && (
+              <>
+                <path d={contractPathD} fill="none" stroke="#f59e0b" strokeWidth="1.4" strokeDasharray="5 3" opacity="0.85" />
+                {gridY.map((v, i) => {
+                  const cv = cyMin + ((cyMax - cyMin) * i) / (yTicks - 1);
+                  return (
+                    <text key={`c${i}`} x={W - PAD.r + 8} y={y(v) + 3} fontSize="10" textAnchor="start" fill="#f59e0b" fontFamily="monospace">
+                      {cv.toFixed(2)}
+                    </text>
+                  );
+                })}
+                <text x={W - PAD.r - 6} y={PAD.t + 12} fontSize="10" textAnchor="end" fill="#f59e0b" fontFamily="monospace">
+                  {contractLabel} → right axis
+                </text>
+              </>
+            )}
 
             {/* Signal events, coloured by the ROLE THIS MODEL assigned, and SIZED
                 BY SIGMA. Sizing matters: a feed the model called a "signal" may

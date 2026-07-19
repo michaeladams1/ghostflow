@@ -191,6 +191,7 @@ app.post("/api/analyze", async (req, res) => {
             timeline: briefing.timeline,
             sessionMetrics: briefing.sessionMetrics,
             priceSeries: briefing.priceSeries,
+            contractSeries: briefing.contractSeries || [],
             fetchReport: briefing.fetchReport,
             window: briefing.window,
             // Compact per-session summary so the UI can show the window honestly.
@@ -460,6 +461,7 @@ app.post("/api/analyses/:id/rerun", async (req, res) => {
             timeline: briefing.timeline,
             sessionMetrics: briefing.sessionMetrics,
             priceSeries: briefing.priceSeries,
+            contractSeries: briefing.contractSeries || [],
             fetchReport: briefing.fetchReport,
             window: briefing.window,
             sessions: briefing.sessions.map((s) => ({

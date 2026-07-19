@@ -776,6 +776,11 @@ export function buildMultiBriefing(bundles, { contract } = {}) {
     timeline: target?.timeline || { priceThrusts: [], events: [], leadLag: [], totalSignalEvents: 0 },
     sessionMetrics: target?.sessionMetrics || {},
     priceSeries: target?.priceSeries || [],
+    // Options mode: the contract being traded and its own price bars on the
+    // target session. The chart overlays this; the briefing renders it as
+    // "the actual instrument". Empty in stock mode.
+    contract: contract || null,
+    contractSeries: (target?.contractSeries || []).map((p) => ({ ts: p.ts, clock: toClock(p.ts), value: +(+p.value).toFixed(2) })),
     fetchReport: target?.fetchReport || { attempted: 0, succeeded: 0, failed: [] },
   };
 }
@@ -791,6 +796,28 @@ export function renderMultiBriefing(mb, { userNotes } = {}) {
   lines.push(`If you find a signal on the target session, GO LOOK AT THE PRIOR SESSIONS. Did the same signal fire there? What followed it? A signal that fires once before a move on Tuesday, but also fired four times on Monday with nothing following, is NOT a signal — it is noise that got lucky once. Checking this is the single most valuable thing the extra sessions give you, and you are expected to do it explicitly.`);
   lines.push(``);
   lines.push(`Note on sigma: each session is z-scored against ITS OWN baseline. A 5-sigma reading means "5 sigma relative to that day's own noise", so readings are comparable across days.`);
+
+  // OPTIONS MODE: state the actual instrument and its own tape. The 29 chain/
+  // underlying feeds are where predictive patterns live; the contract's own
+  // price is the P&L instrument — context for judging an entry, never a
+  // predictive signal (its price mechanically follows the underlying).
+  if (mb.contract) {
+    const c = mb.contract;
+    lines.push(``);
+    lines.push(`=== THE ACTUAL INSTRUMENT: THIS TRADE WAS AN OPTION, NOT STOCK ===`);
+    lines.push(`Michael's position was the ${c.strikePrice} ${c.contractType} expiring ${c.expirationDate}. Your verdict, entry, and exit are about THIS contract's P&L, not the stock's.`);
+    if (mb.contractSeries?.length > 1) {
+      const cs = mb.contractSeries;
+      const vals = cs.map((p) => p.value);
+      const step = Math.max(1, Math.floor(cs.length / 24));
+      const sampled = cs.filter((_, i) => i % step === 0 || i === cs.length - 1);
+      lines.push(`Contract price on the target session — open ${vals[0].toFixed(2)}, high ${Math.max(...vals).toFixed(2)}, low ${Math.min(...vals).toFixed(2)}, close ${vals[vals.length - 1].toFixed(2)}:`);
+      lines.push(sampled.map((p) => `${toClock(p.ts)}=${p.value.toFixed(2)}`).join("  "));
+      lines.push(`Judge any entry you propose in CONTRACT terms: at your entry timestamp, what was the contract worth, and what did it become? A stock move with a long lead can still be a losing option trade via theta and IV crush — say so if the timeline shows it. The contract's own price is NOT a predictive signal (it mechanically follows the underlying); predictive work stays on the feeds.`);
+    } else {
+      lines.push(`No contract price bars were available for the target session — flag this as a data gap when judging entry/exit economics.`);
+    }
+  }
 
   for (const s of mb.sessions) {
     const isTarget = s.sessionDate === mb.sessionDate;

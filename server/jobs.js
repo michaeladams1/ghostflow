@@ -199,23 +199,30 @@ export function startBackgroundJobs(id, { ticker, sessionDate, analysis }) {
   const anyRule = MODELS.some((m) => analysis[m]?.rule);
   if (!anyRule) {
     // Every model passed. There is nothing to test, and saying so explicitly is
-    // better than leaving the panels in a permanent "pending" state.
-    setJobStatus(id, "backtests", "skipped", "No model proposed a rule — nothing to backtest.");
-    setJobStatus(id, "patternMiner", "skipped", "No model proposed a rule — nothing to mine.");
-    setJobStatus(id, "confirmers", "skipped", "No model proposed a rule — nothing to test.");
-    setJobStatus(id, "refinements", "skipped", "No model proposed a rule — nothing to refine.");
+    // better than leaving the panels in a permanent "pending" state. Awaited
+    // sequentially inside an IIFE — same lost-update race as the queued writes.
+    (async () => {
+      await setJobStatus(id, "backtests", "skipped", "No model proposed a rule — nothing to backtest.");
+      await setJobStatus(id, "patternMiner", "skipped", "No model proposed a rule — nothing to mine.");
+      await setJobStatus(id, "confirmers", "skipped", "No model proposed a rule — nothing to test.");
+      await setJobStatus(id, "refinements", "skipped", "No model proposed a rule — nothing to refine.");
+    })().catch((err) => console.error(`[jobs] skipped-status writes failed for ${id}:`, err));
     return;
   }
 
-  setJobStatus(id, "backtests", "queued");
-  setJobStatus(id, "patternMiner", "queued");
-  setJobStatus(id, "confirmers", "queued");
-  setJobStatus(id, "refinements", "queued");
-
   // Sequential, not parallel: both hammer the same rate-limited data API, and
   // running them at once was what caused sessions to get silently dropped.
+  // The four "queued" writes are AWAITED INSIDE the async chain for the same
+  // reason: each setJobStatus is a read-modify-write of the whole record, so
+  // firing four of them unawaited (and racing the chain's own status writes)
+  // caused lost updates — cards showing impossible states like backtests
+  // "queued" next to refinements "done" left over from a previous run.
   (async () => {
     try {
+      await setJobStatus(id, "backtests", "queued");
+      await setJobStatus(id, "patternMiner", "queued");
+      await setJobStatus(id, "confirmers", "queued");
+      await setJobStatus(id, "refinements", "queued");
       await runBacktests(id, { ticker, sessionDate, analysis });
       await runPatternMiner(id, { ticker, sessionDate, analysis });
       await runConfirmers(id, { ticker, sessionDate, analysis });

@@ -81,6 +81,9 @@ Whatever pattern you think you found, go look at the prior sessions and ask: DID
 
 The prior sessions include a FIRING COUNT table per feed. Use it. A model that finds a "signal" on the target day without checking whether it fires constantly on the other days has done half the job, and the half it skipped is the half that keeps you from losing money.
 
+FALSIFY COMBINATIONS AS COMBINATIONS, NOT INGREDIENT BY INGREDIENT.
+A feed that fires 20+ times per prior session is dead as a STANDALONE signal — that part is absolute. But it is NOT automatically dead as an ingredient in a convergence. Three noisy feeds all spiking in the same tight window (a few minutes) is a DIFFERENT EVENT from any of them spiking alone: each may fire 20 times a day while the three-together cluster never occurred on either prior session. The falsification question for a convergence is therefore: did THIS CLUSTER — these same feeds, together, in a comparable window — appear on the prior sessions, and what followed? Use the timestamps in the prior sessions' event lists to check. Rejecting a convergence solely because each ingredient is individually common, without checking the joint occurrence, is a reasoning error in BOTH directions: it will veto every real multi-feed setup this system exists to find, while telling you nothing about whether the cluster itself is rare.
+
 === RULE 4: PROPOSE A TESTABLE RULE ===
 Your thesis must be a rule a computer could evaluate on any other day without you present. Concrete, with thresholds.
   GOOD: "net_drift.netCallPremium z > 20 AND net_flow.net_premium z > 10 in the same 2-minute window -> buy at that bucket's close."
