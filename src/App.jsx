@@ -558,6 +558,72 @@ function RefinePanel({ record, modelId, rule }) {
   );
 }
 
+// BASKET BACKTEST — the cross-ticker sweep. Answers "does the PATTERN work",
+// as opposed to "did it work on the one name Michael happened to trade".
+// A rule can fail its home ticker and win the basket (or vice versa); both
+// findings are displayed rather than rolled into one number.
+function BasketPanel({ record, modelId, rule }) {
+  const result = record.basket?.[modelId];
+  const job = record.jobs?.basket;
+
+  if (!rule) return null;
+
+  return (
+    <div className="mt-5">
+      <div className="flex items-center gap-2 mb-2">
+        <Table2 size={14} className={faint} />
+        <span className={heading}>Basket backtest — does the pattern work on the other tickers you've traded?</span>
+      </div>
+
+      {!result && job?.status === "skipped" && <JobSkipped detail={job.detail} />}
+      {!result && job?.status !== "skipped" && (
+        <JobPending label="Sweeping every other ticker in the trade log (60 sessions each; re-runs get cheap via the feed warehouse)" />
+      )}
+
+      {result && (
+        <>
+          {result.usedRefined && (
+            <p className={`text-[11px] mb-2 ${faint}`}>Testing the refinement loop's surviving rule (the best-tested version), not the original draft.</p>
+          )}
+          {result.aggregate && (
+            <div className={`px-3 py-3 rounded-lg border mb-3 ${
+              result.aggregate.enoughData && result.aggregate.winRate >= 55 ? "border-emerald-500/30 bg-emerald-500/5"
+              : result.aggregate.enoughData && result.aggregate.winRate < 45 ? "border-red-500/30 bg-red-500/5"
+              : "border-zinc-200 dark:border-zinc-800"}`}>
+              <div className="text-sm font-medium">
+                {result.aggregate.fires} fires across {result.aggregate.tickersTested} tickers
+                {result.aggregate.winRate != null && <> · {result.aggregate.winRate}% win rate pooled</>}
+                {!result.done && <span className={`ml-2 text-xs ${faint}`}>(still sweeping…)</span>}
+              </div>
+              {!result.aggregate.enoughData && result.done && (
+                <p className={`text-xs mt-1 ${faint}`}>Fewer than 20 pooled fires — treat the win rate as anecdote, not evidence. The basket strengthens as more trades are logged.</p>
+              )}
+            </div>
+          )}
+          <div className="space-y-1.5">
+            {result.perTicker?.map((r) => (
+              <div key={r.ticker} className="px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-800 flex items-center gap-3">
+                <span className="text-xs font-mono font-medium w-14">{r.ticker}</span>
+                {r.error ? (
+                  <span className="text-xs text-red-600 dark:text-red-400">failed: {r.error}</span>
+                ) : r.testable === false ? (
+                  <span className={`text-xs ${faint}`}>{r.reason || "not testable on this ticker"}</span>
+                ) : r.totalTrades === 0 ? (
+                  <span className={`text-xs ${faint}`}>never fired ({r.sessionsTested} sessions)</span>
+                ) : (
+                  <span className={`text-xs font-mono ${sub}`}>
+                    {r.totalTrades} fires · {r.winRate}% win · avg {r.avgReturnPct > 0 ? "+" : ""}{r.avgReturnPct}% · PF {r.profitFactor}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 // COMBINED — the three models side by side. Deliberately NOT a merged verdict.
 // Entry timings are never averaged: averaging two models' entries produces a
 // moment neither of them endorsed. Disagreement is preserved and displayed,
@@ -729,6 +795,7 @@ function ModelPanel({ record, modelId, cb, onChart }) {
       <PatternMinerPanel record={record} modelId={modelId} rule={a.rule} />
       <ConfirmersPanel record={record} modelId={modelId} rule={a.rule} />
       <RefinePanel record={record} modelId={modelId} rule={a.rule} />
+      <BasketPanel record={record} modelId={modelId} rule={a.rule} />
 
       <div className="mt-6 pt-5 border-t border-zinc-200 dark:border-zinc-800">
         <div className="flex items-center gap-2 mb-2">
@@ -1053,6 +1120,7 @@ const BACKGROUND_JOB_ORDER = [
   ["patternMiner", "mining patterns"],
   ["confirmers", "confirming"],
   ["refinements", "refining"],
+  ["basket", "basket testing"],
 ];
 function stillVerifying(record) {
   if (!record.jobs) return null;

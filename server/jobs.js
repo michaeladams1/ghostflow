@@ -42,6 +42,17 @@ const BACKTEST_LOOKBACK_SESSIONS = 260;
 // the winner still gets validated by the full-depth backtest and refinement.
 const CONFIRMER_LOOKBACK_SESSIONS = 60;
 
+// BASKET BACKTEST: the cross-ticker test. A rule graded only on its home
+// ticker can be "bad on NEXA" while being good in general (or vice versa) —
+// rare setups don't repeat often on ONE name's history. So every rule also
+// sweeps every OTHER ticker in the trade log. 60 sessions per ticker keeps
+// the first pass affordable; the feed warehouse makes every later pass nearly
+// free, so this number can grow as the warehouse fills. Ungated by design
+// (Michael's call): even a rule that failed its home ticker gets basket-tested,
+// because "fails on NEXA, wins on the basket" is exactly the kind of finding
+// a home-ticker gate would hide.
+const BASKET_LOOKBACK_SESSIONS = 60;
+
 // Re-reads the record before every write. These jobs run concurrently and each
 // writes a different key; without re-reading, the last writer would clobber the
 // others' results with its own stale snapshot.
@@ -193,6 +204,101 @@ async function runRefinement(id, { ticker, sessionDate, analysis }) {
   await setJobStatus(id, "refinements", "done");
 }
 
+// ---------------------------------------------------------------------------
+// BASKET BACKTEST: does this rule work ANYWHERE ELSE? Runs each model's rule
+// (the refinement's best version if one survived, else the original) against
+// every other ticker in the trade log. Persists incrementally so the panel
+// fills in ticker by ticker instead of appearing all at once at the end.
+// ---------------------------------------------------------------------------
+async function runBasketBacktest(id, { ticker, sessionDate, analysis }) {
+  await setJobStatus(id, "basket", "running");
+  try {
+    const all = await readTrades();
+    const rec0 = all.find((r) => r.id === id);
+    const basketTickers = [...new Set(all.map((r) => r.symbol).filter((s) => s && s !== ticker))];
+    if (!basketTickers.length) {
+      await setJobStatus(id, "basket", "skipped", "No other tickers in the trade log yet — the basket grows automatically as trades are logged.");
+      return;
+    }
+    const sessions = priorSessions(sessionDate, BASKET_LOOKBACK_SESSIONS);
+
+    let ranAny = false;
+    for (const m of MODELS) {
+      // Prefer the refinement loop's surviving rule — it is the best-tested
+      // version of the idea. Fall back to the analyst's original.
+      const refinedBest = rec0?.refinements?.[m]?.best;
+      const rule = refinedBest?.rule?.conditions ? refinedBest.rule
+        : refinedBest?.conditions ? refinedBest
+        : analysis[m]?.rule;
+      if (!rule?.conditions?.length) continue;
+      ranAny = true;
+
+      const perTicker = [];
+      for (const t of basketTickers) {
+        try {
+          console.log(`[job:basket] ${m} rule on ${t}...`);
+          const r = await backtestRule(rule, { ticker: t, sessions, holdMinutes: 15 });
+          perTicker.push({
+            ticker: t,
+            testable: r.testable !== false,
+            reason: r.reason || null,
+            sessionsTested: r.sessionsTested ?? null,
+            totalTrades: r.totalTrades ?? 0,
+            wins: r.wins ?? 0,
+            losses: r.losses ?? 0,
+            winRate: r.winRate ?? null,
+            avgReturnPct: r.avgReturnPct ?? null,
+            profitFactor: r.profitFactor ?? null,
+            warnings: r.warnings || [],
+          });
+        } catch (err) {
+          console.error(`[job:basket] ${m} on ${t} FAILED:`, err.message);
+          perTicker.push({ ticker: t, error: err.message });
+        }
+        // Incremental persist: the UI shows progress ticker by ticker.
+        const snapshot = [...perTicker];
+        await patchRecord(id, (rec) => {
+          rec.basket = rec.basket || {};
+          rec.basket[m] = {
+            rule: rule.description || null,
+            usedRefined: !!refinedBest,
+            lookbackSessions: BASKET_LOOKBACK_SESSIONS,
+            perTicker: snapshot,
+            aggregate: aggregateBasket(snapshot),
+            done: snapshot.length === basketTickers.length,
+          };
+        });
+      }
+    }
+    await setJobStatus(id, "basket", ranAny ? "done" : "skipped", ranAny ? null : "No model had a testable rule to basket-test.");
+  } catch (err) {
+    console.error(`[job:basket] FAILED:`, err.message);
+    await setJobStatus(id, "basket", "failed", err.message);
+  }
+}
+
+// The honest rollup: total fires and win rate pooled across every ticker the
+// rule could be tested on. This is the number that answers "does the PATTERN
+// work", as opposed to "did it work on the one name Michael happened to trade".
+function aggregateBasket(perTicker) {
+  const rows = perTicker.filter((r) => !r.error && r.testable !== false);
+  const fires = rows.reduce((a, r) => a + (r.totalTrades || 0), 0);
+  const wins = rows.reduce((a, r) => a + (r.wins || 0), 0);
+  const losses = rows.reduce((a, r) => a + (r.losses || 0), 0);
+  const decided = wins + losses;
+  const firingTickers = rows.filter((r) => (r.totalTrades || 0) > 0).length;
+  return {
+    tickersInBasket: perTicker.length,
+    tickersTested: rows.length,
+    tickersWhereFired: firingTickers,
+    fires,
+    wins,
+    losses,
+    winRate: decided ? +((wins / decided) * 100).toFixed(1) : null,
+    enoughData: fires >= 20,
+  };
+}
+
 // Fired after /api/analyze responds. Deliberately NOT awaited by the request —
 // the caller gets its analysis immediately and the findings fill in behind it.
 export function startBackgroundJobs(id, { ticker, sessionDate, analysis }) {
@@ -206,6 +312,7 @@ export function startBackgroundJobs(id, { ticker, sessionDate, analysis }) {
       await setJobStatus(id, "patternMiner", "skipped", "No model proposed a rule — nothing to mine.");
       await setJobStatus(id, "confirmers", "skipped", "No model proposed a rule — nothing to test.");
       await setJobStatus(id, "refinements", "skipped", "No model proposed a rule — nothing to refine.");
+      await setJobStatus(id, "basket", "skipped", "No model proposed a rule — nothing to basket-test.");
     })().catch((err) => console.error(`[jobs] skipped-status writes failed for ${id}:`, err));
     return;
   }
@@ -223,10 +330,12 @@ export function startBackgroundJobs(id, { ticker, sessionDate, analysis }) {
       await setJobStatus(id, "patternMiner", "queued");
       await setJobStatus(id, "confirmers", "queued");
       await setJobStatus(id, "refinements", "queued");
+      await setJobStatus(id, "basket", "queued");
       await runBacktests(id, { ticker, sessionDate, analysis });
       await runPatternMiner(id, { ticker, sessionDate, analysis });
       await runConfirmers(id, { ticker, sessionDate, analysis });
       await runRefinement(id, { ticker, sessionDate, analysis });
+      await runBasketBacktest(id, { ticker, sessionDate, analysis });
       console.log(`[jobs] all background work complete for ${id}`);
     } catch (err) {
       console.error(`[jobs] fatal error for ${id}:`, err);
