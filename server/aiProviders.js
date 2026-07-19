@@ -48,7 +48,7 @@ async function fetchWithTimeout(url, options, timeoutMs = 120000) {
 }
 
 export async function callClaude(prompt, { system } = {}) {
-  const res = await fetchWithTimeout("https://api.anthropic.com/v1/messages", {
+  const res = await fetchAIWithRetry("Claude", "https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
       "x-api-key": ANTHROPIC_KEY,
@@ -64,7 +64,6 @@ export async function callClaude(prompt, { system } = {}) {
       messages: [{ role: "user", content: prompt }],
     }),
   });
-  if (!res.ok) throw new Error(`Claude error ${res.status}: ${await res.text()}`);
   const data = await res.json();
   const text = data.content.map((b) => b.text || "").join("");
   if (!text) {
@@ -77,12 +76,11 @@ export async function callGPT(prompt, { system } = {}) {
   const messages = [];
   if (system) messages.push({ role: "system", content: system });
   messages.push({ role: "user", content: prompt });
-  const res = await fetchWithTimeout("https://api.openai.com/v1/chat/completions", {
+  const res = await fetchAIWithRetry("GPT", "https://api.openai.com/v1/chat/completions", {
     method: "POST",
     headers: { Authorization: `Bearer ${OPENAI_KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify({ model: OPENAI_MODEL, messages }),
   });
-  if (!res.ok) throw new Error(`GPT error ${res.status}: ${await res.text()}`);
   const data = await res.json();
   return data.choices[0].message.content;
 }
@@ -91,12 +89,11 @@ export async function callGrok(prompt, { system } = {}) {
   const messages = [];
   if (system) messages.push({ role: "system", content: system });
   messages.push({ role: "user", content: prompt });
-  const res = await fetchWithTimeout("https://api.x.ai/v1/chat/completions", {
+  const res = await fetchAIWithRetry("Grok", "https://api.x.ai/v1/chat/completions", {
     method: "POST",
     headers: { Authorization: `Bearer ${XAI_KEY}`, "Content-Type": "application/json" },
     body: JSON.stringify({ model: XAI_MODEL, messages }),
   });
-  if (!res.ok) throw new Error(`Grok error ${res.status}: ${await res.text()}`);
   const data = await res.json();
   return data.choices[0].message.content;
 }
@@ -123,6 +120,38 @@ const MAX_TOKENS = 16000;
 // version did.
 const TOOL_CALL_TIMEOUT_MS = 240000;
 
+// RETRY FOR THE MODEL CALLS THEMSELVES. The market-data client has always
+// retried; the AI calls never did — one flaky response killed that analyst
+// for the entire analysis. This is not hypothetical: OpenAI intermittently
+// returned 401 "insufficient permissions" on identical requests with the
+// same key that succeeded minutes before and after (NEXA, VSTS, MAN). 401
+// is normally a permanent auth failure you should NOT retry, but here it is
+// observably transient, so it earns a place next to 408/429/5xx. Permanent
+// failures still fail — just after 3 attempts (~15s) instead of instantly.
+const RETRYABLE_STATUS = new Set([401, 408, 429, 500, 502, 503, 529]);
+const RETRY_DELAYS_MS = [2000, 5000, 10000];
+
+async function fetchAIWithRetry(name, url, options, timeoutMs) {
+  let lastErr;
+  for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+    let retryable = true;
+    try {
+      const res = await fetchWithTimeout(url, options, timeoutMs);
+      if (res.ok) return res;
+      const text = await res.text();
+      retryable = RETRYABLE_STATUS.has(res.status);
+      lastErr = new Error(`${name} error ${res.status}: ${text}`);
+    } catch (err) {
+      lastErr = err; // network error / timeout — retryable
+    }
+    if (!retryable || attempt >= RETRY_DELAYS_MS.length) throw lastErr;
+    const delay = RETRY_DELAYS_MS[attempt];
+    console.warn(`[aiProviders] ${name} transient failure (attempt ${attempt + 1}), retrying in ${delay}ms: ${String(lastErr.message).slice(0, 140)}`);
+    await new Promise((r) => setTimeout(r, delay));
+  }
+  throw lastErr;
+}
+
 export async function callClaudeWithTools(system, userPrompt, tools, executeTool) {
   const claudeTools = tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.parameters }));
   let messages = [{ role: "user", content: userPrompt }];
@@ -131,12 +160,11 @@ export async function callClaudeWithTools(system, userPrompt, tools, executeTool
     const body = { model: ANTHROPIC_MODEL, max_tokens: MAX_TOKENS, system, messages };
     if (claudeTools.length) body.tools = claudeTools; // omit `tools` entirely when empty — an empty array is rejected
 
-    const res = await fetchWithTimeout("https://api.anthropic.com/v1/messages", {
+    const res = await fetchAIWithRetry("Claude", "https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: { "x-api-key": ANTHROPIC_KEY, "anthropic-version": "2023-06-01", "content-type": "application/json" },
       body: JSON.stringify(body),
     }, TOOL_CALL_TIMEOUT_MS);
-    if (!res.ok) throw new Error(`Claude error ${res.status}: ${await res.text()}`);
     const data = await res.json();
 
     const toolUses = data.content.filter((b) => b.type === "tool_use");
@@ -164,12 +192,11 @@ export async function callGPTWithTools(system, userPrompt, tools, executeTool) {
   for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
     const body = { model: OPENAI_MODEL, messages };
     if (openaiTools.length) body.tools = openaiTools;
-    const res = await fetchWithTimeout("https://api.openai.com/v1/chat/completions", {
+    const res = await fetchAIWithRetry("GPT", "https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: { Authorization: `Bearer ${OPENAI_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }, TOOL_CALL_TIMEOUT_MS);
-    if (!res.ok) throw new Error(`GPT error ${res.status}: ${await res.text()}`);
     const data = await res.json();
     const msg = data.choices[0].message;
 
@@ -193,12 +220,11 @@ export async function callGrokWithTools(system, userPrompt, tools, executeTool) 
   for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
     const body = { model: XAI_MODEL, messages };
     if (xaiTools.length) body.tools = xaiTools;
-    const res = await fetchWithTimeout("https://api.x.ai/v1/chat/completions", {
+    const res = await fetchAIWithRetry("Grok", "https://api.x.ai/v1/chat/completions", {
       method: "POST",
       headers: { Authorization: `Bearer ${XAI_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }, TOOL_CALL_TIMEOUT_MS);
-    if (!res.ok) throw new Error(`Grok error ${res.status}: ${await res.text()}`);
     const data = await res.json();
     const msg = data.choices[0].message;
 
