@@ -16,6 +16,7 @@
 // each model separately re-downloads the same numbers.
 
 import { QD_ENDPOINTS, QD_CONTRACT_ENDPOINTS } from "./quantDataRegistry.js";
+import { pool, ensureSchema } from "./db.js";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -142,6 +143,40 @@ function diskPath(key) {
   return path.join(DISK_CACHE_DIR, key.replaceAll("|", "_").replaceAll("/", "-") + ".json");
 }
 
+// TIER 3: THE POSTGRES WAREHOUSE. Same cacheability rule as disk (completed
+// past sessions only), but unlike disk it survives redeploys — Railway wipes
+// the container filesystem on every deploy, which meant every deploy silently
+// re-bought the whole disk cache from the API. The warehouse is what makes
+// cross-ticker basket backtests cheap: each ticker+session+endpoint is
+// purchased from the API exactly once, forever.
+//
+// HARD RULE: the warehouse must never break a fetch. Every DB touch is
+// wrapped; on any error we fall through to the API as if the tier didn't
+// exist. A down database costs money (re-fetching), never correctness.
+async function warehouseGet(key) {
+  try {
+    await ensureSchema();
+    const r = await pool.query("SELECT payload FROM feed_cache WHERE cache_key = $1", [key]);
+    return r.rows[0]?.payload ?? null;
+  } catch (err) {
+    console.warn(`[warehouse] read failed (falling through): ${err.message}`);
+    return null;
+  }
+}
+
+async function warehousePut(key, ep, params, result) {
+  try {
+    await ensureSchema();
+    await pool.query(
+      `INSERT INTO feed_cache (cache_key, ticker, session_date, endpoint, payload)
+       VALUES ($1, $2, $3, $4, $5) ON CONFLICT (cache_key) DO NOTHING`,
+      [key, params.ticker, params.sessionDate || params.endDate || "", ep.id, JSON.stringify(result)],
+    );
+  } catch (err) {
+    console.warn(`[warehouse] write failed (ignored): ${err.message}`);
+  }
+}
+
 export async function fetchEndpointCached(ep, params) {
   // The contract MUST be part of the key: contract-scoped endpoints send
   // strike/expiry/type in the body, and without this two different contracts
@@ -160,6 +195,14 @@ export async function fetchEndpointCached(ep, params) {
       cache.set(key, result);
       return result;
     }
+    // TIER 3: the warehouse. Survives redeploys; populated by every fetch
+    // everywhere, so basket backtests get cheaper the longer the system runs.
+    const stored = await warehouseGet(key);
+    if (stored) {
+      cache.set(key, stored);
+      try { fs.mkdirSync(DISK_CACHE_DIR, { recursive: true }); fs.writeFileSync(diskPath(key), JSON.stringify(stored)); } catch {}
+      return stored;
+    }
   }
 
   const result = await fetchEndpoint(ep, params);
@@ -170,6 +213,7 @@ export async function fetchEndpointCached(ep, params) {
     if (diskOk) {
       fs.mkdirSync(DISK_CACHE_DIR, { recursive: true });
       fs.writeFileSync(diskPath(key), JSON.stringify(result));
+      await warehousePut(key, ep, params, result);
     }
   }
   return result;
