@@ -21,6 +21,7 @@
 // stuck "running" is visible rather than looking like it never started.
 
 import { readTrades, appendTrade } from "./store.js";
+import { runOptionSimForFires } from "./optionSim.js";
 import { backtestRule, priorSessions } from "./backtest.js";
 import { analyzeConfirmers } from "./confirmation.js";
 import { refineRule } from "./refine.js";
@@ -250,6 +251,8 @@ async function runBasketBacktest(id, { ticker, sessionDate, analysis }) {
             avgReturnPct: r.avgReturnPct ?? null,
             profitFactor: r.profitFactor ?? null,
             warnings: r.warnings || [],
+            // Per-fire entries feed the option-P&L simulation downstream.
+            fires: (r.trades || []).slice(-10).map((t) => ({ sessionDate: t.sessionDate, entryClock: t.entryClock, stockPct: t.pctReturn })),
           });
         } catch (err) {
           console.error(`[job:basket] ${m} on ${t} FAILED:`, err.message);
@@ -299,6 +302,46 @@ function aggregateBasket(perTicker) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// OPTION P&L SIMULATION: for every day the rule fired (home ticker + basket),
+// what would the OPTION have made? Two policies per fire: the flow-picked
+// contract (buy what the largest aggressive same-side premium bought) and a
+// real-chain class grid (ATM/OTM x near/far expiry). Capped fires bound the
+// API spend; the warehouse makes re-runs nearly free.
+// ---------------------------------------------------------------------------
+const OPTION_SIM_MAX_FIRES = 20;
+
+async function runOptionSim(id, { ticker, analysis }) {
+  await setJobStatus(id, "optionSim", "running");
+  try {
+    const all = await readTrades();
+    const rec0 = all.find((r) => r.id === id);
+    let ranAny = false;
+    for (const m of MODELS) {
+      if (!analysis[m]?.rule && !rec0?.refinements?.[m]?.best) continue;
+      const fires = [];
+      for (const t of rec0?.backtests?.[m]?.trades || []) {
+        fires.push({ ticker, sessionDate: t.sessionDate, entryClock: t.entryClock, stockPct: t.pctReturn });
+      }
+      for (const pt of rec0?.basket?.[m]?.perTicker || []) {
+        for (const f of pt.fires || []) fires.push({ ticker: pt.ticker, ...f });
+      }
+      if (!fires.length) continue;
+      ranAny = true;
+      console.log(`[job:optionSim] ${m}: simulating ${Math.min(fires.length, OPTION_SIM_MAX_FIRES)} of ${fires.length} fires...`);
+      const result = await runOptionSimForFires({ fires, holdMinutes: 15, maxFires: OPTION_SIM_MAX_FIRES });
+      await patchRecord(id, (rec) => {
+        rec.optionSim = rec.optionSim || {};
+        rec.optionSim[m] = result;
+      });
+    }
+    await setJobStatus(id, "optionSim", ranAny ? "done" : "skipped", ranAny ? null : "No fires anywhere (home or basket) — nothing to simulate.");
+  } catch (err) {
+    console.error(`[job:optionSim] FAILED:`, err.message);
+    await setJobStatus(id, "optionSim", "failed", err.message);
+  }
+}
+
 // Fired after /api/analyze responds. Deliberately NOT awaited by the request —
 // the caller gets its analysis immediately and the findings fill in behind it.
 export function startBackgroundJobs(id, { ticker, sessionDate, analysis }) {
@@ -313,6 +356,7 @@ export function startBackgroundJobs(id, { ticker, sessionDate, analysis }) {
       await setJobStatus(id, "confirmers", "skipped", "No model proposed a rule — nothing to test.");
       await setJobStatus(id, "refinements", "skipped", "No model proposed a rule — nothing to refine.");
       await setJobStatus(id, "basket", "skipped", "No model proposed a rule — nothing to basket-test.");
+      await setJobStatus(id, "optionSim", "skipped", "No model proposed a rule — nothing to simulate.");
     })().catch((err) => console.error(`[jobs] skipped-status writes failed for ${id}:`, err));
     return;
   }
@@ -331,11 +375,13 @@ export function startBackgroundJobs(id, { ticker, sessionDate, analysis }) {
       await setJobStatus(id, "confirmers", "queued");
       await setJobStatus(id, "refinements", "queued");
       await setJobStatus(id, "basket", "queued");
+      await setJobStatus(id, "optionSim", "queued");
       await runBacktests(id, { ticker, sessionDate, analysis });
       await runPatternMiner(id, { ticker, sessionDate, analysis });
       await runConfirmers(id, { ticker, sessionDate, analysis });
       await runRefinement(id, { ticker, sessionDate, analysis });
       await runBasketBacktest(id, { ticker, sessionDate, analysis });
+      await runOptionSim(id, { ticker, analysis });
       console.log(`[jobs] all background work complete for ${id}`);
     } catch (err) {
       console.error(`[jobs] fatal error for ${id}:`, err);

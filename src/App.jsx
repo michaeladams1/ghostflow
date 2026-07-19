@@ -628,6 +628,69 @@ function BasketPanel({ record, modelId, rule }) {
 // Entry timings are never averaged: averaging two models' entries produces a
 // moment neither of them endorsed. Disagreement is preserved and displayed,
 // because a 2-1 split is information, not a problem to be smoothed away.
+// OPTION P&L — what would the CALL have made on every fired day? Two
+// policies side by side: the flow-picked contract (buy what the largest
+// aggressive premium bought — the pattern picks the contract) and the
+// real-chain class grid (ATM/OTM x near/far), which is what turns one number
+// into "this pattern pays in short-dated ATM and dies in far OTM".
+function OptionSimPanel({ record, modelId, rule }) {
+  const result = record.optionSim?.[modelId];
+  const job = record.jobs?.optionSim;
+
+  if (!rule) return null;
+  const fmtAgg = (a) => a?.n ? `${a.n} sims · ${a.winRate}% win · avg ${a.avgPct > 0 ? "+" : ""}${a.avgPct}%` : "no fills";
+
+  return (
+    <div className="mt-5">
+      <div className="flex items-center gap-2 mb-2">
+        <Zap size={14} className={faint} />
+        <span className={heading}>Option P&L — what would the contract have made?</span>
+      </div>
+
+      {!result && job?.status === "skipped" && <JobSkipped detail={job.detail} />}
+      {!result && job?.status !== "skipped" && (
+        <JobPending label="Simulating the option on every fired day: flow-picked contract + ATM/OTM x near/far grid" />
+      )}
+
+      {result && (
+        <>
+          <p className={`text-[11px] mb-2 ${faint}`}>
+            {result.firesSimulated} of {result.firesTotal} fires simulated · {result.holdMinutes}min hold · entry/exit at contract bar closes
+          </p>
+          <div className="px-3 py-2.5 rounded-lg border border-amber-500/30 bg-amber-500/5 mb-2">
+            <div className="text-xs font-medium mb-0.5">Flow-picked (buy what the sweeps bought)</div>
+            <div className={`text-xs font-mono ${sub}`}>{fmtAgg(result.flow)}</div>
+          </div>
+          {Object.keys(result.grid || {}).length > 0 && (
+            <div className="grid grid-cols-2 gap-1.5 mb-2">
+              {Object.entries(result.grid).map(([label, a]) => (
+                <div key={label} className="px-3 py-2 rounded-lg border border-zinc-200 dark:border-zinc-800">
+                  <div className={`text-[11px] font-mono ${faint}`}>{label}</div>
+                  <div className={`text-xs font-mono ${a?.n && a.avgPct > 0 ? "text-emerald-600 dark:text-emerald-400" : a?.n && a.avgPct < 0 ? "text-red-600 dark:text-red-400" : sub}`}>{fmtAgg(a)}</div>
+                </div>
+              ))}
+            </div>
+          )}
+          {result.examples?.length > 0 && (
+            <details>
+              <summary className={`text-[11px] cursor-pointer ${faint}`}>show {result.examples.length} example fires</summary>
+              <div className="mt-1.5 space-y-1.5">
+                {result.examples.map((e, i) => (
+                  <div key={i} className={`text-[11px] font-mono px-2.5 py-1.5 rounded bg-zinc-100 dark:bg-zinc-800 ${sub}`}>
+                    <div>{e.ticker} {e.sessionDate} @{e.entryClock}{e.stockPct != null && ` · stock ${e.stockPct > 0 ? "+" : ""}${e.stockPct}%`}</div>
+                    <div>{e.flow?.failed ? `flow pick: ${e.flow.failed}` : `flow pick ${e.flow.contract}: ${e.flow.pctReturn > 0 ? "+" : ""}${e.flow.pctReturn}%`}</div>
+                    {e.grid?.length > 0 && <div>{e.grid.map((g) => `${g.label} ${g.pctReturn > 0 ? "+" : ""}${g.pctReturn}%`).join(" · ")}</div>}
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function CombinedPanel({ record, onChart }) {
   const c = record.analysis?.combined;
   if (!c) return <p className={`text-sm ${sub}`}>No combined view.</p>;
@@ -796,6 +859,7 @@ function ModelPanel({ record, modelId, cb, onChart }) {
       <ConfirmersPanel record={record} modelId={modelId} rule={a.rule} />
       <RefinePanel record={record} modelId={modelId} rule={a.rule} />
       <BasketPanel record={record} modelId={modelId} rule={a.rule} />
+      <OptionSimPanel record={record} modelId={modelId} rule={a.rule} />
 
       <div className="mt-6 pt-5 border-t border-zinc-200 dark:border-zinc-800">
         <div className="flex items-center gap-2 mb-2">
@@ -1121,6 +1185,7 @@ const BACKGROUND_JOB_ORDER = [
   ["confirmers", "confirming"],
   ["refinements", "refining"],
   ["basket", "basket testing"],
+  ["optionSim", "option P&L"],
 ];
 function stillVerifying(record) {
   if (!record.jobs) return null;

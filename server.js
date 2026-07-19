@@ -619,7 +619,7 @@ app.listen(PORT, () => {
 // mark it stale so the UI stops lying. Same logic for records stuck on
 // status "analyzing" — that analysis loop died with the old process too.
 async function cleanupStaleJobs() {
-  const JOB_KEYS = ["analysis", "backtests", "patternMiner", "confirmers", "refinements", "basket"];
+  const JOB_KEYS = ["analysis", "backtests", "patternMiner", "confirmers", "refinements", "basket", "optionSim"];
   try {
     const all = await readTrades();
     for (const rec of all) {
