@@ -12,7 +12,7 @@ import {
   frontierDedupeKey, frontierLanePriority,
 } from "./zeroDTE.js";
 import {
-  passesFrontierV3, selectFrontierBestPerDay,
+  frontierPaperPnl, passesFrontierV3, selectFrontierBestPerDay,
 } from "./frontierV3.js";
 
 const num = (v) => (v == null || Number.isNaN(Number(v)) ? null : Number(v));
@@ -124,7 +124,7 @@ export async function loadSavedCalendarDays({ symbol = "SPY", year, month }) {
   // Frontier is derived at read time across every lane so the existing
   // 24-month history lights up without a full resim.
   const { rows } = await pool.query(
-    `SELECT session_date, lane, pb_window, entry_price, pnl, counted,
+    `SELECT session_date, lane, pb_window, entry_price, exit_price, pnl, counted,
             direction, level_type, tier, points, et_minute, touch_number, level
      FROM zerodte_trades
      WHERE symbol = $1 AND code_version = $2
@@ -132,7 +132,7 @@ export async function loadSavedCalendarDays({ symbol = "SPY", year, month }) {
      ORDER BY session_date, et_minute`,
     [symbol, version.code_version, from, to]);
 
-  // Frontier v4 is PA-only (no QuantData veto) — skip flow fetches on calendar read.
+  // Frontier v5 recomputes P&L from entry/exit at paper size — no re-sim, no QD.
   return {
     codeVersion: version.code_version,
     sessionsCovered: version.sessions,
@@ -175,16 +175,19 @@ export function calendarDaysFromRows(rows, { flowByDate = null } = {}) {
     const flowImbalance = flowByDate?.get?.(row.session_date) ?? null;
     const etMinute = row.et_minute != null ? Number(row.et_minute) : null;
     const points = row.points != null ? Number(row.points) : null;
+    const entryPrice = row.entry_price != null ? Number(row.entry_price) : null;
     if (passesFrontierV3({
       direction: row.direction,
       levelType: row.level_type,
       tier: row.tier,
       points,
       etMinute,
-      entryPrice: row.entry_price != null ? Number(row.entry_price) : null,
+      entryPrice,
       touchNumber: row.touch_number != null ? Number(row.touch_number) : null,
       flowImbalance,
     })) {
+      const frontierPnl = frontierPaperPnl(entryPrice, row.exit_price);
+      if (frontierPnl == null) continue;
       const key = frontierDedupeKey({
         sessionDate: row.session_date,
         etMinute,
@@ -196,7 +199,7 @@ export function calendarDaysFromRows(rows, { flowByDate = null } = {}) {
       const prev = day._frontierKeys.get(key);
       if (!prev || rank < prev.rank) {
         day._frontierKeys.set(key, {
-          pnl, rank, points, etMinute, sessionDate: row.session_date,
+          pnl: frontierPnl, rank, points, etMinute, sessionDate: row.session_date,
         });
       }
     }
