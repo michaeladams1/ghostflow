@@ -25,6 +25,16 @@ Dependencies (`npm install`) are refreshed automatically by the startup update s
 - `.env` is gitignored. Copy from `.env.example`; note `ALPACA_API_KEY` and `ALPACA_SECRET_KEY` are required by the 0DTE feature but are **missing** from `.env.example`.
 - Full end-to-end flows need external secrets: Analyses → `QUANTDATA_API_KEY` + `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`/`XAI_API_KEY`; 0DTE → `ALPACA_API_KEY`/`ALPACA_SECRET_KEY`; Strategy Lab → `DATABENTO_API_KEY` + `ANTHROPIC_API_KEY`. Without them, the server, UI, and DB layer all run, but vendor-backed actions return auth/coverage errors.
 
+### Railway logs (persistent, no login)
+- Cloud agents already have a project-scoped `RAILWAY_TOKEN` secret injected. That is enough for deploy/runtime log reads — do **not** run `railway login` or ask the user to re-auth.
+- `railway whoami` / `railway project list` fail with project tokens by design; that is not a missing-auth signal. Use `railway status --json` or log commands instead.
+- If the CLI is missing: `bash <(curl -fsSL https://railway.com/install.sh)` then `source "$HOME/.railway/env"`.
+- Production app service is `ghostflow` (project `spectacular-prosperity`, env `production`, URL `https://ghostflow-production-27e9.up.railway.app`). Always pass `--service`:
+  - `railway logs --service ghostflow --lines 200 --json`
+  - `railway logs --service ghostflow --build --lines 200 --json`
+  - `railway logs --service ghostflow --since 1h --lines 400 --json`
+  - `railway logs --service ghostflow --lines 200 --filter "@level:error" --json`
+
 ### Tests / build (must pass before push)
 - `npm test` — standalone 0DTE regression tests (deterministic scoring/backtest/calendar logic); no DB or vendor keys required.
 - `npm run build` — frontend production build.
