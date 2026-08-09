@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { calendarDaysFromRows } from "./zeroDTEStore.js";
+import { summarizeMonth } from "./zeroDTECalendar.js";
 
 const day = calendarDaysFromRows([
   { session_date: "2026-08-03", lane: "official", counted: true, pb_window: "in", entry_price: 1, pnl: "100" },
@@ -17,5 +18,13 @@ assert.equal(day.pnl, 100);
 assert.equal(day.excludedPnl, -25);
 assert.equal(day.experimentalPnl, 50);
 assert.equal(day.shenPnl, 75);
+
+const totals = summarizeMonth({ symbol: "SPY", year: 2026, month: 8, days: [day] }).totals;
+assert.equal(totals.totalTrades, 1);
+assert.equal(totals.winRate, 100);
+assert.equal(totals.excludedTrades, 1);
+assert.equal(totals.excludedWinRate, 0);
+assert.equal(totals.experimentalWinRate, 100);
+assert.equal(totals.shenWinRate, 100);
 
 console.log("0DTE saved calendar tests passed");

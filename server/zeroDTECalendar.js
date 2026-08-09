@@ -101,6 +101,9 @@ export function summarizeMonth({ symbol = "SPY", year, month, days, saved = fals
   const wins = allTradePnls.filter((p) => p > 0).length;
   const pnl = +days.reduce((s, x) => s + (x.pnl || 0), 0).toFixed(2);
   const excludedPnl = +days.reduce((s, x) => s + (x.excludedPnl || 0), 0).toFixed(2);
+  const excludedTradePnls = days.flatMap((x) => x.excludedTradePnls || []);
+  const excludedTrades = excludedTradePnls.length;
+  const excludedWins = excludedTradePnls.filter((p) => p > 0).length;
   const dayPnls = traded.map((x) => x.pnl);
   const experimentalTradePnls = days.flatMap((x) => x.experimentalTradePnls || []);
   const experimentalTrades = experimentalTradePnls.length;
@@ -116,7 +119,10 @@ export function summarizeMonth({ symbol = "SPY", year, month, days, saved = fals
     totals: {
       pnl, excludedPnl, totalTrades, wins, losses: totalTrades - wins,
       winRate: totalTrades ? +((wins / totalTrades) * 100).toFixed(1) : null,
-      excludedTrades: days.reduce((s, x) => s + (x.excludedTrades || 0), 0),
+      excludedTrades,
+      excludedWins,
+      excludedLosses: excludedTrades - excludedWins,
+      excludedWinRate: excludedTrades ? +((excludedWins / excludedTrades) * 100).toFixed(1) : null,
       bestDay: dayPnls.length ? Math.max(...dayPnls) : null,
       worstDay: dayPnls.length ? Math.min(...dayPnls) : null,
       bestTrade: allTradePnls.length ? Math.max(...allTradePnls) : null,
