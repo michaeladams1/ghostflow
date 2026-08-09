@@ -8,6 +8,7 @@
 // A 3-trade bucket at 100% win rate means nothing; the UI must say so.
 
 import { loadTrades } from "./zeroDTEStore.js";
+import { pool, ensureSchema } from "./db.js";
 
 const MIN_SAMPLE = 20; // below this, a bucket is a curiosity, not evidence
 
@@ -47,8 +48,8 @@ function groupBy(rows, keyFn) {
   );
 }
 
-export async function analyzePerformance({ symbol = "SPY", from, to, lane = "official", countedOnly = true } = {}) {
-  const rows = (await loadTrades({ symbol, from, to, lane, countedOnly }))
+export async function analyzePerformance({ symbol = "SPY", from, to, lane = "official", countedOnly = true, codeVersion } = {}) {
+  const rows = (await loadTrades({ symbol, from, to, lane, countedOnly, codeVersion }))
     .filter((r) => r.entry_price != null); // only trades that actually simulated
 
   const timeBucket = (m) => {
@@ -58,7 +59,7 @@ export async function analyzePerformance({ symbol = "SPY", from, to, lane = "off
   };
 
   return {
-    symbol, lane, from, to, minSample: MIN_SAMPLE,
+    symbol, lane, from, to, codeVersion: codeVersion || "all", minSample: MIN_SAMPLE,
     overall: summarize(rows),
     byTier: groupBy(rows, (r) => r.tier),
     byDirection: groupBy(rows, (r) => r.direction),
@@ -80,6 +81,56 @@ export async function analyzePerformance({ symbol = "SPY", from, to, lane = "off
       const p = Number(r.entry_price);
       if (!Number.isFinite(p)) return null;
       return p < 0.3 ? "under $0.30" : p < 0.6 ? "$0.30-0.60" : p < 1.0 ? "$0.60-1.00" : p < 2.0 ? "$1.00-2.00" : "over $2.00";
+    }),
+  };
+}
+
+// VERSION COMPARISON — the same question the calendar can't answer: did that
+// change help? Groups every persisted trade by the code version that produced
+// it, alongside the deployment and commit message.
+//
+// READ THIS CAREFULLY: versions are NOT directly comparable unless they cover
+// the SAME sessions. A version run over 5 days and one run over 100 will
+// differ for that reason alone, so `sessions` and `overlapWithLatest` are
+// reported and a comparison lacking overlap is flagged.
+export async function compareVersions({ symbol = "SPY", lane = "official", countedOnly = true } = {}) {
+  await ensureSchema();
+  const { rows } = await pool.query(
+    `SELECT code_version, commit_sha, deployment_id, branch, environment,
+            MIN(created_at) AS first_run, MAX(created_at) AS last_run,
+            COUNT(*) FILTER (WHERE entry_price IS NOT NULL) AS trades,
+            COUNT(DISTINCT session_date) AS sessions,
+            SUM(COALESCE(pnl,0)) AS total_pnl,
+            COUNT(*) FILTER (WHERE pnl > 0) AS wins,
+            COUNT(*) FILTER (WHERE pnl < 0) AS losses,
+            ARRAY_AGG(DISTINCT session_date) AS session_dates
+       FROM zerodte_trades
+      WHERE symbol = $1 AND lane = $2 ${countedOnly ? "AND counted = true" : ""}
+      GROUP BY code_version, commit_sha, deployment_id, branch, environment
+      ORDER BY MAX(created_at) DESC`,
+    [symbol, lane]);
+
+  const latest = rows[0];
+  const latestDates = new Set(latest?.session_dates || []);
+  return {
+    symbol, lane, minSample: MIN_SAMPLE,
+    versions: rows.map((r) => {
+      const trades = Number(r.trades), wins = Number(r.wins);
+      const overlap = (r.session_dates || []).filter((d) => latestDates.has(d)).length;
+      return {
+        codeVersion: r.code_version,
+        commit: r.commit_sha ? r.commit_sha.slice(0, 7) : null,
+        deploymentId: r.deployment_id, branch: r.branch, environment: r.environment,
+        firstRun: r.first_run, lastRun: r.last_run,
+        sessions: Number(r.sessions), trades,
+        wins, losses: Number(r.losses),
+        winRate: trades ? +((wins / trades) * 100).toFixed(1) : null,
+        totalPnl: +Number(r.total_pnl).toFixed(2),
+        avgPnl: trades ? +(Number(r.total_pnl) / trades).toFixed(2) : null,
+        overlapWithLatest: overlap,
+        comparable: overlap >= Number(r.sessions) * 0.8,
+        reliable: trades >= MIN_SAMPLE,
+      };
     }),
   };
 }

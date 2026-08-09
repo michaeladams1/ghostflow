@@ -27,7 +27,8 @@ import { analyzeZeroDTESession } from "./server/zeroDTE.js";
 import { simulateAllFires } from "./server/zeroDTEOptionSim.js";
 import { buildSessionStory } from "./server/zeroDTEStory.js";
 import { simulateMonth } from "./server/zeroDTECalendar.js";
-import { analyzePerformance } from "./server/zeroDTEAnalysis.js";
+import { analyzePerformance, compareVersions } from "./server/zeroDTEAnalysis.js";
+import { buildInfo } from "./server/buildInfo.js";
 import { coveredSessions } from "./server/zeroDTEStore.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -671,17 +672,33 @@ app.post("/api/0dte/month", async (req, res) => {
 // so it's instant once months have been run.
 app.get("/api/0dte/performance", async (req, res) => {
   try {
-    const { from, to, lane = "official", symbol = "SPY" } = req.query;
+    const { from, to, lane = "official", symbol = "SPY", codeVersion } = req.query;
     const countedOnly = req.query.countedOnly !== "false";
     res.json({
-      ...(await analyzePerformance({ symbol, from, to, lane, countedOnly })),
+      ...(await analyzePerformance({ symbol, from, to, lane, countedOnly, codeVersion })),
       sessionsCovered: (await coveredSessions({ symbol })).length,
+      build: buildInfo(),
     });
   } catch (err) {
     console.error("[0dte:performance] FAILED:", err);
     res.status(500).json({ error: err.message || String(err) });
   }
 });
+
+// VERSION COMPARISON: which deployment/commit produced which results.
+app.get("/api/0dte/versions", async (req, res) => {
+  try {
+    const { lane = "official", symbol = "SPY" } = req.query;
+    const countedOnly = req.query.countedOnly !== "false";
+    res.json({ ...(await compareVersions({ symbol, lane, countedOnly })), current: buildInfo() });
+  } catch (err) {
+    console.error("[0dte:versions] FAILED:", err);
+    res.status(500).json({ error: err.message || String(err) });
+  }
+});
+
+// Which build is serving this request — visible in the UI footer.
+app.get("/api/build", (_req, res) => res.json(buildInfo()));
 
 // NOTE: every API route must be registered ABOVE the express.static +
 // app.get("*") catch-all below. A route declared after the catch-all is

@@ -99,10 +99,20 @@ export function ensureSchema() {
         pnl NUMERIC,
         counted BOOLEAN,          -- did it count toward playbook-hours P&L
         features JSONB NOT NULL,  -- everything else, for later analysis
+        -- PROVENANCE: which deployment and which code produced this row.
+        -- code_version is part of the row id, so re-running a day on NEW code
+        -- writes a parallel set instead of overwriting — that is what makes
+        -- version-vs-version comparison possible.
+        deployment_id TEXT,
+        commit_sha TEXT,
+        code_version TEXT,
+        branch TEXT,
+        environment TEXT,
         created_at TIMESTAMPTZ NOT NULL DEFAULT now()
       );
       CREATE INDEX IF NOT EXISTS zerodte_by_session ON zerodte_trades (symbol, session_date);
       CREATE INDEX IF NOT EXISTS zerodte_by_lane ON zerodte_trades (lane, counted);
+      CREATE INDEX IF NOT EXISTS zerodte_by_version ON zerodte_trades (code_version, counted);
     `).catch((err) => {
       schemaReady = null; // allow retry on next call if this failed
       throw err;
