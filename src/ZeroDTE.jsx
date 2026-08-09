@@ -625,15 +625,28 @@ function CalendarView({ onBack }) {
     setYm({ year, month });
   };
 
-  // Grid scaffolding: leading ghosts from the previous month, then real days.
-  const firstDow = new Date(Date.UTC(ym.year, ym.month - 1, 1)).getUTCDay();
+  // Trading calendar scaffolding: Monday-Friday only. Weekend dates are omitted,
+  // while weekday ghosts keep each session under its real weekday heading.
   const daysInMonth = new Date(Date.UTC(ym.year, ym.month, 0)).getUTCDate();
-  const prevMonthDays = new Date(Date.UTC(ym.year, ym.month - 1, 0)).getUTCDate();
   const byDate = Object.fromEntries((data?.days || []).map((d) => [Number(d.date.slice(8, 10)), laneDay(d, calendarLane)]));
   const cells = [];
-  for (let i = firstDow - 1; i >= 0; i--) cells.push({ ghost: true, dayNum: prevMonthDays - i });
-  for (let d = 1; d <= daysInMonth; d++) cells.push({ dayNum: d, data: byDate[d] });
-  while (cells.length % 7 !== 0) cells.push({ ghost: true, dayNum: cells.length - (firstDow + daysInMonth) + 1 });
+  const firstDate = new Date(Date.UTC(ym.year, ym.month - 1, 1));
+  const lastDate = new Date(Date.UTC(ym.year, ym.month - 1, daysInMonth));
+  const gridStart = new Date(firstDate);
+  const firstDow = firstDate.getUTCDay();
+  const daysToFirstMonday = firstDow === 0 ? 1 : firstDow === 6 ? 2 : -(firstDow - 1);
+  gridStart.setUTCDate(firstDate.getUTCDate() + daysToFirstMonday);
+  const gridEnd = new Date(lastDate);
+  const lastDow = lastDate.getUTCDay();
+  const daysToLastFriday = lastDow === 0 ? -2 : lastDow === 6 ? -1 : 5 - lastDow;
+  gridEnd.setUTCDate(lastDate.getUTCDate() + daysToLastFriday);
+  for (const date = new Date(gridStart); date <= gridEnd; date.setUTCDate(date.getUTCDate() + 1)) {
+    const dow = date.getUTCDay();
+    if (dow === 0 || dow === 6) continue;
+    const isCurrentMonth = date.getUTCFullYear() === ym.year && date.getUTCMonth() === ym.month - 1;
+    const dayNum = date.getUTCDate();
+    cells.push({ ghost: !isCurrentMonth, dayNum, data: isCurrentMonth ? byDate[dayNum] : undefined });
+  }
 
   const t = data ? laneTotals(data.days, calendarLane) : null;
   const allTotals = data?.totals;
@@ -748,12 +761,12 @@ function CalendarView({ onBack }) {
       {!loading && data && (
         <div className="grid lg:grid-cols-[1fr_300px] gap-5">
           <div>
-            <div className="grid grid-cols-7 gap-1 mb-1">
-              {["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"].map((d) => (
+            <div className="grid grid-cols-5 gap-1 mb-1">
+              {["MON", "TUE", "WED", "THU", "FRI"].map((d) => (
                 <div key={d} className={`text-center text-xs font-semibold py-2 rounded bg-zinc-100 dark:bg-zinc-800/60 ${faint}`}>{d}</div>
               ))}
             </div>
-            <div className="grid grid-cols-7 gap-1">
+            <div className="grid grid-cols-5 gap-1">
               {cells.map((c, i) => <DayBox key={i} dayNum={c.dayNum} data={c.data} ghost={c.ghost} lane={calendarLane} />)}
             </div>
             <p className={`text-[11px] mt-3 ${faint}`}>

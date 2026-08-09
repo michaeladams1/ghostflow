@@ -137,7 +137,9 @@ of lane color; the active summary card gets a visible focus ring. Day summaries 
 per-trade P&L arrays for all four lanes so win rate and best/worst trade are not inferred
 from aggregate daily P&L. Every card shows its own trade count and win percentage;
 outside-hours win rate is computed from its individual simulated trades and remains
-explicitly excluded from official P&L.
+explicitly excluded from official P&L. The calendar is a five-column Monday-Friday view;
+Saturday and Sunday headers and cells are intentionally omitted so trading sessions have
+more horizontal room while weekday ghost cells preserve correct date alignment.
 
 **Opening the calendar is read-only.** `GET /api/0dte/calendar` reconstructs month/day
 summaries from `zerodte_trades`; it never calls Alpaca or runs the simulator. It selects
