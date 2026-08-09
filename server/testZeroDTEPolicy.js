@@ -49,7 +49,9 @@ assert.equal(isFrontierFire({ ...frontierBase, tier: "A+" }), false);
 assert.equal(isFrontierFire({ ...frontierBase, tier: "Extended A+" }), false);
 assert.equal(isFrontierFire({ ...frontierBase, etMinute: 584 }), false);
 assert.equal(isFrontierFire({ ...frontierBase, etMinute: 585 }), true);
-assert.equal(isFrontierFire({ ...frontierBase, entryPrice: 0.49 }), false);
+assert.equal(isFrontierFire({ ...frontierBase, entryPrice: 0.49 }), true); // v4.1: no $0.50 floor
+assert.equal(isFrontierFire({ ...frontierBase, entryPrice: 0 }), false);
+assert.equal(isFrontierFire({ ...frontierBase, entryPrice: -1 }), false);
 assert.equal(isFrontierFire({ ...frontierBase, tier: "Shen FULL 3/3" }), true);
 assert.equal(isFrontierFire({ ...frontierBase, tier: "Research 13-14" }), true);
 

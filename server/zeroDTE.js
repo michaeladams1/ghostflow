@@ -69,7 +69,7 @@ export function classifyShenConviction({ minutes, levelType, touchNumber, exhaus
 }
 
 // FRONTIER MODEL — paper-only selection across ALL segments. Live rules are
-// Frontier v4 (wide net from 9:45 + highest-points trade/day).
+// Frontier v4.1 (wide net from 9:45, any premium, highest-points trade/day).
 // See frontierV3.js. Evidence: server/frontierCoverageSearch.js.
 export const FRONTIER_MIN_MINUTE = FRONTIER_V3_MIN_MINUTE;
 export const FRONTIER_MIN_POINTS = FRONTIER_V3_MIN_POINTS;
