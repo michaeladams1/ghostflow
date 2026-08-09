@@ -105,6 +105,7 @@ server/
                        against real option OHLC
   zeroDTEStory.js      Deterministic plain-English session narrative (no AI, no invention)
   zeroDTECalendar.js   Month simulation + in-memory day cache + DB persistence
+  zeroDTEBacktestJobs.js Durable 24-month queue, DB checkpoints, lease + restart recovery
   zeroDTEStore.js      Postgres read/write for simulated trades
   zeroDTEAnalysis.js   Feature slicing + version comparison
   buildInfo.js         Deployment/commit provenance
@@ -112,22 +113,29 @@ server/
 src/
   ZeroDTE.jsx          The tab: daily debrief, trade cards, charts, historical calendar
 
-API: POST /api/0dte/analyze · POST /api/0dte/month · GET /api/0dte/performance
+API: POST /api/0dte/analyze · POST /api/0dte/month
+     POST /api/0dte/backtest-jobs · GET /api/0dte/backtest-jobs/latest
+     GET /api/0dte/backtest-jobs/:id · GET /api/0dte/performance
      GET /api/0dte/versions · GET /api/build
 ```
 
-The calendar includes a **Backtest last 24 months** button. It intentionally calls the
-existing month endpoint sequentially, oldest month first, instead of holding one giant
-HTTP request open. Each day is persisted as its month completes, and the store's
-same-version replace semantics make the button safe to rerun after a browser sleep,
-connection failure, or partial run. The page must remain open while the batch is active.
+The calendar includes a **Backtest last 24 months** button. It persists a job in Postgres
+and returns immediately; Railway processes months sequentially, oldest first, while the
+browser only polls saved progress. The page may close without stopping work. Each month
+is a durable checkpoint. A 30-minute database lease prevents overlapping deployments
+from duplicating work, and a one-minute stateless recovery sweep resumes expired jobs
+after a crash or same-commit restart. A new commit cannot honestly finish an old job
+because trade provenance would change mid-run, so startup explicitly fails superseded
+jobs and the new version gets its own run. Retrying a failed same-version job keeps its
+completed-month checkpoint. Trade writes remain idempotent per day and code version.
 
 ---
 
 ## 4b. Database — what gets logged and how to query it
 
 PostgreSQL on Railway (`DATABASE_URL`). Schema lives in `server/db.js` → `ensureSchema()`,
-called lazily on first use. Four tables; only `zerodte_trades` belongs to this feature —
+called lazily on first use. Five tables; `zerodte_trades` and
+`zerodte_backtest_jobs` belong to this feature —
 `trades`, `feed_cache`, and `theses` belong to GHOSTFLOW's separate 3-analyst system,
 **don't touch them**.
 
@@ -192,6 +200,13 @@ created_at    TIMESTAMPTZ
 ```
 
 Indexes: `(symbol, session_date)`, `(lane, counted)`, `(code_version, counted)`.
+
+### `zerodte_backtest_jobs` — durable 24-month runner
+
+One row per code-version/date-window backfill. It stores `status`, total/completed months,
+the current year/month, errors, code version, timestamps, and a worker lease. The browser
+never owns execution. A completed job is reused, a failed job resumes at its saved
+`completed_months`, and a new code version gets a separate job and trade rows.
 
 ### Write semantics — important
 
@@ -407,8 +422,11 @@ parameters until backtest numbers look good, then losing real money.
   distinguished only by `environment` / `code_version`. (An earlier note here claimed
   Railway needed a separate schema migration; that was wrong — verified by seeing both a
   `local-*` and a real Railway deployment UUID in the same table.)
-- The calendar's day cache is **in-memory** — restart the server after any logic change or
-  you'll read stale results.
+- The calendar's day cache is **in-memory**, but the 24-month job checkpoint is durable.
+  Restarting the same commit during a backfill resumes at the next unfinished month after
+  its lease expires. Deploying a new commit retires the old-version job instead; start a
+  new run so one result set never mixes code versions. Restart after any logic change so
+  single-month calendar reads aren't stale.
 - Local dev needs `node --env-file=.env server.js`; syntax-check with `node --check`;
   capture Vite errors with `npm run build 2>&1 | tail -3`.
 - Repo: `https://github.com/michaeladams1/ghostflow.git` ·
