@@ -63,19 +63,31 @@ export async function simulateBracketTrade({ ticker = "SPY", sessionDate, fire }
   const slPrice = +(entryPrice * SL_MULT).toFixed(4);
 
   const after = cb.bars.filter((b) => b.min > entryBar.min);
-  let exit = null, exitReason = "Held to end of day (neither TP nor SL hit)";
+  let exit = null, exitReason = "Held to end of day (neither TP nor SL hit)", exitPrice = null;
   for (const b of after) {
-    if (b.close >= tpPrice) { exit = b; exitReason = "TP hit (+20%)"; break; }
-    if (b.close <= slPrice) { exit = b; exitReason = "SL hit (-12.5%)"; break; }
+    // FILL MODELING. Previously this recorded the BAR CLOSE as the exit,
+    // which produced impossible results like -17.3% on a -12.5% stop: the
+    // bracket would have already triggered mid-bar. A real OCO fills at the
+    // bracket price, not wherever the minute happened to end.
+    //   TP = limit order -> fills AT the limit price, exactly.
+    //   SL = stop order -> becomes a market order, so it can slip. Modeled
+    //        as the WORSE of the stop price and the bar close, which is
+    //        conservative rather than flattering.
+    if (b.close >= tpPrice) { exit = b; exitPrice = tpPrice; exitReason = "TP hit (+20%)"; break; }
+    if (b.close <= slPrice) { exit = b; exitPrice = Math.min(slPrice, b.close); exitReason = "SL hit (-12.5%)"; break; }
   }
-  if (!exit) exit = after[after.length - 1] || entryBar;
+  if (!exit) { exit = after[after.length - 1] || entryBar; exitPrice = exit.close; }
 
-  const pctReturn = +(((exit.close - entryPrice) / entryPrice) * 100).toFixed(1);
+  const pctReturn = +(((exitPrice - entryPrice) / entryPrice) * 100).toFixed(1);
   return {
     ok: true, contract: describeContract(contract), strike, contractType: fire.direction,
     entryClock: minToClock(entryBar.min), entryPrice,
-    exitClock: minToClock(exit.min), exitPrice: exit.close,
+    exitClock: minToClock(exit.min), exitPrice: +exitPrice.toFixed(4),
     tpPrice, slPrice, exitReason, pctReturn, holdMinutes: exit.min - entryBar.min,
+    // Full contract price series so the UI can chart the option itself with
+    // entry/exit markers — not just the underlying.
+    series: cb.bars.map((b) => ({ clock: minToClock(b.min), min: b.min, price: b.close })),
+    entryMin: entryBar.min, exitMin: exit.min,
   };
 }
 
