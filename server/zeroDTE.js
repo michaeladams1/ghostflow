@@ -69,8 +69,8 @@ export function classifyShenConviction({ minutes, levelType, touchNumber, exhaus
 }
 
 // FRONTIER MODEL — paper-only selection across ALL segments. Live rules are
-// Frontier v3 (soft score 11–15 + QuantData early-flow veto). See frontierV3.js.
-// Search/promotion evidence: server/frontierV3Search.js.
+// Frontier v3.1 (soft score 11–15, first touch, QuantData flow veto 0.25).
+// See frontierV3.js. Evidence: server/frontierV3PlusSearch.js.
 export const FRONTIER_MIN_MINUTE = FRONTIER_V3_MIN_MINUTE;
 export const FRONTIER_MIN_POINTS = FRONTIER_V3_MIN_POINTS;
 export const FRONTIER_MAX_POINTS = FRONTIER_V3_MAX_POINTS;

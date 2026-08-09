@@ -1,12 +1,12 @@
-// FRONTIER v3 — live paper lane that beat Frontier v2 on 2026 holdout.
+// FRONTIER v3.1 — live paper lane (beats Frontier v3 / v2 on 2026 holdout).
 //
-// Price-action core (soft score 11–15, from 10:00, toxins, premium ≥ $0.50)
-// plus QuantData early net-flow veto: skip when the first ~30 flow buckets
-// oppose the trade direction by more than 0.15. Missing QD data does NOT veto
-// (keeps coverage on older sessions without QuantData history).
+// Price-action core: soft score 11–15, first touch only, from 10:00, toxins,
+// premium ≥ $0.50.
+// QuantData veto: skip when first ~30 flow buckets oppose the trade direction
+// by more than 0.25. Missing QD data does NOT veto.
 //
-// Search artifact: server/frontierV3Search.js → data/frontier-v3/search-latest.json
-// Champion id: v3_soft_score_11_15_from10__veto_flow_oppose_first30
+// Evidence: server/frontierV3PlusSearch.js → data/frontier-v3/plus-search-latest.json
+// Champion id: v3_soft_11_15_touch1__flow_oppose_025
 
 import { QD_ENDPOINTS } from "./quantDataRegistry.js";
 import { fetchEndpointCached } from "./quantDataClient.js";
@@ -15,11 +15,13 @@ export const FRONTIER_V3_MIN_MINUTE = 600;
 export const FRONTIER_V3_MIN_POINTS = 11;
 export const FRONTIER_V3_MAX_POINTS = 15;
 export const FRONTIER_V3_MIN_ENTRY = 0.5;
-export const FRONTIER_V3_FLOW_VETO = 0.15;
+export const FRONTIER_V3_FLOW_VETO = 0.25;
 export const FRONTIER_V3_FLOW_BUCKETS = 30;
+export const FRONTIER_V3_REQUIRE_FIRST_TOUCH = true;
+export const FRONTIER_V3_VERSION = "v3_soft_11_15_touch1__flow_oppose_025";
 
 export function isFrontierV3Fire({
-  direction, levelType, tier, points, etMinute, entryPrice,
+  direction, levelType, tier, points, etMinute, entryPrice, touchNumber,
 } = {}) {
   if (direction === "CALL" && levelType === "PDL") return false;
   if (tier === "A+" || tier === "Extended A+") return false;
@@ -29,6 +31,10 @@ export function isFrontierV3Fire({
   if (!Number.isFinite(minute) || minute < FRONTIER_V3_MIN_MINUTE) return false;
   const entry = Number(entryPrice);
   if (!Number.isFinite(entry) || entry < FRONTIER_V3_MIN_ENTRY) return false;
+  if (FRONTIER_V3_REQUIRE_FIRST_TOUCH) {
+    const touch = Number(touchNumber);
+    if (!Number.isFinite(touch) || touch !== 1) return false;
+  }
   return true;
 }
 
@@ -95,9 +101,11 @@ export async function loadFrontierV3FlowByDate(sessionDates) {
 }
 
 export function passesFrontierV3({
-  direction, levelType, tier, points, etMinute, entryPrice, flowImbalance,
+  direction, levelType, tier, points, etMinute, entryPrice, touchNumber, flowImbalance,
 } = {}) {
-  if (!isFrontierV3Fire({ direction, levelType, tier, points, etMinute, entryPrice })) return false;
+  if (!isFrontierV3Fire({
+    direction, levelType, tier, points, etMinute, entryPrice, touchNumber,
+  })) return false;
   if (frontierV3FlowVeto(direction, flowImbalance)) return false;
   return true;
 }

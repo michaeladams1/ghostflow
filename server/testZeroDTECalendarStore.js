@@ -59,7 +59,7 @@ assert.equal(totals.frontierTrades, 2);
 assert.equal(totals.frontierWinRate, 100);
 assert.equal(totals.frontierPnl, 150);
 
-// Frontier v3 QuantData early-flow veto: opposing PUT day flow drops the PUT fires.
+// Frontier v3.1 QuantData early-flow veto (threshold 0.25): opposing PUT day flow drops PUT fires.
 const vetoed = calendarDaysFromRows([
   {
     session_date: "2026-08-04", lane: "official", counted: true, pb_window: "in",
@@ -71,8 +71,19 @@ const vetoed = calendarDaysFromRows([
     entry_price: 1, pnl: "50", direction: "CALL", level_type: "WHOLE_DOLLAR",
     tier: "Research 13-14", points: 13, et_minute: 640, touch_number: 1,
   },
-], { flowByDate: new Map([["2026-08-04", 0.25]]) })[0];
+], { flowByDate: new Map([["2026-08-04", 0.30]]) })[0];
 assert.deepEqual(vetoed.frontierTradePnls, [50]);
 assert.equal(vetoed.frontierPnl, 50);
+
+// Second touch is excluded even when score/time/premium pass.
+const secondTouch = calendarDaysFromRows([
+  {
+    session_date: "2026-08-05", lane: "official", counted: true, pb_window: "in",
+    entry_price: 1.05, pnl: "100", direction: "PUT", level_type: "WHOLE_DOLLAR",
+    tier: "A", points: 13, et_minute: 610, touch_number: 2,
+  },
+])[0];
+assert.deepEqual(secondTouch.frontierTradePnls, []);
+assert.equal(secondTouch.frontierPnl, 0);
 
 console.log("0DTE saved calendar tests passed");

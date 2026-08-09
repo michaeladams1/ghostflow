@@ -60,6 +60,7 @@ async function simulateDay(symbol, date) {
           points: f.points,
           etMinute,
           entryPrice: f.trade?.entryPrice,
+          touchNumber: f.touchNumber,
         })) return;
         const key = frontierDedupeKey({
           sessionDate: date,
