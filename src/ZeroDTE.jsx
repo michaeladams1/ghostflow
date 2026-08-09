@@ -40,6 +40,7 @@ function StatCard({ label, value, sub, tone }) {
 }
 
 const money = (n) => `${n < 0 ? "-" : ""}$${Math.abs(n).toFixed(2)}`;
+const tradeSummary = (count, winRate) => `${count || 0} trade${count === 1 ? "" : "s"} · ${winRate != null ? `${winRate}% wins` : "no sample yet"}`;
 function lastWeekdayISO() {
   const d = new Date();
   while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() - 1);
@@ -675,6 +676,7 @@ function CalendarView({ onBack }) {
           <div>
             <div className="text-[11px] uppercase tracking-wider font-semibold text-emerald-100">Monthly net total · playbook hours</div>
             <div className="text-3xl font-bold">{allTotals ? (allTotals.pnl >= 0 ? "+" : "") + money(allTotals.pnl) : "—"}</div>
+            <div className="text-xs text-emerald-100">{tradeSummary(allTotals?.totalTrades, allTotals?.winRate)}</div>
           </div>
         </button>
         <button type="button" onClick={() => setCalendarLane("outside")} aria-pressed={calendarLane === "outside"}
@@ -683,6 +685,7 @@ function CalendarView({ onBack }) {
           <div>
             <div className="text-[11px] uppercase tracking-wider font-semibold text-amber-100">Outside-hours signals · not counted</div>
             <div className="text-3xl font-bold">{allTotals ? (allTotals.excludedPnl >= 0 ? "+" : "") + money(allTotals.excludedPnl) : "—"}</div>
+            <div className="text-xs text-amber-100">{tradeSummary(allTotals?.excludedTrades, allTotals?.excludedWinRate)}</div>
           </div>
         </button>
         <button type="button" onClick={() => setCalendarLane("research")} aria-pressed={calendarLane === "research"}
@@ -691,7 +694,7 @@ function CalendarView({ onBack }) {
           <div>
             <div className="text-[11px] uppercase tracking-wider font-semibold text-indigo-100">Research lanes · paper only</div>
             <div className="text-3xl font-bold">{allTotals ? (allTotals.experimentalPnl >= 0 ? "+" : "") + money(allTotals.experimentalPnl) : "—"}</div>
-            <div className="text-xs text-indigo-100">{allTotals?.experimentalTrades || 0} trades · {allTotals?.experimentalWinRate != null ? `${allTotals.experimentalWinRate}% wins` : "no sample yet"}</div>
+            <div className="text-xs text-indigo-100">{tradeSummary(allTotals?.experimentalTrades, allTotals?.experimentalWinRate)}</div>
           </div>
         </button>
         <button type="button" onClick={() => setCalendarLane("shen")} aria-pressed={calendarLane === "shen"}
@@ -700,7 +703,7 @@ function CalendarView({ onBack }) {
           <div>
             <div className="text-[11px] uppercase tracking-wider font-semibold text-sky-100">Shen conviction · paper only</div>
             <div className="text-3xl font-bold">{allTotals ? (allTotals.shenPnl >= 0 ? "+" : "") + money(allTotals.shenPnl) : "—"}</div>
-            <div className="text-xs text-sky-100">{allTotals?.shenTrades || 0} trades · {allTotals?.shenWinRate != null ? `${allTotals.shenWinRate}% wins` : "no sample yet"}</div>
+            <div className="text-xs text-sky-100">{tradeSummary(allTotals?.shenTrades, allTotals?.shenWinRate)}</div>
           </div>
         </button>
       </div>
