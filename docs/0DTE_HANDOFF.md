@@ -129,6 +129,13 @@ because trade provenance would change mid-run, so startup explicitly fails super
 jobs and the new version gets its own run. Retrying a failed same-version job keeps its
 completed-month checkpoint. Trade writes remain idempotent per day and code version.
 
+The four monthly summary cards are also calendar filters. Clicking playbook hours,
+outside hours, research lanes, or Shen conviction switches every day cell and the full
+statistics sidebar to that lane. Winning days are green and losing days are red regardless
+of lane color; the active summary card gets a visible focus ring. Day summaries include
+per-trade P&L arrays for all four lanes so win rate and best/worst trade are not inferred
+from aggregate daily P&L.
+
 ---
 
 ## 4b. Database — what gets logged and how to query it
