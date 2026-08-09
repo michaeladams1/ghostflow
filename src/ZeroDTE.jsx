@@ -8,7 +8,7 @@
 // a red down-arrow where you'd have sold.
 import { useState, useEffect } from "react";
 import {
-  Zap, Loader2, AlertTriangle, ArrowUp, ArrowDown, Target, ShieldAlert, Clock, Hash, CalendarDays,
+  Zap, Loader2, AlertTriangle, ArrowUp, ArrowDown, Target, ShieldAlert, Clock, Hash, CalendarDays, FlaskConical,
 } from "lucide-react";
 import {
   ResponsiveContainer, ComposedChart, Line, XAxis, YAxis, Tooltip,
@@ -586,7 +586,7 @@ function CalendarView({ onBack }) {
         <div className="w-40" />
       </div>
 
-      <div className="grid sm:grid-cols-2 gap-4 mb-4">
+      <div className="grid sm:grid-cols-3 gap-4 mb-4">
         <div className="rounded-2xl bg-gradient-to-br from-emerald-600 to-emerald-700 text-white p-5 flex items-center gap-4">
           <div className="w-11 h-11 rounded-xl bg-white/15 flex items-center justify-center"><Zap size={20} /></div>
           <div>
@@ -599,6 +599,14 @@ function CalendarView({ onBack }) {
           <div>
             <div className="text-[11px] uppercase tracking-wider font-semibold text-amber-100">Outside-hours signals · not counted</div>
             <div className="text-3xl font-bold">{t ? (t.excludedPnl >= 0 ? "+" : "") + money(t.excludedPnl) : "—"}</div>
+          </div>
+        </div>
+        <div className="rounded-2xl bg-gradient-to-br from-indigo-600 to-violet-700 text-white p-5 flex items-center gap-4">
+          <div className="w-11 h-11 rounded-xl bg-white/15 flex items-center justify-center"><FlaskConical size={20} /></div>
+          <div>
+            <div className="text-[11px] uppercase tracking-wider font-semibold text-indigo-100">Research lanes · paper only</div>
+            <div className="text-3xl font-bold">{t ? (t.experimentalPnl >= 0 ? "+" : "") + money(t.experimentalPnl) : "—"}</div>
+            <div className="text-xs text-indigo-100">{t?.experimentalTrades || 0} trades · {t?.experimentalWinRate != null ? `${t.experimentalWinRate}% wins` : "no sample yet"}</div>
           </div>
         </div>
       </div>
@@ -635,6 +643,7 @@ function CalendarView({ onBack }) {
             <p className={`text-[11px] mt-3 ${faint}`}>
               $1,000 base campaign per trade (playbook tiers ×4: half $500 · full $1,000 · size-up $1,500 · max $2,000).
               Green/red = playbook-hours result. Amber = signals fired only outside 9:45–11:15 ET; simulated, never counted.
+              Purple research results are paper-only: strict 13–14 point first touches plus strict A+ setups from 11:15–12:30 ET.
             </p>
           </div>
 
@@ -664,6 +673,15 @@ function CalendarView({ onBack }) {
               <div className={`${heading} text-center mb-3`}>Trade performance</div>
               <PerfBar label="Best" value={t.bestTrade} maxAbs={maxTrade} tone="good" />
               <PerfBar label="Worst" value={t.worstTrade} maxAbs={maxTrade} tone="bad" />
+            </div>
+            <div className={`${card} rounded-xl p-4 mt-3`}>
+              <div className={`${heading} text-center mb-3`}>Why setups were missed</div>
+              {Object.entries(t.nearMissReasons || {}).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([reason, count]) => (
+                <div key={reason} className="flex justify-between text-xs py-1">
+                  <span className={faint}>{reason.replaceAll("_", " ")}</span><span className="font-semibold">{count}</span>
+                </div>
+              ))}
+              {!Object.keys(t.nearMissReasons || {}).length && <div className={`text-xs text-center ${faint}`}>No near-miss data</div>}
             </div>
           </div>
         </div>

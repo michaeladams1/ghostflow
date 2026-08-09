@@ -25,6 +25,7 @@ const SPEED_LOOKBACK = 4, SPEED_ATR_MULT = 0.40, WICK_RATIO = 1.5;
 const APLUS_BASE = 15, A_TIER_MIN = 11;
 const CALL_COOLDOWN = 30, A_COOLDOWN = 15, EXT_COOLDOWN = 20, RSI_EXT_SWING = 50;
 const TREND_GUARD_LOOKBACK = 10, TREND_GUARD_ATR_MULT = 3.0;
+const RESEARCH_SCORE_MIN = 13, RESEARCH_EXTENDED_END_MIN = 750; // 12:30 ET
 
 export function playbookTouchPolicy({ touchNumber, exhaustionMove }) {
   const exhaustionException = touchNumber === 3 && exhaustionMove >= 4;
@@ -33,6 +34,14 @@ export function playbookTouchPolicy({ touchNumber, exhaustionMove }) {
     dropSizeTier: touchNumber === 2,
     exhaustionException,
   };
+}
+
+export function classifyResearchCandidate({ minutes, points, aplusThreshold, levelPoints, hasTwoConfirmations, touchNumber, isAplus }) {
+  if (minutes >= PB_OPEN_MIN && minutes < PB_CLOSE_MIN
+      && points >= RESEARCH_SCORE_MIN && points < aplusThreshold
+      && levelPoints >= 3 && hasTwoConfirmations && touchNumber === 1) return "HIGH_QUALITY_A";
+  if (minutes >= PB_CLOSE_MIN && minutes < RESEARCH_EXTENDED_END_MIN && isAplus) return "EXTENDED_A_PLUS";
+  return null;
 }
 
 // THE PLAYBOOK'S SCHEDULE (Shen Lao, section 09 + Rule R5), in ET minutes:
@@ -287,6 +296,10 @@ export async function analyzeZeroDTESession({ symbol = "SPY", sessionDate }) {
 
   const barRows = [];
   const fires = [];
+  const experiments = [];
+  const nearMisses = [];
+  const nearMissKeys = new Set();
+  let prevCallResearch = null, prevPutResearch = null;
 
   for (let k = 0; k < todayIdxs.length; k++) {
     const i = todayIdxs[k];
@@ -528,6 +541,42 @@ export async function analyzeZeroDTESession({ symbol = "SPY", sessionDate }) {
     // Where this minute sits in the playbook's schedule.
     const pbWindow = minutes < PB_OPEN_MIN ? "before" : minutes < PB_CLOSE_MIN ? "in" : "after";
 
+    // Paper-only research lanes. These never enter the official `fires` list,
+    // so playbook P&L is unchanged. HIGH_QUALITY_A tests 13-14 point first
+    // touches with the live script's strong-level/two-confirmation gates.
+    // EXTENDED_A_PLUS measures otherwise-identical A+ setups until 12:30 ET.
+    const callResearch = classifyResearchCandidate({ minutes, points: callPts, aplusThreshold: aplusThresh, levelPoints: callLv, hasTwoConfirmations: callHasTwoConf, touchNumber: callTouchNumber, isAplus: callAplus && callTouchEligible });
+    const putResearch = classifyResearchCandidate({ minutes, points: putPts, aplusThreshold: aplusThresh, levelPoints: putLv, hasTwoConfirmations: putHasTwoConf, touchNumber: putTouchNumber, isAplus: putAplus && putTouchEligible });
+    const pushExperiment = (lane, direction, trigger, points, rsiValue, swing, volPts, speedPts, wickPts, touchNumber) => {
+      if (!lane || !trigger) return;
+      experiments.push({ lane, paperOnly: true, window: lane === "HIGH_QUALITY_A" ? "in" : "extended", tier: lane === "HIGH_QUALITY_A" ? "Research 13-14" : "Extended A+", direction,
+        idx: i, ts: bar.ts, clock: clockLabel(minutes), level: trigger.value, levelType: trigger.type, price: bar.close, points,
+        rsi: rsiValue, swing: Math.round(swing), size: "PAPER $1000", touchNumber,
+        volPts, speedPts, wickPts, suggestedStop, exitCutoffMin: lane === "HIGH_QUALITY_A" ? PB_CLOSE_MIN : RESEARCH_EXTENDED_END_MIN });
+    };
+    if (callResearch && callResearch !== prevCallResearch) pushExperiment(callResearch, "CALL", callTrigger, callPts, r != null ? Math.round(r) : null, callSwing, callVolPts, callSpeedPts, callWickPts, callTouchNumber);
+    if (putResearch && putResearch !== prevPutResearch) pushExperiment(putResearch, "PUT", putTrigger, putPts, r != null ? Math.round(r) : null, putSwing, putVolPts, putSpeedPts, putWickPts, putTouchNumber);
+
+    // Compact diagnostic sampling: one identical reason set per direction per
+    // 15-minute bucket. This reveals which gate suppresses the most setups
+    // without returning hundreds of duplicate bars that sat on one level.
+    const captureNearMiss = (direction, eligible, trigger, points, levelPoints, hasTwoConfirmations, touchNumber) => {
+      if (!eligible || !trigger || minutes < PB_OPEN_MIN || minutes >= RESEARCH_EXTENDED_END_MIN) return;
+      const reasons = [];
+      if (points < RESEARCH_SCORE_MIN) reasons.push("score_below_13");
+      if (levelPoints < 3) reasons.push("level_below_3");
+      if (!hasTwoConfirmations) reasons.push("fewer_than_2_confirmations");
+      if (touchNumber !== 1) reasons.push("not_first_touch");
+      if (minutes >= PB_CLOSE_MIN) reasons.push("outside_playbook_hours");
+      if (!reasons.length) return;
+      const key = `${direction}:${Math.floor(minutes / 15)}:${reasons.join("|")}`;
+      if (nearMissKeys.has(key)) return;
+      nearMissKeys.add(key);
+      nearMisses.push({ direction, clock: clockLabel(minutes), points, level: trigger.value, levelType: trigger.type, reasons });
+    };
+    captureNearMiss("CALL", callElig, callTrigger, callPts, callLv, callHasTwoConf, callTouchNumber);
+    captureNearMiss("PUT", putElig, putTrigger, putPts, putLv, putHasTwoConf, putTouchNumber);
+
     if (fireCallAp) {
       lastCallBar = i;
       fires.push({ window: pbWindow, tier: "A+", direction: "CALL", idx: i, ts: bar.ts, clock: clockLabel(minutes), level: callTrigger.value, levelType: callTrigger.type, price: bar.close,
@@ -548,6 +597,7 @@ export async function analyzeZeroDTESession({ symbol = "SPY", sessionDate }) {
     prevCallAplus = callAplus; prevPutAplus = putAplus;
     prevCallA = callA; prevPutA = putA;
     prevCallExt = callRsiExtElig; prevPutExt = putRsiExtElig;
+    prevCallResearch = callResearch; prevPutResearch = putResearch;
 
     barRows.push({ ts: bar.ts, min: minutes, window: pbWindow, clock: clockLabel(minutes), open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: bar.volume,
       rsi: r != null ? +r.toFixed(1) : null, callPts, putPts, vwap: vwap != null ? +vwap.toFixed(2) : null, inSession: inSess });
@@ -559,7 +609,7 @@ export async function analyzeZeroDTESession({ symbol = "SPY", sessionDate }) {
     levels: { pdh, pdl, pmh, pml, orHigh, orLow, orb15High, orb15Low, dailyAtr14 },
     gap: { isGapUp, isGapDn, gapSize: dailyAtr14 != null ? +gapSize.toFixed(2) : null },
     bars: barRows,
-    fires,
+    fires, experiments, nearMisses,
   };
 }
 

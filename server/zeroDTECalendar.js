@@ -28,9 +28,11 @@ async function simulateDay(symbol, date) {
       summary = { date, noData: true };
     } else {
       const fires = await simulateAllFires({ ticker: symbol, sessionDate: date, fires: s.fires });
+      const experiments = await simulateAllFires({ ticker: symbol, sessionDate: date, fires: s.experiments || [] });
       const story = buildSessionStory({ symbol, sessionDate: date, levels: s.levels, gap: s.gap, fires, bars: s.bars });
       const simmed = fires.filter((f) => f.level && f.trade?.ok);
       const counted = simmed.filter((f) => f.window === "in");
+      const experimental = experiments.filter((f) => f.level && f.trade?.ok);
       summary = {
         date,
         pnl: +story.totalPnl.toFixed(2),
@@ -40,6 +42,11 @@ async function simulateDay(symbol, date) {
         wins: story.winCount,
         signals: fires.length,
         tradePnls: counted.map(pnlOf),
+        experimentalPnl: +experimental.reduce((sum, f) => sum + pnlOf(f), 0).toFixed(2),
+        experimentalTrades: experimental.length,
+        experimentalWins: experimental.filter((f) => f.trade.pctReturn > 0).length,
+        experimentalTradePnls: experimental.map(pnlOf),
+        nearMissReasons: (s.nearMisses || []).flatMap((x) => x.reasons),
       };
     }
   } catch (err) {
@@ -70,6 +77,11 @@ export async function simulateMonth({ symbol = "SPY", year, month }) {
   const pnl = +days.reduce((s, x) => s + (x.pnl || 0), 0).toFixed(2);
   const excludedPnl = +days.reduce((s, x) => s + (x.excludedPnl || 0), 0).toFixed(2);
   const dayPnls = traded.map((x) => x.pnl);
+  const experimentalTradePnls = days.flatMap((x) => x.experimentalTradePnls || []);
+  const experimentalTrades = experimentalTradePnls.length;
+  const experimentalWins = experimentalTradePnls.filter((p) => p > 0).length;
+  const nearMissReasons = {};
+  for (const reason of days.flatMap((x) => x.nearMissReasons || [])) nearMissReasons[reason] = (nearMissReasons[reason] || 0) + 1;
 
   return {
     symbol, year, month, days,
@@ -82,6 +94,12 @@ export async function simulateMonth({ symbol = "SPY", year, month }) {
       bestTrade: allTradePnls.length ? Math.max(...allTradePnls) : null,
       worstTrade: allTradePnls.length ? Math.min(...allTradePnls) : null,
       tradingDays: days.filter((x) => !x.noData).length,
+      experimentalPnl: +experimentalTradePnls.reduce((sum, x) => sum + x, 0).toFixed(2),
+      experimentalTrades,
+      experimentalWins,
+      experimentalLosses: experimentalTrades - experimentalWins,
+      experimentalWinRate: experimentalTrades ? +((experimentalWins / experimentalTrades) * 100).toFixed(1) : null,
+      nearMissReasons,
     },
   };
 }

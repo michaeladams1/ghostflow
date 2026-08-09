@@ -32,11 +32,11 @@ function minToClock(min) {
   return `${((h + 11) % 12) + 1}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"} ET`;
 }
 
-export function walkBracketBars({ bars, entryIdx, tpPrice, slPrice, enforceHardStop = true }) {
+export function walkBracketBars({ bars, entryIdx, tpPrice, slPrice, enforceHardStop = true, cutoffMin = HARD_STOP_MIN }) {
   for (let i = entryIdx + 1; i < bars.length; i++) {
     const b = bars[i];
-    if (enforceHardStop && etMinutes(b.ts) >= HARD_STOP_MIN) {
-      return { exitBar: b, exitPrice: b.open ?? b.close, exitReason: "Playbook hard stop at 11:15 AM ET" };
+    if (enforceHardStop && etMinutes(b.ts) >= cutoffMin) {
+      return { exitBar: b, exitPrice: b.open ?? b.close, exitReason: cutoffMin === HARD_STOP_MIN ? "Playbook hard stop at 11:15 AM ET" : "Research window ended at 12:30 PM ET" };
     }
     const hitTp = b.high >= tpPrice, hitSl = b.low <= slPrice;
     if (hitTp && hitSl) {
@@ -79,8 +79,9 @@ export async function simulateBracketTrade({ ticker = "SPY", sessionDate, fire }
   // Entries before the playbook cutoff must be flat at 11:15 ET. Signals
   // after the cutoff are still simulated for learning and remain excluded
   // from playbook P&L, so they cannot be force-exited before they exist.
+  const cutoffMin = fire.exitCutoffMin ?? HARD_STOP_MIN;
   const { exitBar, exitPrice, exitReason } = walkBracketBars({
-    bars, entryIdx, tpPrice, slPrice, enforceHardStop: fireMin < HARD_STOP_MIN,
+    bars, entryIdx, tpPrice, slPrice, cutoffMin, enforceHardStop: fireMin < cutoffMin,
   });
 
   const entryMin = etMinutes(entryBar.ts), exitMin = etMinutes(exitBar.ts);
