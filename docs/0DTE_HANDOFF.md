@@ -130,16 +130,16 @@ because trade provenance would change mid-run, so startup explicitly fails super
 jobs and the new version gets its own run. Retrying a failed same-version job keeps its
 completed-month checkpoint. Trade writes remain idempotent per day and code version.
 
-The four monthly summary cards are also calendar filters. Clicking playbook hours,
-outside hours, research lanes, or Shen conviction switches every day cell and the full
-statistics sidebar to that lane. Winning days are green and losing days are red regardless
-of lane color; the active summary card gets a visible focus ring. Day summaries include
-per-trade P&L arrays for all four lanes so win rate and best/worst trade are not inferred
-from aggregate daily P&L. Every card shows its own trade count and win percentage;
-outside-hours win rate is computed from its individual simulated trades and remains
-explicitly excluded from official P&L. The calendar is a five-column Monday-Friday view;
-Saturday and Sunday headers and cells are intentionally omitted so trading sessions have
-more horizontal room while weekday ghost cells preserve correct date alignment. The four
+The five monthly summary cards are also calendar filters. Clicking playbook hours,
+outside hours, research lanes, Shen conviction, or Frontier model switches every day
+cell and the full statistics sidebar to that lane. Winning days are green and losing days
+are red regardless of lane color; the active summary card gets a visible focus ring. Day
+summaries include per-trade P&L arrays for all five lanes so win rate and best/worst trade
+are not inferred from aggregate daily P&L. Every card shows its own trade count and win
+percentage; outside-hours win rate is computed from its individual simulated trades and
+remains explicitly excluded from official P&L. The calendar is a five-column Monday-Friday
+view; Saturday and Sunday headers and cells are intentionally omitted so trading sessions
+have more horizontal room while weekday ghost cells preserve correct date alignment. The
 large summary-card P&L totals display rounded whole dollars and never split the sign from
 the amount; detailed calendar and trade values retain cents.
 
