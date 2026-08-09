@@ -344,15 +344,19 @@ the experiment measures entry quality without inventing a dollar mapping for the
 "standard" versus "full" language. Results have their own fourth calendar box and are
 excluded from official and existing research totals.
 
-**Frontier model is a paper-only filter across ALL segments** (playbook hours, outside
-hours, research lanes, Shen). It does **not** create new signals. `isFrontierFire()` in
-`zeroDTE.js` keeps a simulated trade when all of these hold: not CALL@PDL, not A+ /
-Extended A+, Edge Lens points in 12–14, `et_minute` in `[600, 615)` (10:00–10:15 ET),
-and `entry_price >= 0.50`. When several lanes fire the same setup, Frontier dedupes by
-`(date, et_minute, direction, level_type, touch)` with priority playbook > research >
-outside > Shen. The calendar derives Frontier at read time from existing
-`zerodte_trades` rows (no resim required). Official / outside / research / Shen boxes
-are unchanged. QuantData is intentionally not part of Frontier v1.
+**Frontier v2 (Option B) is a sparse paper-only quality reference across ALL segments**
+(playbook, outside, research, Shen). It does **not** create new signals.
+`isFrontierFire()` keeps a simulated trade when: not CALL@PDL, not A+/Extended A+,
+points in 12–14, `et_minute >= 600` (from 10:00 ET; the old 10:15 hard stop was removed
+because it starved months), and `entry_price >= 0.50`. Same-setup dedupe across lanes
+(priority playbook > research > outside > Shen). Calendar derives it at read time from
+`zerodte_trades` (no resim). ~168 trades / +$1.8k on `89d991cddb31` — selective, not
+high-frequency.
+
+**Frontier v3 research** targets ~75% of sessions traded via a wide net + QuantData day
+gate (not by cherry-picking Shen greens). Harness: `node --env-file=.env server/frontierV3Research.js`.
+Uses Railway/`QUANTDATA_API_KEY`. Does not change the live Frontier box until a rule set
+clears holdout. Official / outside / research / Shen boxes are unchanged.
 
 ---
 

@@ -46,7 +46,8 @@ assert.equal(isFrontierFire({ ...frontierBase, tier: "Extended A+" }), false);
 assert.equal(isFrontierFire({ ...frontierBase, points: 11 }), false);
 assert.equal(isFrontierFire({ ...frontierBase, points: 15 }), false);
 assert.equal(isFrontierFire({ ...frontierBase, etMinute: 595 }), false);
-assert.equal(isFrontierFire({ ...frontierBase, etMinute: 615 }), false);
+assert.equal(isFrontierFire({ ...frontierBase, etMinute: 615 }), true); // v2: no 10:15 cutoff
+assert.equal(isFrontierFire({ ...frontierBase, etMinute: 670 }), true);
 assert.equal(isFrontierFire({ ...frontierBase, entryPrice: 0.49 }), false);
 // All segments eligible — Shen / research / outside pass the same feature gates.
 assert.equal(isFrontierFire({ ...frontierBase, tier: "Shen FULL 3/3" }), true);
