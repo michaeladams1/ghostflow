@@ -265,6 +265,63 @@ Run with `node --env-file=.env`. `db.js` auto-detects local vs Railway and disab
 localhost/`railway.internal` — Railway's *internal* URL doesn't support SSL while its
 *public* URL requires it. Don't force it unconditionally; that broke local testing before.
 
+### How to find and process a completed 24-month backtest
+
+A full history run is **not** identified by `zerodte_backtest_jobs` alone. That jobs table
+is the durable runner checkpoint; it can be empty even when a complete 24-month trade set
+already exists in `zerodte_trades`. The artifact that answers "what did this deploy
+produce?" is the **trade rows for one `code_version`**, stamped with Railway provenance.
+
+**One backtest result = one `code_version` grouping** (12-char commit sha, optionally
+`-dirty`). Every row in that grouping shares the same `deployment_id`, `commit_sha`,
+`branch`, and `environment`. Re-running under a new deploy writes a *parallel* grouping;
+it does not overwrite the old one. Never aggregate across versions.
+
+**Discover the latest full run** (cloud agent / Railway psql via `DATABASE_PUBLIC_URL` on
+the Postgres service — the app service's `DATABASE_URL` uses `*.railway.internal` and
+does not resolve outside the private network):
+
+```sql
+SELECT code_version, deployment_id, commit_sha, branch, environment,
+       COUNT(*) AS trades,
+       COUNT(DISTINCT session_date) AS sessions,
+       MIN(session_date) AS first_session,
+       MAX(session_date) AS last_session,
+       ROUND(((MAX(session_date)::date - MIN(session_date)::date)/30.0)::numeric, 1)
+         AS approx_months,
+       MIN(created_at) AS first_written,
+       MAX(created_at) AS last_written
+FROM zerodte_trades
+GROUP BY 1,2,3,4,5
+ORDER BY approx_months DESC, last_written DESC;
+```
+
+A recent 24-month grouping looks like: ~23–24 `approx_months`, ~480 sessions, continuous
+month buckets from `first_session` through `last_session`, and `first_written` /
+`last_written` clustered in one write window (the job's run). Confirm month continuity:
+
+```sql
+SELECT LEFT(session_date, 7) AS ym,
+       COUNT(DISTINCT session_date) AS sessions,
+       COUNT(*) AS trades
+FROM zerodte_trades
+WHERE code_version = '<that-code-version>'
+GROUP BY 1
+ORDER BY 1;
+```
+
+**Process that run only** — filter every analysis by the chosen `code_version` (or pass
+`codeVersion=` to `/api/0dte/performance`). Prefer `counted = true` for official playbook
+P&L; keep research lanes (`SHEN_CONVICTION`, `HIGH_QUALITY_A`, `EXTENDED_A_PLUS`) and
+uncounted official rows separate. To compare "did this change help?", pick two complete
+groupings by `code_version` / `deployment_id` and compare on overlapping `session_date`s
+(`/api/0dte/versions` already exposes `overlapWithLatest` + `comparable`).
+
+**Reference snapshot (2026-08-09):** `code_version = 89d991cddb31`,
+`deployment_id = 80f0e304-d51e-4926-9838-487f8fb37943`, sessions 2024-09-03 → 2026-08-07
+(24 calendar months, 484 sessions, 3342 trades), written 2026-08-09 17:00–17:43 UTC.
+Treat newer equal-or-greater coverage as the current baseline when it appears.
+
 ### What is NOT logged
 Per-bar series (price, RSI, running scores) are **not** persisted — only fires. The
 calendar's day-level aggregates live in an **in-memory Map** that dies on restart. Adding
