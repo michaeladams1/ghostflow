@@ -113,6 +113,113 @@ API: POST /api/0dte/analyze · POST /api/0dte/month · GET /api/0dte/performance
 
 ---
 
+## 4b. Database — what gets logged and how to query it
+
+PostgreSQL on Railway (`DATABASE_URL`). Schema lives in `server/db.js` → `ensureSchema()`,
+called lazily on first use. Four tables; only `zerodte_trades` belongs to this feature —
+`trades`, `feed_cache`, and `theses` belong to GHOSTFLOW's separate 3-analyst system,
+**don't touch them**.
+
+### `zerodte_trades` — one row per fired signal
+
+Written by `server/zeroDTEStore.js` → `saveSessionTrades()`, called from
+`zeroDTECalendar.js` after every day simulation. **Both official and research-lane fires
+are stored**, including ones whose contract simulation failed (so gaps stay visible rather
+than silently missing).
+
+```sql
+id            TEXT PRIMARY KEY   -- symbol:date:code_version:lane:tier:direction:clock
+symbol        TEXT               -- 'SPY'
+session_date  TEXT               -- 'YYYY-MM-DD'
+fired_at      TIMESTAMPTZ        -- bar timestamp of the signal
+clock         TEXT               -- '10:02 AM ET'
+et_minute     INT                -- minutes past ET midnight (570 = 9:30) — use for time bucketing
+pb_window     TEXT               -- 'before' | 'in' | 'after'  (playbook 9:45–11:15 window)
+                                 --   NB: 'window' is a Postgres reserved word — hence pb_
+lane          TEXT               -- 'official' | 'HIGH_QUALITY_A' | 'EXTENDED_A_PLUS'
+tier          TEXT               -- 'A+' | 'A' | 'RSI Extreme' | research tier labels
+direction     TEXT               -- 'CALL' | 'PUT'
+
+-- WHY it fired (the feature set — this is the analysis substrate)
+level_type    TEXT               -- WHOLE_DOLLAR | PDH | PDL | PMH | PML | OR_HIGH | OR_LOW
+                                 --   | ORB15_SUPPORT | ORB15_RESISTANCE | VWAP
+level         NUMERIC            -- the ACTUAL trigger level price, not the rounded display level
+touch_number  INT                -- 1st/2nd/3rd arrival at that level today
+points        INT                -- Edge Lens score 0–20
+rsi           INT
+swing         INT                -- RSI swing magnitude
+vol_pts       INT                -- 0–2 volume confirmation
+speed_pts     INT                -- 0–2 speed of move
+wick_pts      INT                -- 0–1 wick rejection
+mtf_aligned   BOOLEAN            -- 1m+5m+10m RSI agreement
+
+-- WHAT HAPPENED
+contract      TEXT               -- OCC symbol, e.g. SPY260807C00772000
+strike        NUMERIC
+entry_price   NUMERIC            -- NULL when the contract sim failed (illiquid / no such contract)
+exit_price    NUMERIC
+entry_clock   TEXT
+exit_clock    TEXT
+hold_minutes  INT
+exit_reason   TEXT               -- 'TP hit (+20%)' | 'SL hit (-12.5%)' | held-to-close | ambiguous-bar note
+pct_return    NUMERIC
+contracts     INT                -- position size in contracts
+pnl           NUMERIC            -- dollars
+counted       BOOLEAN            -- TRUE only when lane='official' AND pb_window='in' AND sim succeeded
+features      JSONB              -- size tier, suggestedStop, exhaustionException, underlying price,
+                                 --   simFailed reason. Put NEW fields HERE before adding columns.
+
+-- PROVENANCE (see §5)
+deployment_id TEXT               -- Railway deployment id, or 'local-<sha>'
+commit_sha    TEXT
+code_version  TEXT               -- 12-char sha + '-dirty' if uncommitted. PART OF THE ROW ID.
+branch        TEXT
+environment   TEXT               -- 'production' | 'local'
+created_at    TIMESTAMPTZ
+```
+
+Indexes: `(symbol, session_date)`, `(lane, counted)`, `(code_version, counted)`.
+
+### Write semantics — important
+
+`saveSessionTrades()` runs `DELETE ... WHERE symbol AND session_date AND code_version`
+inside a transaction, then inserts. So:
+- Re-running a day on the **same commit** → idempotent replace, no duplicates
+- Re-running a day on a **new commit** → parallel row set; the old version's rows survive
+- **Therefore `SELECT SUM(pnl)` without a `code_version` filter double-counts** across
+  versions. Always filter, or use the endpoints, which handle it.
+
+### Reading it
+
+Prefer the API over raw SQL:
+- `GET /api/0dte/performance?from=&to=&lane=official&countedOnly=true&codeVersion=`
+  → slices by tier, direction, level type, touch number, score band, RSI band, time of
+  day, MTF, volume/speed/wick points, exit reason, entry premium. Each slice returns
+  trades, winRate, totalPnl, avgPnl, **profitFactor**, avgHold, and a **`reliable`** flag
+  (`false` below `MIN_SAMPLE = 20`, defined in `zeroDTEAnalysis.js`).
+- `GET /api/0dte/versions` → per-code-version rollup with `overlapWithLatest` + `comparable`.
+- Programmatic: `loadTrades({symbol, from, to, lane, countedOnly, codeVersion})` and
+  `coveredSessions({symbol})` from `zeroDTEStore.js`.
+
+Local psql access pattern used elsewhere in this repo:
+```js
+import('pg').then(async ({default:pg}) => {
+  const c = new pg.Client({ connectionString: process.env.DATABASE_URL,
+                            ssl: { rejectUnauthorized: false } });
+  await c.connect(); /* ... */ await c.end();
+});
+```
+Run with `node --env-file=.env`. `db.js` auto-detects local vs Railway and disables SSL for
+localhost/`railway.internal` — Railway's *internal* URL doesn't support SSL while its
+*public* URL requires it. Don't force it unconditionally; that broke local testing before.
+
+### What is NOT logged
+Per-bar series (price, RSI, running scores) are **not** persisted — only fires. The
+calendar's day-level aggregates live in an **in-memory Map** that dies on restart. Adding
+bar-level analysis means a new table, not a tweak.
+
+---
+
 ## 5. Key decisions and WHY (do not silently reverse these)
 
 **Wick-aware level touches.** A level counts as touched when the bar's **high–low range**
