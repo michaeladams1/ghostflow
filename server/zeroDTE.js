@@ -69,7 +69,7 @@ export function classifyShenConviction({ minutes, levelType, touchNumber, exhaus
 }
 
 // FRONTIER MODEL — paper-only selection across ALL segments. Live rules are
-// Frontier v6 (first touch, best score/day, $1k paper, runner/-50% exits).
+// Frontier v7 (PUT, pts≥12, first touch, $1k/trade, runner/-50% exits).
 // See frontierV3.js. New 24-month backtest required to populate frontier_*.
 export const FRONTIER_MIN_MINUTE = FRONTIER_V3_MIN_MINUTE;
 export const FRONTIER_MIN_POINTS = FRONTIER_V3_MIN_POINTS;

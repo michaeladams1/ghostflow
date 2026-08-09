@@ -5,6 +5,7 @@ import {
 } from "./zeroDTE.js";
 import {
   FRONTIER_PAPER_DOLLARS, FRONTIER_SL_MULT, FRONTIER_TP_MULT,
+  FRONTIER_V3_DIRECTION, FRONTIER_V3_MIN_POINTS,
   frontierPaperPnl, frontierV3FlowVeto, passesFrontierV3, selectFrontierBestPerDay,
 } from "./frontierV3.js";
 import { walkBracketBars } from "./zeroDTEOptionSim.js";
@@ -40,11 +41,14 @@ assert.equal(classifyShenConviction({ minutes: 600, levelType: "PDH", touchNumbe
 assert.equal(classifyShenConviction({ minutes: 600, levelType: "PDL", touchNumber: 2, exhaustionMove: 3, moveDistance: 3, rsi: null, direction: "CALL" }), null);
 
 const frontierBase = {
-  direction: "PUT", levelType: "WHOLE_DOLLAR", tier: "A", points: 8,
+  direction: "PUT", levelType: "WHOLE_DOLLAR", tier: "A", points: 12,
   etMinute: 590, entryPrice: 1.05, touchNumber: 1,
 };
+assert.equal(FRONTIER_V3_DIRECTION, "PUT");
+assert.equal(FRONTIER_V3_MIN_POINTS, 12);
 assert.equal(isFrontierFire(frontierBase), true);
-assert.equal(isFrontierFire({ ...frontierBase, direction: "CALL", levelType: "PDL" }), true);
+assert.equal(isFrontierFire({ ...frontierBase, direction: "CALL", levelType: "PDL" }), false);
+assert.equal(isFrontierFire({ ...frontierBase, points: 11 }), false);
 assert.equal(isFrontierFire({ ...frontierBase, tier: "A+" }), true);
 assert.equal(isFrontierFire({ ...frontierBase, etMinute: 584 }), false);
 assert.equal(isFrontierFire({ ...frontierBase, touchNumber: 2 }), false);
