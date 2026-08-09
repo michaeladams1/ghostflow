@@ -344,17 +344,16 @@ the experiment measures entry quality without inventing a dollar mapping for the
 "standard" versus "full" language. Results have their own fourth calendar box and are
 excluded from official and existing research totals.
 
-**Frontier v3.1 is the live paper lane** (promoted after beating v3 / v2 on 2026 holdout).
-`passesFrontierV3()` / `isFrontierFire()` keep a simulated trade when: not CALL@PDL,
-not A+/Extended A+, points in **11–15**, **first touch only**, `et_minute >= 600`,
-`entry_price >= 0.50`, and QuantData early net-flow (first ~30 buckets) does **not**
-oppose the trade direction by more than **0.25**. Missing QD data does not veto.
-Same-setup dedupe across lanes (priority playbook > research > outside > Shen).
-Calendar applies the flow veto at read time via cached QuantData fetches.
-Evidence: `node server/frontierV3PlusSearch.js` (champion
-`v3_soft_11_15_touch1__flow_oppose_025`: holdout +$2718 vs live v3 +$1634 / v2 +$991).
-~75% day coverage is still an open research goal — wider nets without a stronger veto
-remain negative EV. Official / outside / research / Shen boxes are unchanged.
+**Frontier v4 is the live paper lane** (promoted for ~75% session coverage with positive EV).
+Eligibility: not CALL@PDL, not A+/Extended A+, `et_minute >= 585` (9:45 ET),
+`entry_price >= 0.50`. After same-setup dedupe across lanes, keep the **single
+highest-points** eligible fire per session day (tie → earlier minute). No QuantData
+veto. Evidence: `node server/frontierCoverageSearch.js` (champion
+`any_from945__cap1_best`: ~**69.2%** day coverage, holdout +$2081 vs v2 +$991,
+full +$4012). Cap-1-first on the same net is deeply negative — the edge is the
+score pick, not the wide net alone. Sparse v3.1 (touch1 + flow 0.25) remains a
+higher holdout-PnL / lower-coverage reference in search artifacts. Official /
+outside / research / Shen boxes are unchanged.
 
 ---
 

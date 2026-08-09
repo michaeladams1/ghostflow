@@ -7,6 +7,7 @@
 import {
   analyzeZeroDTESession, frontierDedupeKey, frontierLanePriority, isFrontierFire,
 } from "./zeroDTE.js";
+import { selectFrontierBestPerDay } from "./frontierV3.js";
 import { simulateAllFires } from "./zeroDTEOptionSim.js";
 import { buildSessionStory } from "./zeroDTEStory.js";
 import { saveSessionTrades } from "./zeroDTEStore.js";
@@ -77,7 +78,13 @@ async function simulateDay(symbol, date) {
       for (const f of experimental) considerFrontier(f, f.lane || "HIGH_QUALITY_A", false);
       for (const f of excluded) considerFrontier(f, "official", false);
       for (const f of shen) considerFrontier(f, "SHEN_CONVICTION", false);
-      const frontier = [...frontierByKey.values()].map((x) => x.f);
+      const frontier = selectFrontierBestPerDay(
+        [...frontierByKey.values()].map(({ f }) => ({
+          ...f,
+          sessionDate: date,
+          etMinute: f.ts ? etMinuteOf(f.ts) : null,
+        })),
+      );
       summary = {
         date,
         pnl: +story.totalPnl.toFixed(2),

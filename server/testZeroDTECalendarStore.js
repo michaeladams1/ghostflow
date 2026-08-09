@@ -20,16 +20,16 @@ const day = calendarDaysFromRows([
     tier: "A", points: 13, et_minute: 610, touch_number: 1,
   },
   {
-    // After 10:15 is still eligible (research lane; v3 dropped the old cutoff).
+    // Lower points than the 13-pt official — v4 keeps only best points/day.
     session_date: "2026-08-03", lane: "HIGH_QUALITY_A", counted: false, pb_window: "in",
     entry_price: 1, pnl: "50", direction: "PUT", level_type: "WHOLE_DOLLAR",
-    tier: "Research 13-14", points: 13, et_minute: 640, touch_number: 1,
+    tier: "Research 13-14", points: 12, et_minute: 640, touch_number: 1,
   },
   {
-    // Before 10:00 — still excluded from Frontier.
+    // Before 9:45 — excluded from Frontier v4.
     session_date: "2026-08-03", lane: "official", counted: false, pb_window: "after",
     entry_price: 1.1, pnl: "40", direction: "PUT", level_type: "WHOLE_DOLLAR",
-    tier: "A", points: 13, et_minute: 590, touch_number: 2,
+    tier: "A", points: 13, et_minute: 580, touch_number: 2,
   },
   { session_date: "2026-08-03", lane: "official", counted: false, pb_window: "after", entry_price: 1, pnl: "-25" },
   { session_date: "2026-08-03", lane: "SHEN_CONVICTION", counted: false, pb_window: "in", entry_price: 1, pnl: "75",
@@ -41,12 +41,13 @@ assert.deepEqual(day.tradePnls, [100, -90]);
 assert.deepEqual(day.excludedTradePnls, [40, -25]);
 assert.deepEqual(day.experimentalTradePnls, [50]);
 assert.deepEqual(day.shenTradePnls, [80, 75]);
-assert.deepEqual(day.frontierTradePnls, [100, 50]);
+// Best points on the day is the 13-pt official PUT (+100), not research 12 or Shen 8.
+assert.deepEqual(day.frontierTradePnls, [100]);
 assert.equal(day.pnl, 10);
 assert.equal(day.excludedPnl, 15);
 assert.equal(day.experimentalPnl, 50);
 assert.equal(day.shenPnl, 155);
-assert.equal(day.frontierPnl, 150);
+assert.equal(day.frontierPnl, 100);
 
 const totals = summarizeMonth({ symbol: "SPY", year: 2026, month: 8, days: [day] }).totals;
 assert.equal(totals.totalTrades, 2);
@@ -55,35 +56,8 @@ assert.equal(totals.excludedTrades, 2);
 assert.equal(totals.excludedWinRate, 50);
 assert.equal(totals.experimentalWinRate, 100);
 assert.equal(totals.shenWinRate, 100);
-assert.equal(totals.frontierTrades, 2);
+assert.equal(totals.frontierTrades, 1);
 assert.equal(totals.frontierWinRate, 100);
-assert.equal(totals.frontierPnl, 150);
-
-// Frontier v3.1 QuantData early-flow veto (threshold 0.25): opposing PUT day flow drops PUT fires.
-const vetoed = calendarDaysFromRows([
-  {
-    session_date: "2026-08-04", lane: "official", counted: true, pb_window: "in",
-    entry_price: 1.05, pnl: "100", direction: "PUT", level_type: "WHOLE_DOLLAR",
-    tier: "A", points: 13, et_minute: 610, touch_number: 1,
-  },
-  {
-    session_date: "2026-08-04", lane: "HIGH_QUALITY_A", counted: false, pb_window: "in",
-    entry_price: 1, pnl: "50", direction: "CALL", level_type: "WHOLE_DOLLAR",
-    tier: "Research 13-14", points: 13, et_minute: 640, touch_number: 1,
-  },
-], { flowByDate: new Map([["2026-08-04", 0.30]]) })[0];
-assert.deepEqual(vetoed.frontierTradePnls, [50]);
-assert.equal(vetoed.frontierPnl, 50);
-
-// Second touch is excluded even when score/time/premium pass.
-const secondTouch = calendarDaysFromRows([
-  {
-    session_date: "2026-08-05", lane: "official", counted: true, pb_window: "in",
-    entry_price: 1.05, pnl: "100", direction: "PUT", level_type: "WHOLE_DOLLAR",
-    tier: "A", points: 13, et_minute: 610, touch_number: 2,
-  },
-])[0];
-assert.deepEqual(secondTouch.frontierTradePnls, []);
-assert.equal(secondTouch.frontierPnl, 0);
+assert.equal(totals.frontierPnl, 100);
 
 console.log("0DTE saved calendar tests passed");

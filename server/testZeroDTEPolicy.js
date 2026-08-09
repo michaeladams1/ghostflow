@@ -3,7 +3,9 @@ import {
   classifyResearchCandidate, classifyShenConviction, isFrontierFire,
   pickOtmStrike, playbookTouchPolicy,
 } from "./zeroDTE.js";
-import { frontierV3FlowVeto, passesFrontierV3 } from "./frontierV3.js";
+import {
+  frontierV3FlowVeto, passesFrontierV3, selectFrontierBestPerDay,
+} from "./frontierV3.js";
 import { walkBracketBars } from "./zeroDTEOptionSim.js";
 
 const ts = (clock) => `2026-08-07T${clock}:00-04:00`;
@@ -36,39 +38,34 @@ assert.equal(classifyShenConviction({ minutes: 600, levelType: "PDH", touchNumbe
 assert.equal(classifyShenConviction({ minutes: 600, levelType: "PDH", touchNumber: 1, exhaustionMove: 3, moveDistance: 3, rsi: 75, direction: "PUT", approachValid: false }), null);
 assert.equal(classifyShenConviction({ minutes: 600, levelType: "PDL", touchNumber: 2, exhaustionMove: 3, moveDistance: 3, rsi: null, direction: "CALL" }), null);
 
+// Frontier v4: wide net from 9:45, toxins, prem — no score band / touch requirement.
 const frontierBase = {
-  direction: "PUT", levelType: "WHOLE_DOLLAR", tier: "A", points: 13,
-  etMinute: 610, entryPrice: 1.05, touchNumber: 1,
+  direction: "PUT", levelType: "WHOLE_DOLLAR", tier: "A", points: 8,
+  etMinute: 590, entryPrice: 1.05, touchNumber: 2,
 };
 assert.equal(isFrontierFire(frontierBase), true);
 assert.equal(isFrontierFire({ ...frontierBase, direction: "CALL", levelType: "PDL" }), false);
 assert.equal(isFrontierFire({ ...frontierBase, tier: "A+" }), false);
 assert.equal(isFrontierFire({ ...frontierBase, tier: "Extended A+" }), false);
-assert.equal(isFrontierFire({ ...frontierBase, points: 11 }), true); // v3 soft band
-assert.equal(isFrontierFire({ ...frontierBase, points: 15 }), true);
-assert.equal(isFrontierFire({ ...frontierBase, points: 10 }), false);
-assert.equal(isFrontierFire({ ...frontierBase, points: 16 }), false);
-assert.equal(isFrontierFire({ ...frontierBase, etMinute: 595 }), false);
-assert.equal(isFrontierFire({ ...frontierBase, etMinute: 615 }), true);
-assert.equal(isFrontierFire({ ...frontierBase, etMinute: 670 }), true);
+assert.equal(isFrontierFire({ ...frontierBase, etMinute: 584 }), false);
+assert.equal(isFrontierFire({ ...frontierBase, etMinute: 585 }), true);
 assert.equal(isFrontierFire({ ...frontierBase, entryPrice: 0.49 }), false);
-assert.equal(isFrontierFire({ ...frontierBase, touchNumber: 2 }), false); // v3.1 first touch
-assert.equal(isFrontierFire({ ...frontierBase, touchNumber: null }), false);
-// All segments eligible — Shen / research / outside pass the same feature gates.
 assert.equal(isFrontierFire({ ...frontierBase, tier: "Shen FULL 3/3" }), true);
 assert.equal(isFrontierFire({ ...frontierBase, tier: "Research 13-14" }), true);
-// Default veto threshold is 0.25 (v3.1).
-assert.equal(frontierV3FlowVeto("CALL", -0.30), true);
-assert.equal(frontierV3FlowVeto("PUT", 0.30), true);
-assert.equal(frontierV3FlowVeto("CALL", -0.20), false);
-assert.equal(frontierV3FlowVeto("PUT", 0.20), false);
-assert.equal(frontierV3FlowVeto("CALL", null), false);
-// frontierBase is PUT — opposing early flow is call-heavy (positive imbalance).
-assert.equal(passesFrontierV3({ ...frontierBase, flowImbalance: 0.30 }), false);
-assert.equal(passesFrontierV3({ ...frontierBase, flowImbalance: 0.20 }), true);
-assert.equal(passesFrontierV3({ ...frontierBase, flowImbalance: -0.20 }), true);
-assert.equal(passesFrontierV3({ ...frontierBase, flowImbalance: 0.05 }), true);
-assert.equal(passesFrontierV3({ ...frontierBase, direction: "CALL", flowImbalance: -0.30 }), false);
+
+// Flow veto disabled for v4 (threshold null) — even strong oppose does not drop.
+assert.equal(frontierV3FlowVeto("CALL", -0.50), false);
+assert.equal(passesFrontierV3({ ...frontierBase, flowImbalance: 0.90 }), true);
+
+const best = selectFrontierBestPerDay([
+  { sessionDate: "2026-08-04", points: 11, etMinute: 600, pnl: 10 },
+  { sessionDate: "2026-08-04", points: 14, etMinute: 640, pnl: 50 },
+  { sessionDate: "2026-08-04", points: 14, etMinute: 610, pnl: 40 },
+  { sessionDate: "2026-08-05", points: 12, etMinute: 600, pnl: -20 },
+]);
+assert.equal(best.length, 2);
+assert.equal(best.find((x) => x.sessionDate === "2026-08-04").pnl, 40); // 14 pts, earlier minute
+assert.equal(best.find((x) => x.sessionDate === "2026-08-05").pnl, -20);
 
 const bars = [
   { ts: ts("11:13"), open: 1.00, high: 1.01, low: 0.99, close: 1.00 },

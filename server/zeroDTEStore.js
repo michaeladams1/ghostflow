@@ -12,7 +12,7 @@ import {
   frontierDedupeKey, frontierLanePriority,
 } from "./zeroDTE.js";
 import {
-  loadFrontierV3FlowByDate, passesFrontierV3,
+  passesFrontierV3, selectFrontierBestPerDay,
 } from "./frontierV3.js";
 
 const num = (v) => (v == null || Number.isNaN(Number(v)) ? null : Number(v));
@@ -132,11 +132,11 @@ export async function loadSavedCalendarDays({ symbol = "SPY", year, month }) {
      ORDER BY session_date, et_minute`,
     [symbol, version.code_version, from, to]);
 
-  const flowByDate = await loadFrontierV3FlowByDate(rows.map((r) => r.session_date));
+  // Frontier v4 is PA-only (no QuantData veto) — skip flow fetches on calendar read.
   return {
     codeVersion: version.code_version,
     sessionsCovered: version.sessions,
-    days: calendarDaysFromRows(rows, { flowByDate }),
+    days: calendarDaysFromRows(rows),
   };
 }
 
@@ -173,31 +173,38 @@ export function calendarDaysFromRows(rows, { flowByDate = null } = {}) {
     }
 
     const flowImbalance = flowByDate?.get?.(row.session_date) ?? null;
+    const etMinute = row.et_minute != null ? Number(row.et_minute) : null;
+    const points = row.points != null ? Number(row.points) : null;
     if (passesFrontierV3({
       direction: row.direction,
       levelType: row.level_type,
       tier: row.tier,
-      points: row.points != null ? Number(row.points) : null,
-      etMinute: row.et_minute != null ? Number(row.et_minute) : null,
+      points,
+      etMinute,
       entryPrice: row.entry_price != null ? Number(row.entry_price) : null,
       touchNumber: row.touch_number != null ? Number(row.touch_number) : null,
       flowImbalance,
     })) {
       const key = frontierDedupeKey({
         sessionDate: row.session_date,
-        etMinute: row.et_minute != null ? Number(row.et_minute) : null,
+        etMinute,
         direction: row.direction,
         levelType: row.level_type,
         touchNumber: row.touch_number,
       });
       const rank = frontierLanePriority(row.lane, { counted: !!row.counted });
       const prev = day._frontierKeys.get(key);
-      if (!prev || rank < prev.rank) day._frontierKeys.set(key, { pnl, rank });
+      if (!prev || rank < prev.rank) {
+        day._frontierKeys.set(key, {
+          pnl, rank, points, etMinute, sessionDate: row.session_date,
+        });
+      }
     }
   }
 
   const days = [...byDate.values()].map((day) => {
-    const frontierPnls = [...day._frontierKeys.values()].map((x) => x.pnl);
+    const frontierPnls = selectFrontierBestPerDay([...day._frontierKeys.values()])
+      .map((x) => x.pnl);
     const { _frontierKeys, ...rest } = day;
     return {
       ...rest,
