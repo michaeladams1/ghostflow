@@ -114,6 +114,7 @@ src/
   ZeroDTE.jsx          The tab: daily debrief, trade cards, charts, historical calendar
 
 API: POST /api/0dte/analyze · POST /api/0dte/month
+     GET /api/0dte/calendar
      POST /api/0dte/backtest-jobs · GET /api/0dte/backtest-jobs/latest
      GET /api/0dte/backtest-jobs/:id · GET /api/0dte/performance
      GET /api/0dte/versions · GET /api/build
@@ -135,6 +136,14 @@ statistics sidebar to that lane. Winning days are green and losing days are red 
 of lane color; the active summary card gets a visible focus ring. Day summaries include
 per-trade P&L arrays for all four lanes so win rate and best/worst trade are not inferred
 from aggregate daily P&L.
+
+**Opening the calendar is read-only.** `GET /api/0dte/calendar` reconstructs month/day
+summaries from `zerodte_trades`; it never calls Alpaca or runs the simulator. It selects
+the production code version with the greatest distinct-session coverage, breaking ties
+by most recent write, so a partial new run cannot displace the last complete calendar.
+The explicit **Rerun 24-month backtest** button starts a new durable job even when the
+same code version already has a completed job. When that run reaches equal/full coverage,
+the saved-calendar reader naturally promotes it.
 
 ---
 
@@ -233,6 +242,8 @@ Prefer the API over raw SQL:
   trades, winRate, totalPnl, avgPnl, **profitFactor**, avgHold, and a **`reliable`** flag
   (`false` below `MIN_SAMPLE = 20`, defined in `zeroDTEAnalysis.js`).
 - `GET /api/0dte/versions` → per-code-version rollup with `overlapWithLatest` + `comparable`.
+- `GET /api/0dte/calendar?symbol=SPY&year=&month=` → instant saved calendar using the
+  most complete production version. This endpoint never simulates.
 - Programmatic: `loadTrades({symbol, from, to, lane, countedOnly, codeVersion})` and
   `coveredSessions({symbol})` from `zeroDTEStore.js`.
 
@@ -345,6 +356,8 @@ excluded from official and existing research totals.
 6. **Chart labels clipped**: recharts `position="right"` places labels outside the plot
    area. Use `insideTopRight` etc.
 7. **Custom `dot` renderers on all-null series don't render.** Use `ReferenceDot`.
+8. **Opening the month calendar triggered a simulation.** Calendar navigation now reads
+   persisted rows only; rerunning history requires the separate 24-month button.
 
 ---
 

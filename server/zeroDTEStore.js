@@ -91,3 +91,75 @@ export async function coveredSessions({ symbol = "SPY" } = {}) {
     "SELECT DISTINCT session_date FROM zerodte_trades WHERE symbol = $1 ORDER BY session_date", [symbol]);
   return rows.map((r) => r.session_date);
 }
+
+// Rebuild the calendar's compact day summaries from persisted trade rows.
+// Pick the production code version with the widest session coverage; a new
+// partial rerun must not replace a completed 24-month calendar halfway through.
+// Ties go to the most recently written version.
+export async function loadSavedCalendarDays({ symbol = "SPY", year, month }) {
+  await ensureSchema();
+  const versionResult = await pool.query(
+    `SELECT code_version, COUNT(DISTINCT session_date)::int AS sessions,
+            MAX(created_at) AS latest
+     FROM zerodte_trades
+     WHERE symbol = $1
+       AND (environment = 'production' OR NOT EXISTS (
+         SELECT 1 FROM zerodte_trades p WHERE p.symbol = $1 AND p.environment = 'production'
+       ))
+     GROUP BY code_version
+     ORDER BY sessions DESC, latest DESC
+     LIMIT 1`, [symbol]);
+  const version = versionResult.rows[0];
+  if (!version) return { codeVersion: null, sessionsCovered: 0, days: [] };
+
+  const from = `${year}-${String(month).padStart(2, "0")}-01`;
+  const next = new Date(Date.UTC(Number(year), Number(month), 1));
+  const to = next.toISOString().slice(0, 10);
+  const { rows } = await pool.query(
+    `SELECT session_date, lane, pb_window, entry_price, pnl, counted
+     FROM zerodte_trades
+     WHERE symbol = $1 AND code_version = $2
+       AND session_date >= $3 AND session_date < $4
+     ORDER BY session_date, et_minute`,
+    [symbol, version.code_version, from, to]);
+
+  return { codeVersion: version.code_version, sessionsCovered: version.sessions, days: calendarDaysFromRows(rows) };
+}
+
+export function calendarDaysFromRows(rows) {
+  const byDate = new Map();
+  const dayFor = (date) => {
+    if (!byDate.has(date)) byDate.set(date, {
+      date, pnl: 0, excludedPnl: 0, trades: 0, excludedTrades: 0,
+      tradePnls: [], excludedTradePnls: [], experimentalTradePnls: [], shenTradePnls: [],
+      experimentalPnl: 0, experimentalTrades: 0, experimentalWins: 0,
+      shenPnl: 0, shenTrades: 0, shenWins: 0, nearMissReasons: [],
+    });
+    return byDate.get(date);
+  };
+
+  for (const row of rows) {
+    if (row.entry_price == null || row.pnl == null) continue;
+    const day = dayFor(row.session_date);
+    const pnl = Number(row.pnl);
+    if (row.lane === "official" && row.counted) {
+      day.tradePnls.push(pnl); day.pnl += pnl; day.trades++;
+    } else if (row.lane === "official" && row.pb_window !== "in") {
+      day.excludedTradePnls.push(pnl); day.excludedPnl += pnl; day.excludedTrades++;
+    } else if (row.lane === "SHEN_CONVICTION") {
+      day.shenTradePnls.push(pnl); day.shenPnl += pnl; day.shenTrades++;
+      if (pnl > 0) day.shenWins++;
+    } else if (row.lane !== "official") {
+      day.experimentalTradePnls.push(pnl); day.experimentalPnl += pnl; day.experimentalTrades++;
+      if (pnl > 0) day.experimentalWins++;
+    }
+  }
+
+  const days = [...byDate.values()].map((day) => ({
+    ...day,
+    pnl: +day.pnl.toFixed(2), excludedPnl: +day.excludedPnl.toFixed(2),
+    experimentalPnl: +day.experimentalPnl.toFixed(2), shenPnl: +day.shenPnl.toFixed(2),
+    wins: day.tradePnls.filter((pnl) => pnl > 0).length,
+  }));
+  return days;
+}

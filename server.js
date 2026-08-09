@@ -26,10 +26,10 @@ import { runBacktest, getSessionChart } from "./server/priceBacktest.js";
 import { analyzeZeroDTESession } from "./server/zeroDTE.js";
 import { simulateAllFires } from "./server/zeroDTEOptionSim.js";
 import { buildSessionStory } from "./server/zeroDTEStory.js";
-import { simulateMonth } from "./server/zeroDTECalendar.js";
+import { simulateMonth, summarizeMonth } from "./server/zeroDTECalendar.js";
 import { analyzePerformance, compareVersions } from "./server/zeroDTEAnalysis.js";
 import { buildInfo } from "./server/buildInfo.js";
-import { coveredSessions } from "./server/zeroDTEStore.js";
+import { coveredSessions, loadSavedCalendarDays } from "./server/zeroDTEStore.js";
 import {
   createBacktestJob, getBacktestJob, getLatestBacktestJob, startBacktestJobWorker,
 } from "./server/zeroDTEBacktestJobs.js";
@@ -671,13 +671,31 @@ app.post("/api/0dte/month", async (req, res) => {
   }
 });
 
+// SAVED MONTH CALENDAR: read-only and fast. Opening the calendar must never
+// trigger market-data requests or a simulation; reruns are an explicit job.
+app.get("/api/0dte/calendar", async (req, res) => {
+  const { year, month, symbol = "SPY" } = req.query;
+  if (!year || !month) return res.status(400).json({ error: "year and month are required" });
+  try {
+    const saved = await loadSavedCalendarDays({ symbol: String(symbol).toUpperCase(), year: Number(year), month: Number(month) });
+    res.json(summarizeMonth({
+      symbol: String(symbol).toUpperCase(), year: Number(year), month: Number(month),
+      days: saved.days, saved: true, codeVersion: saved.codeVersion,
+      sessionsCovered: saved.sessionsCovered,
+    }));
+  } catch (err) {
+    console.error("[0dte:calendar] read failed:", err.message);
+    res.status(500).json({ error: err.message || String(err) });
+  }
+});
+
 // DURABLE MULTI-MONTH BACKTEST: returns immediately after persisting the job.
 // Railway owns execution from this point; the browser only polls status.
 app.post("/api/0dte/backtest-jobs", async (req, res) => {
   try {
-    const { symbol = "SPY", months = 24 } = req.body || {};
+    const { symbol = "SPY", months = 24, force = false } = req.body || {};
     if (Number(months) !== 24) return res.status(400).json({ error: "Only the bounded 24-month backtest is supported." });
-    const job = await createBacktestJob({ symbol: String(symbol).toUpperCase(), months: 24 });
+    const job = await createBacktestJob({ symbol: String(symbol).toUpperCase(), months: 24, force: force === true });
     res.status(job.status === "complete" ? 200 : 202).json(job);
   } catch (err) {
     console.error("[0dte:backfill] create failed:", err.message);
