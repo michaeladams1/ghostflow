@@ -24,6 +24,7 @@ Dependencies (`npm install`) are refreshed automatically by the startup update s
 ### Environment / secrets
 - `.env` is gitignored. Copy from `.env.example`; note `ALPACA_API_KEY` and `ALPACA_SECRET_KEY` are required by the 0DTE feature but are **missing** from `.env.example`.
 - Full end-to-end flows need external secrets: Analyses → `QUANTDATA_API_KEY` + `ANTHROPIC_API_KEY`/`OPENAI_API_KEY`/`XAI_API_KEY`; 0DTE → `ALPACA_API_KEY`/`ALPACA_SECRET_KEY`; Strategy Lab → `DATABENTO_API_KEY` + `ANTHROPIC_API_KEY`. Without them, the server, UI, and DB layer all run, but vendor-backed actions return auth/coverage errors.
+- **In the Cursor Cloud VM, `ALPACA_API_KEY`/`ALPACA_SECRET_KEY`, `QUANTDATA_API_KEY`, and `DATABENTO_API_KEY` are already injected as Cursor secrets** (env vars), so live 0DTE `analyze`/24-month backtest work out of the box. The AI keys (`ANTHROPIC`/`OPENAI`/`XAI`) and `DATABASE_URL` are **not** injected. So a local `.env` only needs to set `DATABASE_URL` (local Postgres) and can leave auth blank. **Do not set the vendor keys to blank in `.env`** — omit those lines so the injected secrets pass through. (`node --env-file` doesn't override an already-set env var, but a blank line is still confusing; omitting is unambiguous.)
 
 ### Railway logs (persistent, no login)
 - Cloud agents already have a project-scoped `RAILWAY_TOKEN` secret injected. That is enough for deploy/runtime log reads — do **not** run `railway login` or ask the user to re-auth.
