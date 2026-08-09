@@ -26,6 +26,15 @@ const APLUS_BASE = 15, A_TIER_MIN = 11;
 const CALL_COOLDOWN = 30, A_COOLDOWN = 15, EXT_COOLDOWN = 20, RSI_EXT_SWING = 50;
 const TREND_GUARD_LOOKBACK = 10, TREND_GUARD_ATR_MULT = 3.0;
 
+export function playbookTouchPolicy({ touchNumber, exhaustionMove }) {
+  const exhaustionException = touchNumber === 3 && exhaustionMove >= 4;
+  return {
+    eligible: touchNumber == null || touchNumber <= 2 || exhaustionException,
+    dropSizeTier: touchNumber === 2,
+    exhaustionException,
+  };
+}
+
 // THE PLAYBOOK'S SCHEDULE (Shen Lao, section 09 + Rule R5), in ET minutes:
 //   6:30 PST / 9:30 ET  observe only — "Zero trades"
 //   6:45 PST / 9:45 ET  "TRADE WINDOW OPENS"
@@ -269,6 +278,8 @@ export async function analyzeZeroDTESession({ symbol = "SPY", sessionDate }) {
   let putTaps = 0, callTaps = 0;
   let softPutToday = false, softCallToday = false, softPutIdx = -999, softCallIdx = -999;
   const touchedSlots = new Set();
+  const levelTouchCounts = new Map();
+  let activeLevelTouches = new Set();
   let dayHighSoFar = null, dayLowSoFar = null;
   let lastCallBar = -999, lastPutBar = -999, lastCallABar = -999, lastPutABar = -999, lastCallExtBar = -999, lastPutExtBar = -999;
   let prevCallAplus = false, prevPutAplus = false;
@@ -336,6 +347,40 @@ export async function analyzeZeroDTESession({ symbol = "SPY", sessionDate }) {
     const atOrb15Sup = orb15BrokeUp && touches(orb15High);
     const atOrb15Res = orb15BrokeDn && touches(orb15Low);
     const atVwap = touches(vwap);
+
+    // Preserve the actual level that made the setup eligible. `watch` is only
+    // the nearest whole-dollar display level; using it for PDH/PDL, PMH/PML,
+    // OR or VWAP signals can select the wrong option strike.
+    const callLevelCandidates = [
+      { active: atPdl, value: pdl, type: "PDL" },
+      { active: atLevel, value: watch, type: "WHOLE_DOLLAR" },
+      { active: atOrLow, value: orLow, type: "OR_LOW" },
+      { active: atPml, value: pml, type: "PML" },
+      { active: atOrb15Sup, value: orb15High, type: "ORB15_SUPPORT" },
+      { active: atVwap, value: vwap, type: "VWAP" },
+    ].filter((x) => x.active && x.value != null);
+    const putLevelCandidates = [
+      { active: atPdh, value: pdh, type: "PDH" },
+      { active: atLevel, value: watch, type: "WHOLE_DOLLAR" },
+      { active: atOrHigh, value: orHigh, type: "OR_HIGH" },
+      { active: atPmh, value: pmh, type: "PMH" },
+      { active: atOrb15Res, value: orb15Low, type: "ORB15_RESISTANCE" },
+      { active: atVwap, value: vwap, type: "VWAP" },
+    ].filter((x) => x.active && x.value != null);
+    const callTrigger = callLevelCandidates[0] || null;
+    const putTrigger = putLevelCandidates[0] || null;
+
+    // Count distinct arrivals, not consecutive bars sitting on a level. VWAP
+    // moves every bar, so its stable identity is its type; fixed levels also
+    // include price so independent whole-dollar levels remain separate.
+    const touchKey = (x) => x.type === "VWAP" ? "VWAP" : `${x.type}:${Number(x.value).toFixed(4)}`;
+    const currentLevelTouches = new Set([...callLevelCandidates, ...putLevelCandidates].map(touchKey));
+    for (const key of currentLevelTouches) {
+      if (!activeLevelTouches.has(key)) levelTouchCounts.set(key, (levelTouchCounts.get(key) || 0) + 1);
+    }
+    activeLevelTouches = currentLevelTouches;
+    const callTouchNumber = callTrigger ? (levelTouchCounts.get(touchKey(callTrigger)) || 1) : null;
+    const putTouchNumber = putTrigger ? (levelTouchCounts.get(touchKey(putTrigger)) || 1) : null;
 
     const callCtxLv = atOrLow || atPml || atOrb15Sup || atVwap;
     const putCtxLv = atOrHigh || atPmh || atOrb15Res || atVwap;
@@ -413,8 +458,10 @@ export async function analyzeZeroDTESession({ symbol = "SPY", sessionDate }) {
     const dayProgress = dailyAtr14 ? dayRangeSoFar / dailyAtr14 : 0;
     if (dayProgress >= 0.75) regimeAdj += 1;
 
-    let callPts = Math.max(0, callLv + callRsiSwg + callConfirm + callTapSoft + mtfCallBonus + regimeAdj);
-    let putPts = Math.max(0, putLv + putRsiSwg + putConfirm + putTapSoft + mtfPutBonus + regimeAdj);
+    // The Pine script advertises a 20-point scale even though the category
+    // maxima sum to 21. Cap the replay so `/20` remains truthful.
+    let callPts = Math.min(20, Math.max(0, callLv + callRsiSwg + callConfirm + callTapSoft + mtfCallBonus + regimeAdj));
+    let putPts = Math.min(20, Math.max(0, putLv + putRsiSwg + putConfirm + putTapSoft + mtfPutBonus + regimeAdj));
 
     const strongTrend = adxV != null && adxV >= ADX_STRONG;
     const aplusThresh = APLUS_BASE + (strongTrend ? 2 : 0);
@@ -440,6 +487,16 @@ export async function analyzeZeroDTESession({ symbol = "SPY", sessionDate }) {
     const callA = callElig && callPts >= A_TIER_MIN && callPts < aplusThresh && !strongDnGuard;
     const putA = putElig && putPts >= A_TIER_MIN && putPts < aplusThresh && !strongUpGuard;
 
+    // Playbook touch rule: first touch is normal, second touch drops one size
+    // tier, third touch is skipped unless a $4+ 30-minute exhaustion move ran
+    // into the level. Fourth and later touches are always skipped.
+    const callTouchPolicy = playbookTouchPolicy({ touchNumber: callTouchNumber, exhaustionMove: callTrigger == null ? 0 : recentHigh30 - callTrigger.value });
+    const putTouchPolicy = playbookTouchPolicy({ touchNumber: putTouchNumber, exhaustionMove: putTrigger == null ? 0 : putTrigger.value - recentLow30 });
+    const callExhaustionException = callTouchPolicy.exhaustionException;
+    const putExhaustionException = putTouchPolicy.exhaustionException;
+    const callTouchEligible = callTouchPolicy.eligible;
+    const putTouchEligible = putTouchPolicy.eligible;
+
     let firstTouch = false;
     if (atLevel) {
       const slot = watch;
@@ -450,36 +507,41 @@ export async function analyzeZeroDTESession({ symbol = "SPY", sessionDate }) {
     const callACooled = (i - lastCallABar) >= A_COOLDOWN, putACooled = (i - lastPutABar) >= A_COOLDOWN;
     const callExtCooled = (i - lastCallExtBar) >= EXT_COOLDOWN, putExtCooled = (i - lastPutExtBar) >= EXT_COOLDOWN;
 
-    const fireCallAp = callAplus && callCooled && (firstTouch || atOrLow || atPdl || atPml || atOrb15Sup || atVwap) && !prevCallAplus;
-    const firePutAp = putAplus && putCooled && (firstTouch || atOrHigh || atPdh || atPmh || atOrb15Res || atVwap) && !prevPutAplus;
+    const fireCallAp = callAplus && callTouchEligible && callCooled && (firstTouch || callTouchNumber === 2 || callExhaustionException || atOrLow || atPdl || atPml || atOrb15Sup || atVwap) && !prevCallAplus;
+    const firePutAp = putAplus && putTouchEligible && putCooled && (firstTouch || putTouchNumber === 2 || putExhaustionException || atOrHigh || atPdh || atPmh || atOrb15Res || atVwap) && !prevPutAplus;
     // EDGE TRIGGERS. Pine fires these with `and not <cond>[1]` — only on the
     // bar the condition FIRST becomes true. Without that, a condition that
     // stays true for 40 bars re-fires every time its cooldown lapses, which
     // inflated the signal count well beyond what the live tool shows.
-    const fireCallA = callA && callACooled && !prevCallA;
-    const firePutA = putA && putACooled && !prevPutA;
+    const fireCallA = callA && callTouchEligible && callACooled && !prevCallA;
+    const firePutA = putA && putTouchEligible && putACooled && !prevPutA;
     const fireCallExt = callRsiExtElig && callExtCooled && !prevCallExt;
     const firePutExt = putRsiExtElig && putExtCooled && !prevPutExt;
 
     const suggestedStop = atrV != null ? +(atrV * 1.8).toFixed(2) : null;
-    const sizeFor = (pts) => pts >= aplusThresh + 3 ? "MAX $2000" : pts >= aplusThresh + 1 ? "SIZE UP $1500" : pts >= aplusThresh ? "FULL $1000" : "HALF $500";
+    const sizeFor = (pts, touchNumber) => {
+      const tiers = ["HALF $500", "FULL $1000", "SIZE UP $1500", "MAX $2000"];
+      let idx = pts >= aplusThresh + 3 ? 3 : pts >= aplusThresh + 1 ? 2 : pts >= aplusThresh ? 1 : 0;
+      if (touchNumber === 2) idx = Math.max(0, idx - 1);
+      return tiers[idx];
+    };
     // Where this minute sits in the playbook's schedule.
     const pbWindow = minutes < PB_OPEN_MIN ? "before" : minutes < PB_CLOSE_MIN ? "in" : "after";
 
     if (fireCallAp) {
       lastCallBar = i;
-      fires.push({ window: pbWindow, tier: "A+", direction: "CALL", idx: i, ts: bar.ts, clock: clockLabel(minutes), level: watch, price: bar.close,
-        points: callPts, rsi: r != null ? Math.round(r) : null, swing: Math.round(callSwing), size: sizeFor(callPts),
+      fires.push({ window: pbWindow, tier: "A+", direction: "CALL", idx: i, ts: bar.ts, clock: clockLabel(minutes), level: callTrigger.value, levelType: callTrigger.type, price: bar.close,
+        points: callPts, rsi: r != null ? Math.round(r) : null, swing: Math.round(callSwing), size: sizeFor(callPts, callTouchNumber), touchNumber: callTouchNumber, exhaustionException: callExhaustionException,
         volPts: callVolPts, speedPts: callSpeedPts, wickPts: callWickPts, mtfAligned: mtfCallConf, suggestedStop });
     }
     if (firePutAp) {
       lastPutBar = i;
-      fires.push({ window: pbWindow, tier: "A+", direction: "PUT", idx: i, ts: bar.ts, clock: clockLabel(minutes), level: watch, price: bar.close,
-        points: putPts, rsi: r != null ? Math.round(r) : null, swing: Math.round(putSwing), size: sizeFor(putPts),
+      fires.push({ window: pbWindow, tier: "A+", direction: "PUT", idx: i, ts: bar.ts, clock: clockLabel(minutes), level: putTrigger.value, levelType: putTrigger.type, price: bar.close,
+        points: putPts, rsi: r != null ? Math.round(r) : null, swing: Math.round(putSwing), size: sizeFor(putPts, putTouchNumber), touchNumber: putTouchNumber, exhaustionException: putExhaustionException,
         volPts: putVolPts, speedPts: putSpeedPts, wickPts: putWickPts, mtfAligned: mtfPutConf, suggestedStop });
     }
-    if (fireCallA) { lastCallABar = i; fires.push({ window: pbWindow, tier: "A", direction: "CALL", idx: i, ts: bar.ts, clock: clockLabel(minutes), level: watch, price: bar.close, points: callPts, rsi: r != null ? Math.round(r) : null, suggestedStop }); }
-    if (firePutA) { lastPutABar = i; fires.push({ window: pbWindow, tier: "A", direction: "PUT", idx: i, ts: bar.ts, clock: clockLabel(minutes), level: watch, price: bar.close, points: putPts, rsi: r != null ? Math.round(r) : null, suggestedStop }); }
+    if (fireCallA) { lastCallABar = i; fires.push({ window: pbWindow, tier: "A", direction: "CALL", idx: i, ts: bar.ts, clock: clockLabel(minutes), level: callTrigger.value, levelType: callTrigger.type, price: bar.close, points: callPts, rsi: r != null ? Math.round(r) : null, size: callTouchPolicy.dropSizeTier ? "HALF $500" : "FULL $1000", touchNumber: callTouchNumber, exhaustionException: callExhaustionException, suggestedStop }); }
+    if (firePutA) { lastPutABar = i; fires.push({ window: pbWindow, tier: "A", direction: "PUT", idx: i, ts: bar.ts, clock: clockLabel(minutes), level: putTrigger.value, levelType: putTrigger.type, price: bar.close, points: putPts, rsi: r != null ? Math.round(r) : null, size: putTouchPolicy.dropSizeTier ? "HALF $500" : "FULL $1000", touchNumber: putTouchNumber, exhaustionException: putExhaustionException, suggestedStop }); }
     if (fireCallExt) { lastCallExtBar = i; fires.push({ window: pbWindow, tier: "RSI Extreme", direction: "CALL", idx: i, ts: bar.ts, clock: clockLabel(minutes), price: bar.close, rsi: r != null ? Math.round(r) : null, swing: Math.round(callSwing), suggestedStop }); }
     if (firePutExt) { lastPutExtBar = i; fires.push({ window: pbWindow, tier: "RSI Extreme", direction: "PUT", idx: i, ts: bar.ts, clock: clockLabel(minutes), price: bar.close, rsi: r != null ? Math.round(r) : null, swing: Math.round(putSwing), suggestedStop }); }
 
@@ -504,5 +566,5 @@ export async function analyzeZeroDTESession({ symbol = "SPY", sessionDate }) {
 // 1-strike-OTM contract per the Shen Lao playbook's strike-selection rule:
 // puts = 1 whole-dollar strike BELOW the level, calls = 1 strike ABOVE.
 export function pickOtmStrike({ level, direction }) {
-  return direction === "PUT" ? level - 1 : level + 1;
+  return direction === "PUT" ? Math.ceil(level) - 1 : Math.floor(level) + 1;
 }
