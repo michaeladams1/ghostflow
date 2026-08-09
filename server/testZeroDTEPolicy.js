@@ -3,6 +3,7 @@ import {
   classifyResearchCandidate, classifyShenConviction, isFrontierFire,
   pickOtmStrike, playbookTouchPolicy,
 } from "./zeroDTE.js";
+import { frontierV3FlowVeto, passesFrontierV3 } from "./frontierV3.js";
 import { walkBracketBars } from "./zeroDTEOptionSim.js";
 
 const ts = (clock) => `2026-08-07T${clock}:00-04:00`;
@@ -43,15 +44,27 @@ assert.equal(isFrontierFire(frontierBase), true);
 assert.equal(isFrontierFire({ ...frontierBase, direction: "CALL", levelType: "PDL" }), false);
 assert.equal(isFrontierFire({ ...frontierBase, tier: "A+" }), false);
 assert.equal(isFrontierFire({ ...frontierBase, tier: "Extended A+" }), false);
-assert.equal(isFrontierFire({ ...frontierBase, points: 11 }), false);
-assert.equal(isFrontierFire({ ...frontierBase, points: 15 }), false);
+assert.equal(isFrontierFire({ ...frontierBase, points: 11 }), true); // v3 soft band
+assert.equal(isFrontierFire({ ...frontierBase, points: 15 }), true);
+assert.equal(isFrontierFire({ ...frontierBase, points: 10 }), false);
+assert.equal(isFrontierFire({ ...frontierBase, points: 16 }), false);
 assert.equal(isFrontierFire({ ...frontierBase, etMinute: 595 }), false);
-assert.equal(isFrontierFire({ ...frontierBase, etMinute: 615 }), true); // v2: no 10:15 cutoff
+assert.equal(isFrontierFire({ ...frontierBase, etMinute: 615 }), true);
 assert.equal(isFrontierFire({ ...frontierBase, etMinute: 670 }), true);
 assert.equal(isFrontierFire({ ...frontierBase, entryPrice: 0.49 }), false);
 // All segments eligible — Shen / research / outside pass the same feature gates.
 assert.equal(isFrontierFire({ ...frontierBase, tier: "Shen FULL 3/3" }), true);
 assert.equal(isFrontierFire({ ...frontierBase, tier: "Research 13-14" }), true);
+assert.equal(frontierV3FlowVeto("CALL", -0.20), true);
+assert.equal(frontierV3FlowVeto("PUT", 0.20), true);
+assert.equal(frontierV3FlowVeto("CALL", 0.20), false);
+assert.equal(frontierV3FlowVeto("PUT", -0.20), false);
+assert.equal(frontierV3FlowVeto("CALL", null), false);
+// frontierBase is PUT — opposing early flow is call-heavy (positive imbalance).
+assert.equal(passesFrontierV3({ ...frontierBase, flowImbalance: 0.20 }), false);
+assert.equal(passesFrontierV3({ ...frontierBase, flowImbalance: -0.20 }), true);
+assert.equal(passesFrontierV3({ ...frontierBase, flowImbalance: 0.05 }), true);
+assert.equal(passesFrontierV3({ ...frontierBase, direction: "CALL", flowImbalance: -0.20 }), false);
 
 const bars = [
   { ts: ts("11:13"), open: 1.00, high: 1.01, low: 0.99, close: 1.00 },
