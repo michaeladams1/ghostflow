@@ -1,15 +1,14 @@
-// FRONTIER v4 — live paper lane targeting high session coverage.
+// FRONTIER v4.1 — live paper lane targeting ~75% session coverage.
 //
 // Eligibility (all segments): not CALL@PDL, not A+/Extended A+, et_minute >= 585
-// (9:45 ET), entry_price >= $0.50.
+// (9:45 ET), entry_price > 0 (no $0.50 floor — that starved coverage).
 // Selection: keep the single highest-points eligible fire per session day
 // (ties → earlier et_minute). No QuantData veto — coverage comes from the
 // wide net + 1-trade/day score pick.
 //
-// Evidence: server/frontierCoverageSearch.js
-// Champion id: any_from945__cap1_best
-//   ~69% day coverage, holdout +$2081 vs v2 +$991 / v3.1 +$2718,
-//   full +$4012 (best full-sample among profitable high-coverage books).
+// Evidence: server/frontierCoverageSearch.js + v4.1 premium-floor sweep
+// Champion id: any_from945_anyprem__cap1_best
+//   ~75.4% day coverage, holdout +$2082 vs v2 +$991, full +$4790.
 
 import { QD_ENDPOINTS } from "./quantDataRegistry.js";
 import { fetchEndpointCached } from "./quantDataClient.js";
@@ -17,12 +16,12 @@ import { fetchEndpointCached } from "./quantDataClient.js";
 export const FRONTIER_V3_MIN_MINUTE = 585; // 9:45 ET — playbook open
 export const FRONTIER_V3_MIN_POINTS = null; // no score floor (best-of-day picks quality)
 export const FRONTIER_V3_MAX_POINTS = null;
-export const FRONTIER_V3_MIN_ENTRY = 0.5;
-export const FRONTIER_V3_FLOW_VETO = null; // disabled for v4 coverage book
+export const FRONTIER_V3_MIN_ENTRY = 0; // any positive premium
+export const FRONTIER_V3_FLOW_VETO = null; // disabled for coverage book
 export const FRONTIER_V3_FLOW_BUCKETS = 30;
 export const FRONTIER_V3_REQUIRE_FIRST_TOUCH = false;
 export const FRONTIER_V3_ONE_PER_DAY = true;
-export const FRONTIER_V3_VERSION = "any_from945__cap1_best";
+export const FRONTIER_V3_VERSION = "any_from945_anyprem__cap1_best";
 
 /** Price-action eligibility only (before per-day selection). */
 export function isFrontierV3Fire({
@@ -34,7 +33,7 @@ export function isFrontierV3Fire({
   const minute = Number(etMinute);
   if (!Number.isFinite(minute) || minute < FRONTIER_V3_MIN_MINUTE) return false;
   const entry = Number(entryPrice);
-  if (!Number.isFinite(entry) || entry < FRONTIER_V3_MIN_ENTRY) return false;
+  if (!Number.isFinite(entry) || entry <= FRONTIER_V3_MIN_ENTRY) return false;
   return true;
 }
 
