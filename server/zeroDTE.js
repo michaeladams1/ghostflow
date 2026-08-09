@@ -64,14 +64,14 @@ export function classifyShenConviction({ minutes, levelType, touchNumber, exhaus
   return { checks, convictionCount, grade: convictionCount === 3 ? "FULL" : "STANDARD" };
 }
 
-// FRONTIER MODEL — paper-only selection across ALL 24-month segments
-// (playbook hours, outside hours, research lanes, Shen). Does not invent
-// signals; it keeps a filtered subset for comparison. Official P&L is never
-// changed. Dialed from the 89d991cddb31 all-segment analysis:
-//   drop CALL@PDL, drop A+/Extended A+, score 12–14, premium ≥ $0.50,
-//   and the 10:00–10:15 ET clock (the strongest single clock factor).
+// FRONTIER MODEL v2 (Option B) — paper-only sparse reference filter across
+// ALL 24-month segments (playbook, outside, research, Shen). Does not invent
+// signals; keeps a quality subset for comparison. Official P&L is unchanged.
+// Rules: drop CALL@PDL, drop A+/Extended A+, score 12–14, from 10:00 ET
+// (no 10:15 hard stop — that starved months), premium ≥ $0.50.
+// Frontier v3 (wide-net + QuantData day gate toward ~75% day coverage) is a
+// separate research track — see server/frontierV3Research.js.
 export const FRONTIER_MIN_MINUTE = 600; // 10:00 ET
-export const FRONTIER_MAX_MINUTE = 615; // exclusive — through 10:14
 export const FRONTIER_MIN_POINTS = 12;
 export const FRONTIER_MAX_POINTS = 14;
 export const FRONTIER_MIN_ENTRY = 0.5;
@@ -84,7 +84,7 @@ export function isFrontierFire({
   const pts = Number(points);
   if (!Number.isFinite(pts) || pts < FRONTIER_MIN_POINTS || pts > FRONTIER_MAX_POINTS) return false;
   const minute = Number(etMinute);
-  if (!Number.isFinite(minute) || minute < FRONTIER_MIN_MINUTE || minute >= FRONTIER_MAX_MINUTE) return false;
+  if (!Number.isFinite(minute) || minute < FRONTIER_MIN_MINUTE) return false;
   const entry = Number(entryPrice);
   if (!Number.isFinite(entry) || entry < FRONTIER_MIN_ENTRY) return false;
   return true;
