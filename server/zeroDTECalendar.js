@@ -94,20 +94,7 @@ async function simulateDay(symbol, date) {
   return summary;
 }
 
-export async function simulateMonth({ symbol = "SPY", year, month }) {
-  const todayIso = new Date().toISOString().slice(0, 10);
-  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
-  const days = [];
-
-  for (let d = 1; d <= daysInMonth; d++) {
-    const date = `${year}-${String(month).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
-    const dow = new Date(date + "T12:00:00Z").getUTCDay();
-    if (dow === 0 || dow === 6) continue;       // weekends
-    if (date >= todayIso) continue;             // only completed sessions
-    console.log(`[0dte:month] ${date}...`);
-    days.push(await simulateDay(symbol, date));
-  }
-
+export function summarizeMonth({ symbol = "SPY", year, month, days, saved = false, codeVersion = null, sessionsCovered = null }) {
   const traded = days.filter((x) => (x.trades || 0) > 0);
   const allTradePnls = traded.flatMap((x) => x.tradePnls || []);
   const totalTrades = allTradePnls.length;
@@ -125,7 +112,7 @@ export async function simulateMonth({ symbol = "SPY", year, month }) {
   for (const reason of days.flatMap((x) => x.nearMissReasons || [])) nearMissReasons[reason] = (nearMissReasons[reason] || 0) + 1;
 
   return {
-    symbol, year, month, days,
+    symbol, year, month, days, saved, codeVersion, sessionsCovered,
     totals: {
       pnl, excludedPnl, totalTrades, wins, losses: totalTrades - wins,
       winRate: totalTrades ? +((wins / totalTrades) * 100).toFixed(1) : null,
@@ -148,4 +135,20 @@ export async function simulateMonth({ symbol = "SPY", year, month }) {
       nearMissReasons,
     },
   };
+}
+
+export async function simulateMonth({ symbol = "SPY", year, month }) {
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const days = [];
+
+  for (let d = 1; d <= daysInMonth; d++) {
+    const date = `${year}-${String(month).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+    const dow = new Date(date + "T12:00:00Z").getUTCDay();
+    if (dow === 0 || dow === 6) continue;       // weekends
+    if (date >= todayIso) continue;             // only completed sessions
+    console.log(`[0dte:month] ${date}...`);
+    days.push(await simulateDay(symbol, date));
+  }
+  return summarizeMonth({ symbol, year, month, days });
 }

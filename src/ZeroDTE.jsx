@@ -558,11 +558,8 @@ function CalendarView({ onBack }) {
   const [err, setErr] = useState(null);
   const [data, setData] = useState(null);
 
-  async function requestMonth(year, month) {
-    const res = await fetch("/api/0dte/month", {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ symbol: "SPY", year, month }),
-    });
+  async function requestSavedMonth(year, month) {
+    const res = await fetch(`/api/0dte/calendar?symbol=SPY&year=${year}&month=${month}`);
     const json = await res.json();
     if (!res.ok) throw new Error(json.error || "Request failed");
     return json;
@@ -570,7 +567,7 @@ function CalendarView({ onBack }) {
 
   async function load(y, m) {
     setLoading(true); setErr(null);
-    try { setData(await requestMonth(y, m)); }
+    try { setData(await requestSavedMonth(y, m)); }
     catch (e) { setErr(e.message); }
     finally { setLoading(false); }
   }
@@ -580,7 +577,7 @@ function CalendarView({ onBack }) {
     try {
       const res = await fetch("/api/0dte/backtest-jobs", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ symbol: "SPY", months: 24 }),
+        body: JSON.stringify({ symbol: "SPY", months: 24, force: true }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Could not start backtest");
@@ -609,7 +606,7 @@ function CalendarView({ onBack }) {
         if (!res.ok) return;
         const job = await res.json();
         setBulkRun(job);
-        if (job.status === "complete") setData(await requestMonth(ym.year, ym.month));
+        if (job.status === "complete") setData(await requestSavedMonth(ym.year, ym.month));
         if (job.status === "failed") setErr(`24-month backtest stopped: ${job.error}. Click retry to resume.`);
       } catch { /* Railway continues even if this browser misses a poll. */ }
     }, 3000);
@@ -664,9 +661,9 @@ function CalendarView({ onBack }) {
             {bulkRun?.status === "queued" ? "Queued on Railway"
               : bulkRun?.status === "running" && bulkRun.current
                 ? `${bulkRun.completedMonths}/${bulkRun.totalMonths} · ${MONTH_NAMES[bulkRun.current.month - 1]} ${bulkRun.current.year}`
-                : bulkRun?.status === "complete" ? "24 months complete"
+                : bulkRun?.status === "complete" ? "Rerun 24-month backtest"
                 : bulkRun?.status === "failed" ? "Retry 24-month backtest"
-                : "Backtest last 24 months"}
+                : "Rerun 24-month backtest"}
           </button>
         </div>
       </div>
@@ -710,7 +707,10 @@ function CalendarView({ onBack }) {
 
       <div className={`${card} rounded-xl px-4 py-3 mb-4 flex items-center justify-center gap-6`}>
         <button onClick={() => nav(-1)} className="p-1.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800 text-lg">‹</button>
-        <div className="font-semibold text-zinc-900 dark:text-zinc-100">{MONTH_NAMES[ym.month - 1]} {ym.year}</div>
+        <div className="text-center">
+          <div className="font-semibold text-zinc-900 dark:text-zinc-100">{MONTH_NAMES[ym.month - 1]} {ym.year}</div>
+          {data?.codeVersion && <div className={`text-[10px] ${faint}`}>Saved calendar · version {data.codeVersion} · {data.sessionsCovered} sessions</div>}
+        </div>
         <button onClick={() => nav(1)} className="p-1.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800 text-lg">›</button>
       </div>
 
@@ -722,7 +722,7 @@ function CalendarView({ onBack }) {
       {loading && (
         <div className={`flex items-center gap-2 text-sm px-4 py-10 justify-center ${faint}`}>
           <Loader2 size={16} className="animate-spin" />
-          Simulating every session in {MONTH_NAMES[ym.month - 1]}… first run takes a few minutes, then it's cached.
+          Loading saved {MONTH_NAMES[ym.month - 1]} calendar…
         </div>
       )}
 

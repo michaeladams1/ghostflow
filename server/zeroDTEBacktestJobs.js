@@ -65,7 +65,7 @@ export async function getLatestBacktestJob({ symbol = "SPY", months = 24 } = {})
   return publicJob(rows[0]);
 }
 
-export async function createBacktestJob({ symbol = "SPY", months = 24 } = {}) {
+export async function createBacktestJob({ symbol = "SPY", months = 24, force = false } = {}) {
   await ensureSchema();
   const build = buildInfo();
   const now = new Date();
@@ -91,7 +91,7 @@ export async function createBacktestJob({ symbol = "SPY", months = 24 } = {}) {
         `UPDATE zerodte_backtest_jobs SET status = 'queued', error = NULL,
            worker_id = NULL, lease_until = NULL, updated_at = now()
          WHERE id = $1 RETURNING *`, [row.id]));
-    } else if (!row) {
+    } else if (!row || (row.status === "complete" && force)) {
       ({ rows: [row] } = await client.query(
         `INSERT INTO zerodte_backtest_jobs
           (id, symbol, months, start_year, start_month, end_year, end_month,
