@@ -7,10 +7,20 @@
 import { analyzeZeroDTESession } from "./zeroDTE.js";
 import { simulateAllFires } from "./zeroDTEOptionSim.js";
 import { buildSessionStory } from "./zeroDTEStory.js";
+import { saveSessionTrades } from "./zeroDTEStore.js";
 
 const dayCache = new Map(); // "SPY:2026-08-07" -> summary
 
 const sizeToDollars = (s) => Number(String(s || "").replace(/[^0-9.]/g, "")) || 1000;
+function etMinuteOf(ts) {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour12: false, hour: "2-digit", minute: "2-digit" }).formatToParts(new Date(ts));
+  const m = {}; for (const p of parts) m[p.type] = p.value;
+  return Number(m.hour) * 60 + Number(m.minute);
+}
+function contractsFor(f) {
+  const dollars = sizeToDollars(f.size);
+  return Math.max(1, Math.floor(dollars / (f.trade.entryPrice * 100)));
+}
 function pnlOf(f) {
   const dollars = sizeToDollars(f.size);
   const contracts = Math.max(1, Math.floor(dollars / (f.trade.entryPrice * 100)));
@@ -48,6 +58,25 @@ async function simulateDay(symbol, date) {
         experimentalTradePnls: experimental.map(pnlOf),
         nearMissReasons: (s.nearMisses || []).flatMap((x) => x.reasons),
       };
+
+      // PERSIST. Every fire — official and research, traded or not — is
+      // written with the features that produced it. This is what makes the
+      // strategy analyzable later instead of recomputed and forgotten.
+      const toRow = (f, lane) => ({
+        ...f, lane,
+        etMinute: f.ts ? etMinuteOf(f.ts) : null,
+        contracts: f.trade?.ok ? contractsFor(f) : null,
+        pnl: f.trade?.ok ? pnlOf(f) : null,
+        counted: lane === "official" && f.window === "in" && !!f.trade?.ok,
+      });
+      try {
+        await saveSessionTrades({ symbol, sessionDate: date, rows: [
+          ...fires.map((f) => toRow(f, "official")),
+          ...experiments.map((f) => toRow(f, f.lane || "research")),
+        ] });
+      } catch (err) {
+        console.error(`[0dte:store] ${date} persist failed:`, err.message);
+      }
     }
   } catch (err) {
     summary = { date, error: err.message };

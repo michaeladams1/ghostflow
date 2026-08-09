@@ -63,6 +63,46 @@ export function ensureSchema() {
         doc JSONB NOT NULL,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
       );
+      -- 0DTE SIMULATED TRADES. Every signal the replay produces, with the
+      -- FULL feature set that generated it and the outcome it produced. This
+      -- is the analysis substrate: without it, each calendar view recomputes
+      -- from Alpaca and nothing is ever learnable across sessions.
+      --
+      -- One row per (session_date, fire) — re-running a day REPLACES its rows
+      -- so a logic change re-simulates cleanly instead of double-counting.
+      CREATE TABLE IF NOT EXISTS zerodte_trades (
+        id TEXT PRIMARY KEY,
+        symbol TEXT NOT NULL,
+        session_date TEXT NOT NULL,
+        fired_at TIMESTAMPTZ,
+        clock TEXT,
+        et_minute INT,
+        pb_window TEXT,           -- before | in | after (playbook hours)
+        lane TEXT,                -- official | research lane name
+        tier TEXT,                -- A+ | A | RSI Extreme | Research...
+        direction TEXT,           -- CALL | PUT
+        level_type TEXT,          -- WHOLE_DOLLAR | PDH | VWAP | ...
+        level NUMERIC,
+        touch_number INT,
+        points INT,
+        rsi INT,
+        swing INT,
+        vol_pts INT, speed_pts INT, wick_pts INT,
+        mtf_aligned BOOLEAN,
+        contract TEXT,
+        strike NUMERIC,
+        entry_price NUMERIC, exit_price NUMERIC,
+        entry_clock TEXT, exit_clock TEXT, hold_minutes INT,
+        exit_reason TEXT,
+        pct_return NUMERIC,
+        contracts INT,
+        pnl NUMERIC,
+        counted BOOLEAN,          -- did it count toward playbook-hours P&L
+        features JSONB NOT NULL,  -- everything else, for later analysis
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS zerodte_by_session ON zerodte_trades (symbol, session_date);
+      CREATE INDEX IF NOT EXISTS zerodte_by_lane ON zerodte_trades (lane, counted);
     `).catch((err) => {
       schemaReady = null; // allow retry on next call if this failed
       throw err;

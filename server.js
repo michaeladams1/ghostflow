@@ -27,6 +27,8 @@ import { analyzeZeroDTESession } from "./server/zeroDTE.js";
 import { simulateAllFires } from "./server/zeroDTEOptionSim.js";
 import { buildSessionStory } from "./server/zeroDTEStory.js";
 import { simulateMonth } from "./server/zeroDTECalendar.js";
+import { analyzePerformance } from "./server/zeroDTEAnalysis.js";
+import { coveredSessions } from "./server/zeroDTEStore.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DIST_DIR = path.join(__dirname, "dist");
@@ -660,6 +662,23 @@ app.post("/api/0dte/month", async (req, res) => {
     res.json(result);
   } catch (err) {
     console.error("[0dte:month] FAILED:", err);
+    res.status(500).json({ error: err.message || String(err) });
+  }
+});
+
+// PERFORMANCE ANALYSIS: slices every persisted 0DTE trade by feature so the
+// strategy can be judged on evidence. Read-only over the DB — no simulation,
+// so it's instant once months have been run.
+app.get("/api/0dte/performance", async (req, res) => {
+  try {
+    const { from, to, lane = "official", symbol = "SPY" } = req.query;
+    const countedOnly = req.query.countedOnly !== "false";
+    res.json({
+      ...(await analyzePerformance({ symbol, from, to, lane, countedOnly })),
+      sessionsCovered: (await coveredSessions({ symbol })).length,
+    });
+  } catch (err) {
+    console.error("[0dte:performance] FAILED:", err);
     res.status(500).json({ error: err.message || String(err) });
   }
 });
