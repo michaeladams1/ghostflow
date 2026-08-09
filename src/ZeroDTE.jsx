@@ -522,7 +522,7 @@ const CALENDAR_LANES = {
   outside: { label: "Outside hours", pnlKey: "excludedPnl", tradesKey: "excludedTradePnls" },
   research: { label: "Research lanes", pnlKey: "experimentalPnl", tradesKey: "experimentalTradePnls" },
   shen: { label: "Shen conviction", pnlKey: "shenPnl", tradesKey: "shenTradePnls" },
-  frontier: { label: "Frontier model", pnlKey: "frontierPnl", tradesKey: "frontierTradePnls" },
+  frontier: { label: "Frontier v2", pnlKey: "frontierPnl", tradesKey: "frontierTradePnls" },
 };
 
 function laneDay(day, lane) {
