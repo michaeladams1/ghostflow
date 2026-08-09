@@ -104,15 +104,17 @@ async function simulateDay(symbol, date) {
         shenWins: shen.filter((f) => f.trade.pctReturn > 0).length,
         shenTradePnls: shen.map(pnlOf),
         frontierPnl: +frontier.reduce((sum, f) => {
-          const p = frontierPaperPnl(f.trade?.entryPrice, f.trade?.exitPrice);
+          const p = f.trade?.frontierPnl ?? frontierPaperPnl(f.trade?.entryPrice, f.trade?.frontierExitPrice ?? f.trade?.exitPrice);
           return sum + (p ?? 0);
         }, 0).toFixed(2),
         frontierTrades: frontier.length,
         frontierWins: frontier.filter((f) => {
-          const p = frontierPaperPnl(f.trade?.entryPrice, f.trade?.exitPrice);
+          const p = f.trade?.frontierPnl ?? frontierPaperPnl(f.trade?.entryPrice, f.trade?.frontierExitPrice ?? f.trade?.exitPrice);
           return p != null && p > 0;
         }).length,
-        frontierTradePnls: frontier.map((f) => frontierPaperPnl(f.trade?.entryPrice, f.trade?.exitPrice) ?? 0),
+        frontierTradePnls: frontier.map((f) => (
+          f.trade?.frontierPnl ?? frontierPaperPnl(f.trade?.entryPrice, f.trade?.frontierExitPrice ?? f.trade?.exitPrice) ?? 0
+        )),
         nearMissReasons: (s.nearMisses || []).flatMap((x) => x.reasons),
       };
 

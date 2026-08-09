@@ -17,6 +17,10 @@
 
 import { fetchAlpacaOptionBars, occSymbol } from "./alpacaClient.js";
 import { pickOtmStrike } from "./zeroDTE.js";
+import {
+  FRONTIER_HARD_STOP_MIN, FRONTIER_PAPER_DOLLARS, FRONTIER_SL_MULT, FRONTIER_TP_MULT,
+  frontierContracts, frontierPaperPnl,
+} from "./frontierV3.js";
 
 const TP_MULT = 1.20;   // +20% target — the playbook's bracket TP
 const SL_MULT = 0.875;  // -12.5% stop — the playbook's bracket SL
@@ -32,18 +36,28 @@ function minToClock(min) {
   return `${((h + 11) % 12) + 1}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"} ET`;
 }
 
-export function walkBracketBars({ bars, entryIdx, tpPrice, slPrice, enforceHardStop = true, cutoffMin = HARD_STOP_MIN }) {
+export function walkBracketBars({
+  bars, entryIdx, tpPrice, slPrice, enforceHardStop = true, cutoffMin = HARD_STOP_MIN,
+  tpLabel = "+20%", slLabel = "-12.5%",
+  hardStopReason = null,
+} = {}) {
   for (let i = entryIdx + 1; i < bars.length; i++) {
     const b = bars[i];
     if (enforceHardStop && etMinutes(b.ts) >= cutoffMin) {
-      return { exitBar: b, exitPrice: b.open ?? b.close, exitReason: cutoffMin === HARD_STOP_MIN ? "Playbook hard stop at 11:15 AM ET" : "Research window ended at 12:30 PM ET" };
+      const reason = hardStopReason
+        || (cutoffMin === HARD_STOP_MIN
+          ? "Playbook hard stop at 11:15 AM ET"
+          : cutoffMin === 750
+            ? "Research window ended at 12:30 PM ET"
+            : `Session cutoff at ${minToClock(cutoffMin)}`);
+      return { exitBar: b, exitPrice: b.open ?? b.close, exitReason: reason };
     }
     const hitTp = b.high >= tpPrice, hitSl = b.low <= slPrice;
     if (hitTp && hitSl) {
-      return { exitBar: b, exitPrice: slPrice, exitReason: "SL hit (-12.5%) — TP and SL both touched in the same minute, stop assumed first" };
+      return { exitBar: b, exitPrice: slPrice, exitReason: `SL hit (${slLabel}) — TP and SL both touched in the same minute, stop assumed first` };
     }
-    if (hitTp) return { exitBar: b, exitPrice: tpPrice, exitReason: "TP hit (+20%)" };
-    if (hitSl) return { exitBar: b, exitPrice: slPrice, exitReason: "SL hit (-12.5%)" };
+    if (hitTp) return { exitBar: b, exitPrice: tpPrice, exitReason: `TP hit (${tpLabel})` };
+    if (hitSl) return { exitBar: b, exitPrice: slPrice, exitReason: `SL hit (${slLabel})` };
   }
   const exitBar = bars[bars.length - 1];
   return { exitBar, exitPrice: exitBar.close, exitReason: "Neither TP nor SL hit — held to the last trade of the day" };
@@ -84,6 +98,25 @@ export async function simulateBracketTrade({ ticker = "SPY", sessionDate, fire }
     bars, entryIdx, tpPrice, slPrice, cutoffMin, enforceHardStop: fireMin < cutoffMin,
   });
 
+  // Frontier-only exit on the SAME bars: runner / -50%, no 11:15 hard stop.
+  // Official P&L above is unchanged.
+  const frontierTp = +(entryPrice * FRONTIER_TP_MULT).toFixed(2);
+  const frontierSl = +(entryPrice * FRONTIER_SL_MULT).toFixed(2);
+  const frontierWalk = walkBracketBars({
+    bars,
+    entryIdx,
+    tpPrice: frontierTp,
+    slPrice: frontierSl,
+    cutoffMin: FRONTIER_HARD_STOP_MIN,
+    enforceHardStop: fireMin < FRONTIER_HARD_STOP_MIN,
+    tpLabel: "+900% runner",
+    slLabel: "-50%",
+    hardStopReason: "Frontier session end",
+  });
+  const frontierExitPrice = +Number(frontierWalk.exitPrice).toFixed(2);
+  const frontierPctReturn = +(((frontierExitPrice - entryPrice) / entryPrice) * 100).toFixed(1);
+  const frontierPnl = frontierPaperPnl(entryPrice, frontierExitPrice, FRONTIER_PAPER_DOLLARS);
+
   const entryMin = etMinutes(entryBar.ts), exitMin = etMinutes(exitBar.ts);
   const pctReturn = +(((exitPrice - entryPrice) / entryPrice) * 100).toFixed(1);
 
@@ -95,6 +128,13 @@ export async function simulateBracketTrade({ ticker = "SPY", sessionDate, fire }
     entryClock: minToClock(entryMin), entryPrice: +entryPrice.toFixed(2), entryMin,
     exitClock: minToClock(exitMin), exitPrice: +exitPrice.toFixed(2), exitMin,
     tpPrice, slPrice, exitReason, pctReturn, holdMinutes: exitMin - entryMin,
+    frontierExitPrice,
+    frontierExitReason: frontierWalk.exitReason,
+    frontierPctReturn,
+    frontierPnl,
+    frontierContracts: frontierContracts(entryPrice, FRONTIER_PAPER_DOLLARS),
+    frontierTpPrice: frontierTp,
+    frontierSlPrice: frontierSl,
     series: bars.map((b) => {
       const m = etMinutes(b.ts);
       return { min: m, clock: minToClock(m), price: +b.close.toFixed(2), high: +b.high.toFixed(2), low: +b.low.toFixed(2) };

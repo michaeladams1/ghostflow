@@ -344,16 +344,16 @@ the experiment measures entry quality without inventing a dollar mapping for the
 "standard" versus "full" language. Results have their own fourth calendar box and are
 excluded from official and existing research totals.
 
-**Frontier v5 is the live paper lane** (maximize EV toward ~$250 avg holdout day).
-Eligibility: **first touch**, `et_minute >= 585`, `entry_price > 0`. Toxins dropped
-(A+ and CALL@PDL allowed). After same-setup dedupe, keep the highest-points fire
-per day. P&L is **recomputed at $8,000 paper** from stored entry/exit prices (not
-the source lane’s size string). No QuantData veto. Evidence: `touch1_from945_best__paper_8k`
-→ holdout avg day ~**$252**, day WR ~47%, coverage ~72%. **No 24-month re-sim
-required** for this change. Note: with the stored +20%/−12.5% bracket, ~$250/day
-is impossible at $1,000 tickets (full TP tops out near +$200); $8k paper is the
-lever. Wider TP/SL would need a new backtest `code_version`. Official / outside /
-research / Shen boxes are unchanged.
+**Frontier v6 is the live paper lane** ($1,000 max per trade, Frontier-only exits).
+Eligibility: **first touch**, `et_minute >= 585`, `entry_price > 0` (A+/CALL@PDL
+allowed). Best Edge Lens score/day after setup dedupe. **Exits abandon the playbook
++20%/−12.5% bracket**: runner target / **−50% stop**, hold toward the close (no
+11:15 hard stop). Official / research / Shen still use playbook brackets.
+Frontier P&L is stored in `frontier_*` columns at **$1,000 paper**. Evidence:
+`server/frontierExitSearch.js` champion `runner_sl50_nohard` → holdout avg day
+~**$241** @ $1k. **A new 24-month backtest is required** so each fire is re-walked
+with Frontier exits; until that finishes the calendar may fall back to $1k on
+playbook exit prices.
 
 ---
 

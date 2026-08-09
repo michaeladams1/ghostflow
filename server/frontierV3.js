@@ -1,24 +1,21 @@
-// FRONTIER v5 — maximize paper EV toward ~$250 avg holdout day.
+// FRONTIER v6 — $1,000 paper max with Frontier-only exit brackets.
 //
-// Hard ceiling on the stored +20% / −12.5% bracket: a $1,000 ticket tops out
-// near +$200 on a full TP, so ~$250/day average is impossible without either
-// (a) larger paper notional or (b) a re-sim with wider TP. v5 takes (a).
+// Selection: first touch, from 9:45 ET, best Edge Lens score/day (all segments).
+// Exits (NOT the playbook +20%/-12.5%): runner target + −50% stop, hold toward
+// the close (no 11:15 hard stop). Official / research / Shen keep playbook
+// brackets; only Frontier P&L uses these exits.
 //
-// Eligibility (all segments, gates dropped): first touch, et_minute >= 585,
-// entry_price > 0. A+ and CALL@PDL are allowed — they helped holdout EV.
-// Selection: highest Edge Lens points trade per day (tie → earlier minute).
-// Sizing: recompute P&L at FRONTIER_PAPER_DOLLARS ($8,000) from entry/exit
-// prices so Frontier is independent of the source lane's size string.
+// Evidence: server/frontierExitSearch.js (balanced train/holdout sample)
+// Champion id: runner_sl50_nohard → holdout avg day ~$241 @ $1,000
+// (near the $250/day goal without $8k sizing).
 //
-// Evidence (code_version 89d991cddb31, holdout 2026+):
-//   touch1 + from 9:45 + best/day @ $8k → holdout avg day ~$252, day WR ~47%,
-//   coverage ~72%. No 24-month re-sim required for this change.
-// Champion id: touch1_from945_best__paper_8k
+// Requires a new 24-month backtest so each fire is re-walked with Frontier
+// exits and frontier_* columns are populated.
 
 import { QD_ENDPOINTS } from "./quantDataRegistry.js";
 import { fetchEndpointCached } from "./quantDataClient.js";
 
-export const FRONTIER_V3_MIN_MINUTE = 585; // 9:45 ET
+export const FRONTIER_V3_MIN_MINUTE = 585;
 export const FRONTIER_V3_MIN_POINTS = null;
 export const FRONTIER_V3_MAX_POINTS = null;
 export const FRONTIER_V3_MIN_ENTRY = 0;
@@ -26,11 +23,17 @@ export const FRONTIER_V3_FLOW_VETO = null;
 export const FRONTIER_V3_FLOW_BUCKETS = 30;
 export const FRONTIER_V3_REQUIRE_FIRST_TOUCH = true;
 export const FRONTIER_V3_ONE_PER_DAY = true;
-/** Paper campaign dollars used to recompute Frontier P&L from entry/exit. */
-export const FRONTIER_PAPER_DOLLARS = 8000;
-export const FRONTIER_V3_VERSION = "touch1_from945_best__paper_8k";
 
-/** Price-action eligibility only (before per-day selection). */
+/** Max dollars risked per Frontier paper trade. */
+export const FRONTIER_PAPER_DOLLARS = 1000;
+/** Runner-style TP (10× = +900%) — effectively “let it run”. */
+export const FRONTIER_TP_MULT = 10.0;
+/** −50% stop. */
+export const FRONTIER_SL_MULT = 0.50;
+/** 16:00 ET — no playbook 11:15 force-flat for Frontier. */
+export const FRONTIER_HARD_STOP_MIN = 960;
+export const FRONTIER_V3_VERSION = "touch1_from945_best__runner_sl50_1k";
+
 export function isFrontierV3Fire({
   direction, levelType, tier, points, etMinute, entryPrice, touchNumber,
 } = {}) {
@@ -46,16 +49,18 @@ export function isFrontierV3Fire({
   return true;
 }
 
-/**
- * Recompute dollar P&L at Frontier paper size from stored option prices.
- * Same contract-floor rule as the live sim: floor(dollars / (entry * 100)).
- */
 export function frontierPaperPnl(entryPrice, exitPrice, dollars = FRONTIER_PAPER_DOLLARS) {
   const entry = Number(entryPrice);
   const exit = Number(exitPrice);
   if (!(entry > 0) || !Number.isFinite(exit)) return null;
   const contracts = Math.max(1, Math.floor(dollars / (entry * 100)));
   return +(contracts * (exit - entry) * 100).toFixed(2);
+}
+
+export function frontierContracts(entryPrice, dollars = FRONTIER_PAPER_DOLLARS) {
+  const entry = Number(entryPrice);
+  if (!(entry > 0)) return null;
+  return Math.max(1, Math.floor(dollars / (entry * 100)));
 }
 
 export function netFlowEarlyImbalance(flowData, buckets = FRONTIER_V3_FLOW_BUCKETS) {
@@ -69,7 +74,6 @@ export function netFlowEarlyImbalance(flowData, buckets = FRONTIER_V3_FLOW_BUCKE
   return tot > 0 ? (call - put) / tot : null;
 }
 
-/** @returns {boolean} true when the trade should be excluded */
 export function frontierV3FlowVeto(direction, flowImbalance, threshold = FRONTIER_V3_FLOW_VETO) {
   if (threshold == null || !Number.isFinite(threshold)) return false;
   if (flowImbalance == null || !Number.isFinite(flowImbalance)) return false;
@@ -81,14 +85,12 @@ export function frontierV3FlowVeto(direction, flowImbalance, threshold = FRONTIE
 const flowImbalanceMemo = new Map();
 const FLOW_FETCH_CONCURRENCY = 4;
 
-/** Kept for research / optional future vetoes; calendar no longer requires QD. */
 export async function loadFrontierV3FlowByDate(sessionDates) {
   const ep = QD_ENDPOINTS.find((e) => e.id === "net_flow");
   const out = new Map();
   if (!ep || !process.env.QUANTDATA_API_KEY) return out;
   const unique = [...new Set(sessionDates.filter(Boolean))];
   let cursor = 0;
-
   async function worker() {
     while (cursor < unique.length) {
       const sessionDate = unique[cursor++];
@@ -114,7 +116,6 @@ export async function loadFrontierV3FlowByDate(sessionDates) {
       }
     }
   }
-
   const n = Math.min(FLOW_FETCH_CONCURRENCY, Math.max(1, unique.length));
   await Promise.all(Array.from({ length: n }, () => worker()));
   return out;
@@ -130,10 +131,6 @@ export function passesFrontierV3({
   return true;
 }
 
-/**
- * Among same-day Frontier candidates, keep the highest points trade
- * (tie → earlier et_minute). Used after setup-key dedupe.
- */
 export function selectFrontierBestPerDay(candidates) {
   if (!FRONTIER_V3_ONE_PER_DAY) return candidates;
   const byDay = new Map();
