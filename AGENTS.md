@@ -67,8 +67,7 @@ This catches scope creep early. If the description balloons past ~6 paragraphs y
 - One concern per PR. If you find yourself touching unrelated files, stop and split.
 - PR titles are imperative and specific. "Validate user input on signup" not "Signup fixes."
 - PR bodies use the four-section structure above. Don't decorate with marketing language; write for the version of yourself debugging this in six months.
-- Open PRs as drafts until verification in this environment is done; mark ready when the change is actually verified.
-- Do not merge unless the user explicitly asks you to merge.
+- Open PRs as drafts until verification in this environment is done; mark ready when the change is actually verified, then merge.
 
 ### Squash-merge trap
 
@@ -90,8 +89,8 @@ Follow this order on each feature/fix/hotfix:
 4. Commit with a real message (not "wip" or "fix").
 5. Push (`git push -u origin <branch-name>`).
 6. Open/update the PR (draft until verified). Capture the PR number/URL.
-7. Merge only when the user explicitly asks (squash unless they say otherwise). Capture the merge commit SHA.
-8. After merge (when asked / when you can see deploy): poll the deployment until it succeeds — or fails, in which case stop and read build logs.
+7. Merge to `main` (squash unless the project says otherwise). Capture the merge commit SHA.
+8. Poll the deployment until it succeeds — or fails, in which case stop and read build logs.
 9. Read runtime logs for the boot signal your change should produce.
 10. Verify the user-facing artifact directly.
 
