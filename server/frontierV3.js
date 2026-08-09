@@ -125,7 +125,10 @@ export function summarizeFrontierFires(fires, { sessionDate } = {}) {
       ? Number(f.trade.frontierPnl)
       : frontierPaperPnl(entryPrice, f.trade.frontierExitPrice ?? f.trade.exitPrice);
     if (pnl == null || Number.isNaN(pnl)) continue;
-    const deployed = frontierDeployedNotional(entryPrice);
+    const contracts = f.trade.frontierContracts ?? frontierContracts(entryPrice);
+    const deployed = f.trade.frontierDeployed != null
+      ? Number(f.trade.frontierDeployed)
+      : frontierDeployedNotional(entryPrice);
     const date = sessionDate || f.sessionDate || "";
     const key = [date, etMinute ?? "", f.direction || "", f.levelType || "", f.touchNumber ?? ""].join("|");
     const points = Number(f.points);
@@ -139,7 +142,7 @@ export function summarizeFrontierFires(fires, { sessionDate } = {}) {
       points,
       pnl,
       deployed: deployed ?? 0,
-      contracts: frontierContracts(entryPrice),
+      contracts,
     });
   }
   const selected = selectFrontierBestPerDay([...byKey.values()]);

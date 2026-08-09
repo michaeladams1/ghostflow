@@ -83,20 +83,59 @@ function Fact({ icon: Icon, label, value, tone }) {
   );
 }
 
+/** Remap a simulated fire onto Frontier exits for the audit TradeCard. */
+function asFrontierTradeView(fire) {
+  const t = fire.trade || {};
+  const contracts = t.frontierContracts ?? fire.contracts;
+  const exitPrice = t.frontierExitPrice;
+  const entryPrice = t.entryPrice;
+  const pnl = t.frontierPnl ?? fire.pnl;
+  return {
+    fire: {
+      ...fire,
+      window: "in",
+      trade: {
+        ...t,
+        exitPrice,
+        exitClock: t.frontierExitClock || t.exitClock,
+        exitMin: t.frontierExitMin ?? t.exitMin,
+        exitReason: t.frontierExitReason || t.exitReason,
+        pctReturn: t.frontierPctReturn,
+        holdMinutes: t.frontierHoldMinutes ?? (
+          t.frontierExitMin != null && t.entryMin != null ? t.frontierExitMin - t.entryMin : t.holdMinutes
+        ),
+        tpPrice: t.frontierTpPrice,
+        slPrice: t.frontierSlPrice,
+      },
+    },
+    contracts,
+    pnl,
+    deployed: t.frontierDeployed ?? (contracts != null && entryPrice != null
+      ? +(contracts * entryPrice * 100).toFixed(2) : null),
+  };
+}
+
 // THE TRADE CARD — the piece that has to be unmistakable at a glance:
 // what you bought, what you paid, when you got out, and what it made.
-function TradeCard({ fire, contracts, pnl }) {
+function TradeCard({ fire, contracts, pnl, lane = "official" }) {
   const t = fire.trade;
-  const won = t.pctReturn > 0;
+  const isFrontier = lane === "frontier";
+  const won = (isFrontier ? (pnl > 0) : t.pctReturn > 0);
   const isCall = fire.direction === "CALL";
+  const pct = isFrontier ? t.pctReturn : t.pctReturn;
+  const tpLabel = isFrontier ? "runner (+900%)" : "+20%";
+  const slLabel = isFrontier ? "−50%" : "−12.5%";
 
   // ZOOM vs FULL DAY. A 4-minute trade on a full-day axis is 4 pixels wide
   // and the day's range crushes the trade zone flat — so the DEFAULT view is
   // zoomed to the trade window (30 min before entry -> 15 after exit), where
   // the y-axis auto-fits the prices that actually matter.
   const [view, setView] = useState("zoom");
-  const zoomFrom = t.entryMin - 30, zoomTo = t.exitMin + 15;
+  const zoomFrom = t.entryMin - 30, zoomTo = (t.exitMin ?? t.entryMin) + 15;
   const series = (t.series || []).filter((p) => view === "day" || (p.min >= zoomFrom && p.min <= zoomTo));
+  const auditLine = (contracts != null && t.entryPrice != null && t.exitPrice != null)
+    ? `${contracts} × ($${Number(t.exitPrice).toFixed(2)} − $${Number(t.entryPrice).toFixed(2)}) × 100 = ${wholeMoney(pnl)}`
+    : null;
 
   return (
     <div className={`rounded-lg border-2 ${won ? "border-emerald-400 dark:border-emerald-700" : "border-red-400 dark:border-red-800"} bg-white dark:bg-zinc-900 overflow-hidden`}>
@@ -110,14 +149,19 @@ function TradeCard({ fire, contracts, pnl }) {
             SPY ${t.strike}{isCall ? "C" : "P"}
           </span>
           <span className={`text-xs ${faint}`}>{t.contract}</span>
-          {fire.window !== "in" && (
+          {isFrontier && (
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-teal-600 text-white">
+              FRONTIER PAPER · RUNNER / −50%
+            </span>
+          )}
+          {!isFrontier && fire.window !== "in" && (
             <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-amber-500 text-white">
               ⏰ OUTSIDE PLAYBOOK HOURS · NOT COUNTED
             </span>
           )}
         </div>
         <div className={`text-xl font-bold ${won ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>
-          {t.pctReturn > 0 ? "+" : ""}{t.pctReturn}% · {money(pnl)}
+          {pct != null ? `${pct > 0 ? "+" : ""}${pct}% · ` : ""}{wholeMoney(pnl)}
         </div>
       </div>
 
@@ -135,7 +179,7 @@ function TradeCard({ fire, contracts, pnl }) {
             <div className="pl-8 text-sm text-zinc-700 dark:text-zinc-300">
               <span className="font-semibold">{contracts}</span> contract{contracts === 1 ? "" : "s"} at{" "}
               <span className="font-semibold">${t.entryPrice.toFixed(2)}</span> each
-              <span className={`${faint}`}> = {money(contracts * t.entryPrice * 100)} out of pocket</span>
+              <span className={`${faint}`}> = {wholeMoney(contracts * t.entryPrice * 100)} out of pocket</span>
             </div>
           </div>
 
@@ -149,19 +193,27 @@ function TradeCard({ fire, contracts, pnl }) {
             </div>
             <div className="pl-8 text-sm text-zinc-700 dark:text-zinc-300">
               <span className="font-semibold">{contracts}</span> contract{contracts === 1 ? "" : "s"} at{" "}
-              <span className="font-semibold">${t.exitPrice.toFixed(2)}</span> each
-              <span className={`${faint}`}> = {money(contracts * t.exitPrice * 100)} back</span>
+              <span className="font-semibold">${Number(t.exitPrice).toFixed(2)}</span> each
+              <span className={`${faint}`}> = {wholeMoney(contracts * t.exitPrice * 100)} back</span>
             </div>
             <div className="pl-8 text-xs mt-1 font-medium text-zinc-600 dark:text-zinc-400">{t.exitReason}</div>
           </div>
 
+          {auditLine && (
+            <div className="mb-3 rounded-md border border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950/40 px-3 py-2 text-xs font-mono text-zinc-700 dark:text-zinc-300">
+              Audit: {auditLine}
+            </div>
+          )}
+
           <div className="border-t border-zinc-200 dark:border-zinc-800 pt-2">
             <Fact icon={Hash} label="Underlying level" value={`$${fire.level} (SPY was $${fire.price.toFixed(2)})`} />
-            <Fact icon={Target} label="Take profit" value={`$${t.tpPrice.toFixed(2)} (+20%)`} tone="good" />
-            <Fact icon={ShieldAlert} label="Stop loss" value={`$${t.slPrice.toFixed(2)} (-12.5%)`} tone="bad" />
+            <Fact icon={Target} label="Take profit" value={`$${Number(t.tpPrice).toFixed(2)} (${tpLabel})`} tone="good" />
+            <Fact icon={ShieldAlert} label="Stop loss" value={`$${Number(t.slPrice).toFixed(2)} (${slLabel})`} tone="bad" />
             <Fact icon={Clock} label="RSI at entry" value={`${fire.rsi} ${fire.direction === "PUT" ? "(overbought)" : "(oversold)"}`} />
             {fire.points != null && <Fact label="Setup score" value={`${fire.points} / 20 points`} />}
-            {fire.size && <Fact label="Playbook size" value={fire.size} />}
+            {isFrontier
+              ? <Fact label="Lane" value="Frontier v7 paper · $1k max / trade" />
+              : fire.size && <Fact label="Playbook size" value={fire.size} />}
           </div>
         </div>
 
@@ -343,58 +395,62 @@ export default function ZeroDTE() {
 
       {data && (
         <>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-5">
             <StatCard label="Bias" value={data.story.bias}
               sub={data.gap.isGapUp ? "gap-up: calls blocked" : data.gap.isGapDn ? "gap-down: puts blocked" : "no gap block"} />
             <StatCard label="Signals fired" value={data.fires.length} sub={`${data.story.tradeableCount} tradeable`} />
-            <StatCard label="Winners" value={`${data.story.winCount} / ${data.story.countedCount ?? data.story.tradeableCount}`}
+            <StatCard label="Official winners" value={`${data.story.winCount} / ${data.story.countedCount ?? data.story.tradeableCount}`}
               sub="inside playbook hours" />
-            <StatCard label="Day P&L" value={money(data.story.totalPnl)}
+            <StatCard label="Official Day P&L" value={wholeMoney(data.story.totalPnl)}
               tone={data.story.totalPnl > 0 ? "good" : data.story.totalPnl < 0 ? "bad" : undefined}
-              sub={data.story.excludedCount ? `playbook hours only · ${data.story.excludedCount} trade${data.story.excludedCount === 1 ? "" : "s"} outside hours excluded (${money(data.story.excludedPnl)})` : "playbook hours (9:45–11:15 ET) only"} />
+              sub={data.story.excludedCount ? `playbook +20%/−12.5% · ${data.story.excludedCount} outside hours excluded (${wholeMoney(data.story.excludedPnl)})` : "playbook +20%/−12.5% · 9:45–11:15 ET only"} />
+            <StatCard label="Frontier Day P&L" value={wholeMoney(data.frontier?.pnl || 0)}
+              tone={(data.frontier?.pnl || 0) > 0 ? "good" : (data.frontier?.pnl || 0) < 0 ? "bad" : undefined}
+              sub={data.frontier?.trades
+                ? `${data.frontier.trades} trade${data.frontier.trades === 1 ? "" : "s"} · deployed ${wholeMoney(data.frontier.deployed)} · runner/−50%`
+                : "no PUT pts≥12 first-touch fire"} />
           </div>
 
-          {data.frontier && (
-            <div className={`${card} rounded-xl p-4 mb-5 border-teal-200 dark:border-teal-900`}>
-              <div className="flex flex-wrap items-start justify-between gap-3">
+          {/* ---- Frontier paper trades (audit lane) ---- */}
+          {(data.frontier?.selected || []).length > 0 && (
+            <div className="space-y-4 mb-5">
+              <div className="flex flex-wrap items-end justify-between gap-2">
                 <div>
-                  <div className={`${heading} text-teal-700 dark:text-teal-300`}>Frontier v7 · this session</div>
-                  <div className="text-sm text-zinc-800 dark:text-zinc-200 mt-1">
-                    {data.frontier.trades || 0} selected trade{(data.frontier.trades || 0) === 1 ? "" : "s"}
-                    {data.frontier.trades
-                      ? ` · P&L ${wholeMoney(data.frontier.pnl)} · capital deployed ${wholeMoney(data.frontier.deployed)}`
-                      : " · no PUT pts≥12 first-touch fire today"}
+                  <div className={`${heading} text-teal-700 dark:text-teal-300`}>Frontier v7 trades — paper only</div>
+                  <div className={`text-xs mt-1 ${faint}`}>
+                    Same calendar lane: PUT · pts≥12 · touch 1 · from 9:45 · $1k max · runner / −50%.
+                    Does not change Official Day P&L.
                   </div>
                 </div>
-                <div className="text-right">
-                  <div className="text-2xl font-bold text-teal-600 dark:text-teal-400">
-                    {wholeMoney(data.frontier.deployed || 0)}
-                  </div>
-                  <div className={`text-[11px] ${faint}`}>deployed at entry (≤$1k / trade)</div>
+                <div className="text-right text-sm">
+                  <div className="font-bold text-teal-700 dark:text-teal-300">{wholeMoney(data.frontier.pnl)}</div>
+                  <div className={faint}>deployed {wholeMoney(data.frontier.deployed)}</div>
                 </div>
               </div>
-              {(data.frontier.selected || []).length > 0 && (
-                <div className="mt-3 grid sm:grid-cols-2 gap-2">
-                  {data.frontier.selected.map((t, i) => (
-                    <div key={i} className="rounded-lg bg-teal-50/80 dark:bg-teal-950/30 px-3 py-2 text-xs">
-                      <div className="font-semibold text-zinc-800 dark:text-zinc-100">
-                        {t.direction} · {t.clock || t.trade?.entryClock || "—"} · {Number(t.points)} pts
-                      </div>
-                      <div className={faint}>
-                        {t.contracts} ct @ {money(t.trade?.entryPrice)} = {wholeMoney(t.deployed)} deployed
-                        {" · "}P&L {wholeMoney(t.pnl)}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
+              {data.frontier.selected.map((f, i) => {
+                const view = asFrontierTradeView(f);
+                return (
+                  <TradeCard
+                    key={`frontier-${i}`}
+                    lane="frontier"
+                    fire={{ ...view.fire, steps: stepsByClock[f.clock + f.direction] }}
+                    contracts={view.contracts}
+                    pnl={view.pnl}
+                  />
+                );
+              })}
             </div>
           )}
 
-          {/* ---- The trades, front and center ---- */}
+          {/* ---- Official playbook trades ---- */}
           {trades.length > 0 && (
             <div className="space-y-4 mb-5">
-              <div className={`${heading}`}>The trades — {trades.length} tradeable setup{trades.length === 1 ? "" : "s"}</div>
+              <div>
+                <div className={`${heading}`}>Official trades — {trades.length} tradeable setup{trades.length === 1 ? "" : "s"}</div>
+                <div className={`text-xs mt-1 ${faint}`}>
+                  Playbook +20% / −12.5% brackets. This is what Official Day P&L counts (in-hours only).
+                </div>
+              </div>
               {trades.map((f, i) => {
                 const c = contractsFor(f);
                 const pnl = c * (f.trade.exitPrice - f.trade.entryPrice) * 100;
