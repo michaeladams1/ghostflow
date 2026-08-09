@@ -46,21 +46,6 @@ function lastWeekdayISO() {
   return d.toISOString().slice(0, 10);
 }
 
-// Custom chart markers: a fat arrow you can actually see at a glance.
-function ArrowMarker({ cx, cy, dir }) {
-  if (cx == null || cy == null) return null;
-  const up = dir === "up";
-  const color = up ? "#10b981" : "#ef4444";
-  const y = up ? cy + 8 : cy - 8;      // sits below the buy, above the sell
-  const tip = up ? y - 16 : y + 16;
-  return (
-    <g>
-      <path d={`M ${cx} ${tip} L ${cx - 7} ${y} L ${cx + 7} ${y} Z`} fill={color} stroke="#fff" strokeWidth={1.5} />
-      <circle cx={cx} cy={cy} r={4} fill={color} stroke="#fff" strokeWidth={2} />
-    </g>
-  );
-}
-
 // One row of the contract fact sheet.
 function Fact({ icon: Icon, label, value, tone }) {
   const toneCls = tone === "good" ? "text-emerald-600 dark:text-emerald-400"
@@ -81,11 +66,7 @@ function TradeCard({ fire, contracts, pnl }) {
   const won = t.pctReturn > 0;
   const isCall = fire.direction === "CALL";
 
-  const series = (t.series || []).map((p) => ({
-    ...p,
-    entry: p.min === t.entryMin ? p.price : null,
-    exit: p.min === t.exitMin ? p.price : null,
-  }));
+  const series = t.series || [];
 
   return (
     <div className={`rounded-lg border-2 ${won ? "border-emerald-400 dark:border-emerald-700" : "border-red-400 dark:border-red-800"} bg-white dark:bg-zinc-900 overflow-hidden`}>
@@ -152,23 +133,26 @@ function TradeCard({ fire, contracts, pnl }) {
         {/* ---- Right: the OPTION's own price chart with buy/sell arrows ---- */}
         <div>
           <div className={`${heading} mb-2`}>The option's price · ${t.strike}{isCall ? "C" : "P"}</div>
-          <ResponsiveContainer width="100%" height={230}>
-            <ComposedChart data={series} margin={{ top: 20, right: 10, bottom: 4, left: 0 }}>
+          <ResponsiveContainer width="100%" height={250}>
+            <ComposedChart data={series} margin={{ top: 26, right: 58, bottom: 4, left: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#3f3f46" opacity={0.2} />
               <XAxis dataKey="clock" tick={{ fontSize: 9 }} minTickGap={40} stroke="#71717a" />
-              <YAxis tick={{ fontSize: 9 }} width={44} stroke="#71717a"
-                domain={["dataMin - 0.05", "dataMax + 0.05"]} tickFormatter={(v) => `$${v.toFixed(2)}`} />
+              <YAxis tick={{ fontSize: 9 }} width={52} stroke="#71717a"
+                domain={["dataMin - 0.06", "dataMax + 0.06"]} tickFormatter={(v) => `$${v.toFixed(2)}`} />
               <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }}
                 formatter={(v) => [`$${Number(v).toFixed(2)}`, "Option price"]} />
-              <ReferenceLine y={t.tpPrice} stroke="#10b981" strokeDasharray="4 3"
-                label={{ value: "TP +20%", fontSize: 9, fill: "#10b981", position: "insideTopRight" }} />
-              <ReferenceLine y={t.slPrice} stroke="#ef4444" strokeDasharray="4 3"
-                label={{ value: "SL -12.5%", fontSize: 9, fill: "#ef4444", position: "insideBottomRight" }} />
+              <ReferenceLine y={t.tpPrice} stroke="#10b981" strokeDasharray="4 3" strokeWidth={1.5}
+                label={{ value: `TP $${t.tpPrice.toFixed(2)} (+20%)`, fontSize: 9, fill: "#10b981", position: "insideTopRight" }} />
+              <ReferenceLine y={t.slPrice} stroke="#ef4444" strokeDasharray="4 3" strokeWidth={1.5}
+                label={{ value: `SL $${t.slPrice.toFixed(2)} (-12.5%)`, fontSize: 9, fill: "#ef4444", position: "insideBottomRight" }} />
               <Line type="monotone" dataKey="price" stroke="#71717a" dot={false} strokeWidth={1.8} />
-              <Line dataKey="entry" stroke="none" isAnimationActive={false}
-                dot={(p) => (p.value == null ? null : <ArrowMarker key={`e${p.index}`} cx={p.cx} cy={p.cy} dir="up" />)} />
-              <Line dataKey="exit" stroke="none" isAnimationActive={false}
-                dot={(p) => (p.value == null ? null : <ArrowMarker key={`x${p.index}`} cx={p.cx} cy={p.cy} dir="down" />)} />
+              {/* Buy / sell marked with ReferenceDot + a big arrow label, which
+                  survives recharts' null-point handling better than a custom
+                  dot renderer on an all-null series. */}
+              <ReferenceDot x={t.entryClock} y={t.entryPrice} r={7} fill="#10b981" stroke="#fff" strokeWidth={2.5} isFront
+                label={{ value: `▲ BOUGHT $${t.entryPrice.toFixed(2)}`, fontSize: 11, fontWeight: 700, fill: "#10b981", position: "bottom" }} />
+              <ReferenceDot x={t.exitClock} y={t.exitPrice} r={7} fill="#ef4444" stroke="#fff" strokeWidth={2.5} isFront
+                label={{ value: `▼ SOLD $${t.exitPrice.toFixed(2)}`, fontSize: 11, fontWeight: 700, fill: "#ef4444", position: "top" }} />
             </ComposedChart>
           </ResponsiveContainer>
           <div className={`flex gap-4 mt-1 text-[11px] ${faint}`}>
@@ -296,37 +280,67 @@ export default function ZeroDTE() {
           {/* ---- The underlying, with every signal marked ---- */}
           <div className={`${card} rounded-lg p-3 mb-5`}>
             <div className={`${heading} mb-2`}>SPY 1-min · levels + every signal</div>
-            <ResponsiveContainer width="100%" height={320}>
-              <ComposedChart data={chartData} margin={{ top: 8, right: 12, bottom: 4, left: 4 }}>
+            <ResponsiveContainer width="100%" height={330}>
+              <ComposedChart data={chartData} margin={{ top: 14, right: 62, bottom: 4, left: 4 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#3f3f46" opacity={0.25} />
                 <XAxis dataKey="t" tick={{ fontSize: 10 }} minTickGap={60} stroke="#71717a" />
-                <YAxis domain={["dataMin - 0.5", "dataMax + 0.5"]} tick={{ fontSize: 10 }}
-                  tickFormatter={(v) => v.toFixed(0)} stroke="#71717a" width={48} />
+                <YAxis domain={["dataMin - 0.6", "dataMax + 0.6"]} tick={{ fontSize: 10 }}
+                  tickFormatter={(v) => v.toFixed(2)} stroke="#71717a" width={56} />
                 <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }}
                   formatter={(v, n) => [typeof v === "number" ? v.toFixed(2) : v, n === "close" ? "SPY" : n.toUpperCase()]} />
                 <Line type="monotone" dataKey="close" stroke="#10b981" dot={false} strokeWidth={1.6} name="close" />
                 <Line type="monotone" dataKey="vwap" stroke="#60a5fa" dot={false} strokeWidth={1} strokeDasharray="4 3" name="vwap" />
 
-                {data.levels.pdh && <ReferenceLine y={data.levels.pdh} stroke="#c084fc" strokeDasharray="5 4" label={{ value: "PDH", fontSize: 10, fill: "#c084fc", position: "right" }} />}
-                {data.levels.pdl && <ReferenceLine y={data.levels.pdl} stroke="#c084fc" strokeDasharray="5 4" label={{ value: "PDL", fontSize: 10, fill: "#c084fc", position: "right" }} />}
-                {data.levels.pmh && <ReferenceLine y={data.levels.pmh} stroke="#fbbf24" strokeDasharray="2 3" label={{ value: "PMH", fontSize: 10, fill: "#fbbf24", position: "right" }} />}
-                {data.levels.pml && <ReferenceLine y={data.levels.pml} stroke="#fbbf24" strokeDasharray="2 3" label={{ value: "PML", fontSize: 10, fill: "#fbbf24", position: "right" }} />}
+                {/* Level labels sit INSIDE the plot area — `position:"right"`
+                    pushed them past the SVG edge and they were clipped. */}
+                {data.levels.pdh && <ReferenceLine y={data.levels.pdh} stroke="#c084fc" strokeDasharray="5 4"
+                  label={{ value: `PDH ${data.levels.pdh.toFixed(2)}`, fontSize: 10, fill: "#c084fc", position: "insideTopRight" }} />}
+                {data.levels.pdl && <ReferenceLine y={data.levels.pdl} stroke="#c084fc" strokeDasharray="5 4"
+                  label={{ value: `PDL ${data.levels.pdl.toFixed(2)}`, fontSize: 10, fill: "#c084fc", position: "insideBottomRight" }} />}
+                {data.levels.pmh && <ReferenceLine y={data.levels.pmh} stroke="#fbbf24" strokeDasharray="2 3"
+                  label={{ value: `PMH ${data.levels.pmh.toFixed(2)}`, fontSize: 10, fill: "#fbbf24", position: "insideTopRight" }} />}
+                {data.levels.pml && <ReferenceLine y={data.levels.pml} stroke="#fbbf24" strokeDasharray="2 3"
+                  label={{ value: `PML ${data.levels.pml.toFixed(2)}`, fontSize: 10, fill: "#fbbf24", position: "insideBottomRight" }} />}
 
                 {data.fires.map((f, i) => {
                   const s = TIER_STYLE[f.tier] || TIER_STYLE["RSI Extreme"];
                   const traded = f.level && f.trade?.ok;
                   return <ReferenceDot key={`f${i}`} x={f.clock} y={f.price} r={traded ? 7 : 4}
                     fill={s.fill} stroke={traded ? "#18181b" : s.ring} strokeWidth={traded ? 2.5 : 1.5} isFront
-                    label={traded ? { value: f.direction === "CALL" ? "▲ BUY CALL" : "▲ BUY PUT", fontSize: 10, fill: s.fill, position: f.direction === "CALL" ? "bottom" : "top" } : undefined} />;
+                    label={traded ? { value: `${f.direction === "CALL" ? "▲" : "▼"} BUY ${f.direction}`, fontSize: 10, fontWeight: 700, fill: s.fill, position: f.direction === "CALL" ? "bottom" : "top" } : undefined} />;
                 })}
               </ComposedChart>
             </ResponsiveContainer>
+
+            {/* ---- RSI panel, sharing the same x-axis ---- */}
+            <div className={`${heading} mt-3 mb-1`}>RSI (1-min) · 73 = puts zone · 29 = calls zone</div>
+            <ResponsiveContainer width="100%" height={140}>
+              <ComposedChart data={chartData} margin={{ top: 6, right: 62, bottom: 4, left: 4 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#3f3f46" opacity={0.25} />
+                <XAxis dataKey="t" tick={{ fontSize: 10 }} minTickGap={60} stroke="#71717a" />
+                <YAxis domain={[0, 100]} ticks={[0, 29, 50, 73, 100]} tick={{ fontSize: 10 }} stroke="#71717a" width={56} />
+                <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }}
+                  formatter={(v) => [typeof v === "number" ? v.toFixed(1) : v, "RSI"]} />
+                <ReferenceLine y={73} stroke="#ef4444" strokeDasharray="4 3"
+                  label={{ value: "73 overbought", fontSize: 9, fill: "#ef4444", position: "insideTopRight" }} />
+                <ReferenceLine y={29} stroke="#10b981" strokeDasharray="4 3"
+                  label={{ value: "29 oversold", fontSize: 9, fill: "#10b981", position: "insideBottomRight" }} />
+                <ReferenceLine y={50} stroke="#71717a" strokeDasharray="2 4" opacity={0.5} />
+                <Line type="monotone" dataKey="rsi" stroke="#a78bfa" dot={false} strokeWidth={1.5} name="rsi" />
+                {data.fires.filter((f) => f.level && f.trade?.ok).map((f, i) => (
+                  <ReferenceDot key={`r${i}`} x={f.clock} y={f.rsi} r={5} fill={f.direction === "CALL" ? "#10b981" : "#ef4444"}
+                    stroke="#18181b" strokeWidth={2} isFront />
+                ))}
+              </ComposedChart>
+            </ResponsiveContainer>
+
             <div className={`flex flex-wrap gap-3 mt-2 text-[11px] ${faint}`}>
               <span><span className="inline-block w-2.5 h-2.5 rounded-full bg-emerald-500 mr-1 align-middle" />A+ signal</span>
               <span><span className="inline-block w-2.5 h-2.5 rounded-full bg-blue-400 mr-1 align-middle" />A-tier</span>
               <span><span className="inline-block w-2 h-2 rounded-full bg-zinc-400 mr-1 align-middle" />RSI Extreme (no level, not tradeable)</span>
               <span><span className="inline-block w-4 border-t border-dashed border-blue-400 mr-1 align-middle" />VWAP</span>
               <span><span className="inline-block w-4 border-t border-dashed border-purple-400 mr-1 align-middle" />PDH/PDL</span>
+              <span><span className="inline-block w-4 border-t border-dashed border-amber-400 mr-1 align-middle" />PMH/PML</span>
             </div>
           </div>
 
