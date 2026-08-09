@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import ChartView from "./ChartView.jsx";
 import StrategyLab from "./StrategyLab.jsx";
+import ZeroDTE from "./ZeroDTE.jsx";
 
 const MODEL_META = {
   claude: { name: "Claude", accent: "text-amber-500", dot: "bg-amber-500", hex: "#f59e0b" },
@@ -1566,7 +1567,7 @@ export default function App() {
         </div>
 
         <div className="flex gap-1 mb-6 border-b border-zinc-200 dark:border-zinc-800">
-          {[{ id: "log", label: "Analyses", Icon: FileText }, { id: "strategy", label: "Strategy Lab", Icon: FlaskConical }, { id: "theses", label: "Theses", Icon: Users }, { id: "settings", label: "Settings", Icon: Settings }].map(({ id, label, Icon }) => (
+          {[{ id: "log", label: "Analyses", Icon: FileText }, { id: "zerodte", label: "0DTE", Icon: Zap }, { id: "strategy", label: "Strategy Lab", Icon: FlaskConical }, { id: "theses", label: "Theses", Icon: Users }, { id: "settings", label: "Settings", Icon: Settings }].map(({ id, label, Icon }) => (
             <button key={id} onClick={() => setTab(id)}
               className={`flex items-center gap-1.5 px-3 py-2 text-sm border-b-2 -mb-px
                 ${tab === id ? "border-emerald-500 text-zinc-900 dark:text-zinc-100" : "border-transparent " + faint}`}>
@@ -1602,6 +1603,7 @@ export default function App() {
           </div>
         )}
 
+        {tab === "zerodte" && <ZeroDTE />}
         {tab === "strategy" && <StrategyLab />}
         {tab === "theses" && <ThesesView />}
 

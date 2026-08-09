@@ -23,6 +23,9 @@ import { callClaude, callGPT, callGrok } from "./server/aiProviders.js";
 import { parseStrategy } from "./server/strategyParser.js";
 import { fetchOhlcvBars } from "./server/databentoClient.js";
 import { runBacktest, getSessionChart } from "./server/priceBacktest.js";
+import { analyzeZeroDTESession } from "./server/zeroDTE.js";
+import { simulateAllFires } from "./server/zeroDTEOptionSim.js";
+import { buildSessionStory } from "./server/zeroDTEStory.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DIST_DIR = path.join(__dirname, "dist");
@@ -603,9 +606,49 @@ app.post("/api/strategy/session-chart", async (req, res) => {
   }
 });
 
-app.use(express.static(DIST_DIR));
-app.get("*", (req, res) => res.sendFile(path.join(DIST_DIR, "index.html")));
+// ===========================================================================
+// SPY 0DTE — a THIRD feature, separate from both the trade-analysis system
+// and Strategy Lab. Run retrospectively (e.g. at 4pm) it replays the day's
+// 1-min tape through the Edge Lens v4 scoring rules, picks the playbook's
+// 1-strike-OTM same-day contract for each fired signal, simulates the
+// +20%/-12.5% bracket order against that contract's real price, and writes
+// the whole thing up in plain English.
+//
+// One call, one response — the whole session is only ~700 bars, so unlike
+// the 30-feed analysis pipeline this finishes in seconds and doesn't need
+// the background-job machinery.
+// ===========================================================================
 
+app.post("/api/0dte/analyze", async (req, res) => {
+  const { sessionDate, symbol = "SPY" } = req.body;
+  if (!sessionDate) return res.status(400).json({ error: "sessionDate is required" });
+
+  try {
+    console.log(`[0dte] ${symbol} ${sessionDate} — replaying session...`);
+    const session = await analyzeZeroDTESession({ symbol, sessionDate });
+    if (!session.ok) return res.status(400).json({ error: session.reason });
+
+    console.log(`[0dte] ${session.bars.length} bars, ${session.fires.length} fires — simulating contracts...`);
+    const fires = await simulateAllFires({ ticker: symbol, sessionDate, fires: session.fires });
+
+    const story = buildSessionStory({
+      symbol, sessionDate,
+      levels: session.levels, gap: session.gap, fires, bars: session.bars,
+    });
+    console.log(`[0dte] done — ${story.tradeableCount} tradeable, ${story.winCount} winners`);
+
+    res.json({ symbol, sessionDate, levels: session.levels, gap: session.gap, bars: session.bars, fires, story });
+  } catch (err) {
+    console.error("[0dte] FAILED:", err);
+    res.status(500).json({ error: err.message || String(err) });
+  }
+});
+
+// NOTE: every API route must be registered ABOVE the express.static +
+// app.get("*") catch-all below. A route declared after the catch-all is
+// dead code — Express matches "*" first and serves index.html, so the
+// endpoint silently returns the HTML shell instead of JSON. /api/theses was
+// stranded down there and never actually served.
 app.get("/api/theses", async (_req, res) => {
   try {
     res.json(await loadAllTheses());
@@ -613,6 +656,9 @@ app.get("/api/theses", async (_req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+app.use(express.static(DIST_DIR));
+app.get("*", (req, res) => res.sendFile(path.join(DIST_DIR, "index.html")));
 
 app.listen(PORT, () => {
   console.log(`GHOSTFLOW on port ${PORT}${!USER || !PASS ? " (WARNING: no auth)" : " (auth enabled)"}`);
