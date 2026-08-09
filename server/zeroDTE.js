@@ -13,13 +13,26 @@
 
 import { fetchAlpacaBars } from "./alpacaClient.js";
 
-const RSI_LEN = 14, RSI_PUT = 73, RSI_CALL = 29, SWING_MIN = 35, TOUCH_ZONE = 0.05;
+// RSI thresholds per the Edge Lens v4 GUIDE: "RSI thresholds are back to
+// 73 / 26". (The Pine script's input default said 29 for calls; the guide is
+// the documented spec and Michael chose it as authoritative.) The same
+// 73/26 applies to the 5m/10m MTF confluence check, per the guide.
+const RSI_LEN = 14, RSI_PUT = 73, RSI_CALL = 26, SWING_MIN = 35, TOUCH_ZONE = 0.05;
 const VELOCITY_FLOOR = 64, EXT_SWING_MIN = 45, SOFT_PUT = 68, SOFT_CALL = 32;
 const VOL_MA_LEN = 20, ATR_LEN = 14, ADX_LEN = 14, ADX_STRONG = 28;
 const SPEED_LOOKBACK = 4, SPEED_ATR_MULT = 0.40, WICK_RATIO = 1.5;
 const APLUS_BASE = 15, A_TIER_MIN = 11;
 const CALL_COOLDOWN = 30, A_COOLDOWN = 15, EXT_COOLDOWN = 20, RSI_EXT_SWING = 50;
 const TREND_GUARD_LOOKBACK = 10, TREND_GUARD_ATR_MULT = 3.0;
+
+// THE PLAYBOOK'S SCHEDULE (Shen Lao, section 09 + Rule R5), in ET minutes:
+//   6:30 PST / 9:30 ET  observe only — "Zero trades"
+//   6:45 PST / 9:45 ET  "TRADE WINDOW OPENS"
+//   8:15 PST / 11:15 ET "HARD STOP — Close the platform. Physically."
+// Signals outside 9:45–11:15 ET still fire (the Edge Lens tool watches the
+// whole session) but are flagged so the sim can exclude them from the
+// by-the-rules P&L.
+const PB_OPEN_MIN = 585, PB_CLOSE_MIN = 675;
 
 function etParts(ts) {
   const d = new Date(ts);
@@ -419,29 +432,31 @@ export async function analyzeZeroDTESession({ symbol = "SPY", sessionDate }) {
 
     const suggestedStop = atrV != null ? +(atrV * 1.8).toFixed(2) : null;
     const sizeFor = (pts) => pts >= aplusThresh + 3 ? "MAX $500" : pts >= aplusThresh + 1 ? "SIZE UP $375" : pts >= aplusThresh ? "FULL $250" : "HALF $125";
+    // Where this minute sits in the playbook's schedule.
+    const pbWindow = minutes < PB_OPEN_MIN ? "before" : minutes < PB_CLOSE_MIN ? "in" : "after";
 
     if (fireCallAp) {
       lastCallBar = i;
-      fires.push({ tier: "A+", direction: "CALL", idx: i, ts: bar.ts, clock: clockLabel(minutes), level: watch, price: bar.close,
+      fires.push({ window: pbWindow, tier: "A+", direction: "CALL", idx: i, ts: bar.ts, clock: clockLabel(minutes), level: watch, price: bar.close,
         points: callPts, rsi: r != null ? Math.round(r) : null, swing: Math.round(callSwing), size: sizeFor(callPts),
         volPts: callVolPts, speedPts: callSpeedPts, wickPts: callWickPts, mtfAligned: mtfCallConf, suggestedStop });
     }
     if (firePutAp) {
       lastPutBar = i;
-      fires.push({ tier: "A+", direction: "PUT", idx: i, ts: bar.ts, clock: clockLabel(minutes), level: watch, price: bar.close,
+      fires.push({ window: pbWindow, tier: "A+", direction: "PUT", idx: i, ts: bar.ts, clock: clockLabel(minutes), level: watch, price: bar.close,
         points: putPts, rsi: r != null ? Math.round(r) : null, swing: Math.round(putSwing), size: sizeFor(putPts),
         volPts: putVolPts, speedPts: putSpeedPts, wickPts: putWickPts, mtfAligned: mtfPutConf, suggestedStop });
     }
-    if (fireCallA) { lastCallABar = i; fires.push({ tier: "A", direction: "CALL", idx: i, ts: bar.ts, clock: clockLabel(minutes), level: watch, price: bar.close, points: callPts, rsi: r != null ? Math.round(r) : null, suggestedStop }); }
-    if (firePutA) { lastPutABar = i; fires.push({ tier: "A", direction: "PUT", idx: i, ts: bar.ts, clock: clockLabel(minutes), level: watch, price: bar.close, points: putPts, rsi: r != null ? Math.round(r) : null, suggestedStop }); }
-    if (fireCallExt) { lastCallExtBar = i; fires.push({ tier: "RSI Extreme", direction: "CALL", idx: i, ts: bar.ts, clock: clockLabel(minutes), price: bar.close, rsi: r != null ? Math.round(r) : null, swing: Math.round(callSwing), suggestedStop }); }
-    if (firePutExt) { lastPutExtBar = i; fires.push({ tier: "RSI Extreme", direction: "PUT", idx: i, ts: bar.ts, clock: clockLabel(minutes), price: bar.close, rsi: r != null ? Math.round(r) : null, swing: Math.round(putSwing), suggestedStop }); }
+    if (fireCallA) { lastCallABar = i; fires.push({ window: pbWindow, tier: "A", direction: "CALL", idx: i, ts: bar.ts, clock: clockLabel(minutes), level: watch, price: bar.close, points: callPts, rsi: r != null ? Math.round(r) : null, suggestedStop }); }
+    if (firePutA) { lastPutABar = i; fires.push({ window: pbWindow, tier: "A", direction: "PUT", idx: i, ts: bar.ts, clock: clockLabel(minutes), level: watch, price: bar.close, points: putPts, rsi: r != null ? Math.round(r) : null, suggestedStop }); }
+    if (fireCallExt) { lastCallExtBar = i; fires.push({ window: pbWindow, tier: "RSI Extreme", direction: "CALL", idx: i, ts: bar.ts, clock: clockLabel(minutes), price: bar.close, rsi: r != null ? Math.round(r) : null, swing: Math.round(callSwing), suggestedStop }); }
+    if (firePutExt) { lastPutExtBar = i; fires.push({ window: pbWindow, tier: "RSI Extreme", direction: "PUT", idx: i, ts: bar.ts, clock: clockLabel(minutes), price: bar.close, rsi: r != null ? Math.round(r) : null, swing: Math.round(putSwing), suggestedStop }); }
 
     prevCallAplus = callAplus; prevPutAplus = putAplus;
     prevCallA = callA; prevPutA = putA;
     prevCallExt = callRsiExtElig; prevPutExt = putRsiExtElig;
 
-    barRows.push({ ts: bar.ts, clock: clockLabel(minutes), open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: bar.volume,
+    barRows.push({ ts: bar.ts, min: minutes, window: pbWindow, clock: clockLabel(minutes), open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: bar.volume,
       rsi: r != null ? +r.toFixed(1) : null, callPts, putPts, vwap: vwap != null ? +vwap.toFixed(2) : null, inSession: inSess });
   }
 

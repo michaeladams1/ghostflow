@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import {
   ResponsiveContainer, ComposedChart, Line, XAxis, YAxis, Tooltip,
-  CartesianGrid, ReferenceDot, ReferenceLine,
+  CartesianGrid, ReferenceDot, ReferenceLine, ReferenceArea,
 } from "recharts";
 
 const card = "bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800";
@@ -44,6 +44,28 @@ function lastWeekdayISO() {
   const d = new Date();
   while (d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() - 1);
   return d.toISOString().slice(0, 10);
+}
+
+// Playbook trade window (Shen Lao section 09): 9:45–11:15 AM ET.
+const PB_OPEN_MIN = 585, PB_CLOSE_MIN = 675;
+// Edge Lens "Core Window": 6:30–9:30 PST = 9:30 AM–12:30 PM ET.
+const CORE_OPEN_MIN = 570, CORE_CLOSE_MIN = 750;
+
+// Out-of-hours gray + core-window teal bands for a chart whose x-axis is
+// clock-label categories. `pts` must carry {min, <xKey>}.
+function windowAreas(pts, xKey) {
+  if (!pts.length) return [];
+  const clockFor = (m) => (pts.find((p) => p.min >= m) || pts[pts.length - 1])[xKey];
+  const first = pts[0], last = pts[pts.length - 1];
+  const areas = [];
+  if (first.min < PB_OPEN_MIN) areas.push(
+    <ReferenceArea key="gray-pre" x1={first[xKey]} x2={clockFor(PB_OPEN_MIN)} fill="#71717a" fillOpacity={0.10} strokeOpacity={0} />);
+  if (last.min > PB_CLOSE_MIN) areas.push(
+    <ReferenceArea key="gray-post" x1={clockFor(PB_CLOSE_MIN)} x2={last[xKey]} fill="#71717a" fillOpacity={0.10} strokeOpacity={0} />);
+  if (last.min > CORE_OPEN_MIN && first.min < CORE_CLOSE_MIN) areas.push(
+    <ReferenceArea key="teal-core" x1={clockFor(Math.max(CORE_OPEN_MIN, first.min))} x2={clockFor(Math.min(CORE_CLOSE_MIN, last.min))}
+      fill="#14b8a6" fillOpacity={0.05} strokeOpacity={0} />);
+  return areas;
 }
 
 // One row of the contract fact sheet.
@@ -86,6 +108,11 @@ function TradeCard({ fire, contracts, pnl }) {
             SPY ${t.strike}{isCall ? "C" : "P"}
           </span>
           <span className={`text-xs ${faint}`}>{t.contract}</span>
+          {fire.window !== "in" && (
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-amber-500 text-white">
+              ⏰ OUTSIDE PLAYBOOK HOURS · NOT COUNTED
+            </span>
+          )}
         </div>
         <div className={`text-xl font-bold ${won ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>
           {t.pctReturn > 0 ? "+" : ""}{t.pctReturn}% · {money(pnl)}
@@ -159,6 +186,7 @@ function TradeCard({ fire, contracts, pnl }) {
                 domain={["dataMin - 0.03", "dataMax + 0.03"]} tickFormatter={(v) => `$${v.toFixed(2)}`} />
               <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }}
                 formatter={(v) => [`$${Number(v).toFixed(2)}`, "Option price"]} />
+              {windowAreas(series, "clock")}
               {/* Vertical time markers survive any zoom level; the dots and
                   price labels only get room in the zoomed view. */}
               <ReferenceLine x={t.entryClock} stroke="#10b981" strokeWidth={1.5} strokeDasharray="3 3"
@@ -283,10 +311,11 @@ export default function ZeroDTE() {
             <StatCard label="Bias" value={data.story.bias}
               sub={data.gap.isGapUp ? "gap-up: calls blocked" : data.gap.isGapDn ? "gap-down: puts blocked" : "no gap block"} />
             <StatCard label="Signals fired" value={data.fires.length} sub={`${data.story.tradeableCount} tradeable`} />
-            <StatCard label="Winners" value={`${data.story.winCount} / ${data.story.tradeableCount}`} />
+            <StatCard label="Winners" value={`${data.story.winCount} / ${data.story.countedCount ?? data.story.tradeableCount}`}
+              sub="inside playbook hours" />
             <StatCard label="Day P&L" value={money(data.story.totalPnl)}
               tone={data.story.totalPnl > 0 ? "good" : data.story.totalPnl < 0 ? "bad" : undefined}
-              sub="following the rules exactly" />
+              sub={data.story.excludedCount ? `playbook hours only · ${data.story.excludedCount} trade${data.story.excludedCount === 1 ? "" : "s"} outside hours excluded (${money(data.story.excludedPnl)})` : "playbook hours (9:45–11:15 ET) only"} />
           </div>
 
           {/* ---- The trades, front and center ---- */}
@@ -312,6 +341,7 @@ export default function ZeroDTE() {
                   tickFormatter={(v) => v.toFixed(2)} stroke="#71717a" width={56} />
                 <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }}
                   formatter={(v, n) => [typeof v === "number" ? v.toFixed(2) : v, n === "close" ? "SPY" : n.toUpperCase()]} />
+                {windowAreas(chartData, "t")}
                 <Line type="monotone" dataKey="close" stroke="#10b981" dot={false} strokeWidth={1.6} name="close" />
                 <Line type="monotone" dataKey="vwap" stroke="#60a5fa" dot={false} strokeWidth={1} strokeDasharray="4 3" name="vwap" />
 
@@ -353,18 +383,19 @@ export default function ZeroDTE() {
             </ResponsiveContainer>
 
             {/* ---- RSI panel, sharing the same x-axis ---- */}
-            <div className={`${heading} mt-3 mb-1`}>RSI (1-min) · 73 = puts zone · 29 = calls zone</div>
+            <div className={`${heading} mt-3 mb-1`}>RSI (1-min) · 73 = puts zone · 26 = calls zone</div>
             <ResponsiveContainer width="100%" height={140}>
               <ComposedChart data={chartData} margin={{ top: 6, right: 62, bottom: 4, left: 4 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#3f3f46" opacity={0.25} />
                 <XAxis dataKey="t" tick={{ fontSize: 10 }} minTickGap={60} stroke="#71717a" />
-                <YAxis domain={[0, 100]} ticks={[0, 29, 50, 73, 100]} tick={{ fontSize: 10 }} stroke="#71717a" width={56} />
+                <YAxis domain={[0, 100]} ticks={[0, 26, 50, 73, 100]} tick={{ fontSize: 10 }} stroke="#71717a" width={56} />
                 <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }}
                   formatter={(v) => [typeof v === "number" ? v.toFixed(1) : v, "RSI"]} />
+                {windowAreas(chartData, "t")}
                 <ReferenceLine y={73} stroke="#ef4444" strokeDasharray="4 3"
                   label={{ value: "73 overbought", fontSize: 9, fill: "#ef4444", position: "insideTopRight" }} />
-                <ReferenceLine y={29} stroke="#10b981" strokeDasharray="4 3"
-                  label={{ value: "29 oversold", fontSize: 9, fill: "#10b981", position: "insideBottomRight" }} />
+                <ReferenceLine y={26} stroke="#10b981" strokeDasharray="4 3"
+                  label={{ value: "26 oversold", fontSize: 9, fill: "#10b981", position: "insideBottomRight" }} />
                 <ReferenceLine y={50} stroke="#71717a" strokeDasharray="2 4" opacity={0.5} />
                 <Line type="monotone" dataKey="rsi" stroke="#a78bfa" dot={false} strokeWidth={1.5} name="rsi" />
                 {data.fires.filter((f) => f.level && f.trade?.ok).map((f, i) => (
@@ -381,6 +412,8 @@ export default function ZeroDTE() {
               <span><span className="inline-block w-4 border-t border-dashed border-blue-400 mr-1 align-middle" />VWAP</span>
               <span><span className="inline-block w-4 border-t border-dashed border-purple-400 mr-1 align-middle" />PDH/PDL</span>
               <span><span className="inline-block w-4 border-t border-dashed border-amber-400 mr-1 align-middle" />PMH/PML</span>
+              <span><span className="inline-block w-3 h-3 bg-zinc-400/30 mr-1 align-middle" />outside playbook hours (9:45–11:15 ET)</span>
+              <span><span className="inline-block w-3 h-3 bg-teal-400/20 mr-1 align-middle" />Edge Lens core window</span>
             </div>
           </div>
 

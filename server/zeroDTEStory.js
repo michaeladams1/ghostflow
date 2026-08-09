@@ -69,7 +69,12 @@ export function buildSessionStory({ symbol = "SPY", sessionDate, levels, gap, fi
   for (const f of tradeable) {
     const strike = pickOtmStrike({ level: f.level, direction: f.direction });
     const t = f.trade || {};
+    const inWindow = f.window === "in";
     const steps = [];
+
+    if (!inWindow) {
+      steps.push(`**⏰ Outside the playbook's hours** — this fired at ${f.clock}, but the playbook's trade window is 9:45–11:15 AM ET (${f.window === "before" ? '"Watch the open... Zero trades" until 6:45 PST' : '"Close the platform. Physically. Not minimize. CLOSE." at 8:15 PST'}). By the rules this trade doesn't exist — it's simulated below for learning only and excluded from the day's P&L.`);
+    }
 
     steps.push(`**Identify the level** — $${f.level} came into play at ${f.clock}.`);
     steps.push(`**Check RSI** — 1-min RSI read ${f.rsi}${f.direction === "PUT" ? " (overbought at resistance → puts)" : " (oversold at support → calls)"}.`);
@@ -105,23 +110,36 @@ export function buildSessionStory({ symbol = "SPY", sessionDate, levels, gap, fi
     });
   }
 
-  // --- 4. The bottom line ---
+  // --- 4. The bottom line — playbook hours only ---
   const simmed = tradeable.filter((f) => f.trade?.ok);
-  const wins = simmed.filter((f) => f.trade.pctReturn > 0).length;
-  const totalPnl = simmed.reduce((sum, f) => {
+  const counted = simmed.filter((f) => f.window === "in");
+  const excluded = simmed.filter((f) => f.window !== "in");
+  const wins = counted.filter((f) => f.trade.pctReturn > 0).length;
+  const pnlOf = (f) => {
     const dollars = sizeToDollars(f.size) || 250;
     const contracts = Math.max(1, Math.floor(dollars / (f.trade.entryPrice * 100)));
-    return sum + contracts * (f.trade.exitPrice - f.trade.entryPrice) * 100;
-  }, 0);
+    return contracts * (f.trade.exitPrice - f.trade.entryPrice) * 100;
+  };
+  const totalPnl = counted.reduce((sum, f) => sum + pnlOf(f), 0);
+  const excludedPnl = excluded.reduce((sum, f) => sum + pnlOf(f), 0);
 
   if (simmed.length) {
-    lines.push({
-      heading: "Bottom line",
-      body: `${simmed.length} tradeable setup${simmed.length === 1 ? "" : "s"}, ${wins} winner${wins === 1 ? "" : "s"}. `
-        + `Following the rules exactly — right strike, bracket set on fill, no overrides — the day was **${money(totalPnl)}**. `
-        + `The playbook caps you at 2 trades a day, so if more than two fired, only the first two count for real.`,
-    });
+    const parts = [];
+    if (counted.length) {
+      parts.push(`${counted.length} setup${counted.length === 1 ? "" : "s"} inside the playbook's 9:45–11:15 AM ET window, ${wins} winner${wins === 1 ? "" : "s"}. `
+        + `Following the rules exactly — right strike, bracket set on fill, no overrides — the day was **${money(totalPnl)}**.`);
+    } else {
+      parts.push(`No setup fired inside the playbook's 9:45–11:15 AM ET trade window, so by the rules this was a **$0 day**.`);
+    }
+    if (excluded.length) {
+      parts.push(` ${excluded.length} more simulated trade${excluded.length === 1 ? "" : "s"} fired outside those hours (${money(excludedPnl)} combined) — shown for learning, not counted. `
+        + `The playbook is blunt about why: "Trading after 8:15am PST — 'Just one more.' Every time this is your worst trade of the week."`);
+    }
+    parts.push(` The playbook also caps you at 2 trades a day.`);
+    lines.push({ heading: "Bottom line", body: parts.join("") });
   }
 
-  return { lines, bias, dayHigh, dayLow, totalPnl, tradeableCount: tradeable.length, winCount: wins };
+  return { lines, bias, dayHigh, dayLow, totalPnl, excludedPnl,
+    tradeableCount: tradeable.length, countedCount: counted.length,
+    excludedCount: excluded.length, winCount: wins };
 }
