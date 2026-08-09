@@ -40,6 +40,7 @@ function StatCard({ label, value, sub, tone }) {
 }
 
 const money = (n) => `${n < 0 ? "-" : ""}$${Math.abs(n).toFixed(2)}`;
+const wholeMoney = (n) => `${n < 0 ? "-" : ""}$${Math.round(Math.abs(n)).toLocaleString("en-US")}`;
 const tradeSummary = (count, winRate) => `${count || 0} trade${count === 1 ? "" : "s"} · ${winRate != null ? `${winRate}% wins` : "no sample yet"}`;
 function lastWeekdayISO() {
   const d = new Date();
@@ -688,7 +689,7 @@ function CalendarView({ onBack }) {
           <div className="w-11 h-11 rounded-xl bg-white/15 flex items-center justify-center"><Zap size={20} /></div>
           <div>
             <div className="text-[11px] uppercase tracking-wider font-semibold text-emerald-100">Monthly net total · playbook hours</div>
-            <div className="text-3xl font-bold">{allTotals ? (allTotals.pnl >= 0 ? "+" : "") + money(allTotals.pnl) : "—"}</div>
+            <div className="text-3xl font-bold whitespace-nowrap">{allTotals ? (allTotals.pnl >= 0 ? "+" : "") + wholeMoney(allTotals.pnl) : "—"}</div>
             <div className="text-xs text-emerald-100">{tradeSummary(allTotals?.totalTrades, allTotals?.winRate)}</div>
           </div>
         </button>
@@ -697,7 +698,7 @@ function CalendarView({ onBack }) {
           <div className="w-11 h-11 rounded-xl bg-white/15 flex items-center justify-center"><Clock size={20} /></div>
           <div>
             <div className="text-[11px] uppercase tracking-wider font-semibold text-amber-100">Outside-hours signals · not counted</div>
-            <div className="text-3xl font-bold">{allTotals ? (allTotals.excludedPnl >= 0 ? "+" : "") + money(allTotals.excludedPnl) : "—"}</div>
+            <div className="text-3xl font-bold whitespace-nowrap">{allTotals ? (allTotals.excludedPnl >= 0 ? "+" : "") + wholeMoney(allTotals.excludedPnl) : "—"}</div>
             <div className="text-xs text-amber-100">{tradeSummary(allTotals?.excludedTrades, allTotals?.excludedWinRate)}</div>
           </div>
         </button>
@@ -706,7 +707,7 @@ function CalendarView({ onBack }) {
           <div className="w-11 h-11 rounded-xl bg-white/15 flex items-center justify-center"><FlaskConical size={20} /></div>
           <div>
             <div className="text-[11px] uppercase tracking-wider font-semibold text-indigo-100">Research lanes · paper only</div>
-            <div className="text-3xl font-bold">{allTotals ? (allTotals.experimentalPnl >= 0 ? "+" : "") + money(allTotals.experimentalPnl) : "—"}</div>
+            <div className="text-3xl font-bold whitespace-nowrap">{allTotals ? (allTotals.experimentalPnl >= 0 ? "+" : "") + wholeMoney(allTotals.experimentalPnl) : "—"}</div>
             <div className="text-xs text-indigo-100">{tradeSummary(allTotals?.experimentalTrades, allTotals?.experimentalWinRate)}</div>
           </div>
         </button>
@@ -715,7 +716,7 @@ function CalendarView({ onBack }) {
           <div className="w-11 h-11 rounded-xl bg-white/15 flex items-center justify-center"><BookOpenCheck size={20} /></div>
           <div>
             <div className="text-[11px] uppercase tracking-wider font-semibold text-sky-100">Shen conviction · paper only</div>
-            <div className="text-3xl font-bold">{allTotals ? (allTotals.shenPnl >= 0 ? "+" : "") + money(allTotals.shenPnl) : "—"}</div>
+            <div className="text-3xl font-bold whitespace-nowrap">{allTotals ? (allTotals.shenPnl >= 0 ? "+" : "") + wholeMoney(allTotals.shenPnl) : "—"}</div>
             <div className="text-xs text-sky-100">{tradeSummary(allTotals?.shenTrades, allTotals?.shenWinRate)}</div>
           </div>
         </button>

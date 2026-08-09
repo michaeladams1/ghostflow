@@ -139,7 +139,9 @@ from aggregate daily P&L. Every card shows its own trade count and win percentag
 outside-hours win rate is computed from its individual simulated trades and remains
 explicitly excluded from official P&L. The calendar is a five-column Monday-Friday view;
 Saturday and Sunday headers and cells are intentionally omitted so trading sessions have
-more horizontal room while weekday ghost cells preserve correct date alignment.
+more horizontal room while weekday ghost cells preserve correct date alignment. The four
+large summary-card P&L totals display rounded whole dollars and never split the sign from
+the amount; detailed calendar and trade values retain cents.
 
 **Opening the calendar is read-only.** `GET /api/0dte/calendar` reconstructs month/day
 summaries from `zerodte_trades`; it never calls Alpaca or runs the simulator. It selects
