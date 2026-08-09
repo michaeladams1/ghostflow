@@ -631,6 +631,7 @@ app.post("/api/0dte/analyze", async (req, res) => {
 
     console.log(`[0dte] ${session.bars.length} bars, ${session.fires.length} fires — simulating contracts...`);
     const fires = await simulateAllFires({ ticker: symbol, sessionDate, fires: session.fires });
+    const experiments = await simulateAllFires({ ticker: symbol, sessionDate, fires: session.experiments || [] });
 
     const story = buildSessionStory({
       symbol, sessionDate,
@@ -638,7 +639,7 @@ app.post("/api/0dte/analyze", async (req, res) => {
     });
     console.log(`[0dte] done — ${story.tradeableCount} tradeable, ${story.winCount} winners`);
 
-    res.json({ symbol, sessionDate, levels: session.levels, gap: session.gap, bars: session.bars, fires, story });
+    res.json({ symbol, sessionDate, levels: session.levels, gap: session.gap, bars: session.bars, fires, experiments, nearMisses: session.nearMisses || [], story });
   } catch (err) {
     console.error("[0dte] FAILED:", err);
     res.status(500).json({ error: err.message || String(err) });
