@@ -362,7 +362,7 @@ export default function ZeroDTE() {
                   <div className="text-sm text-zinc-800 dark:text-zinc-200 mt-1">
                     {data.frontier.trades || 0} selected trade{(data.frontier.trades || 0) === 1 ? "" : "s"}
                     {data.frontier.trades
-                      ? ` · P&L ${money(data.frontier.pnl)} · capital deployed ${wholeMoney(data.frontier.deployed)}`
+                      ? ` · P&L ${wholeMoney(data.frontier.pnl)} · capital deployed ${wholeMoney(data.frontier.deployed)}`
                       : " · no PUT pts≥12 first-touch fire today"}
                   </div>
                 </div>
@@ -382,7 +382,7 @@ export default function ZeroDTE() {
                       </div>
                       <div className={faint}>
                         {t.contracts} ct @ {money(t.trade?.entryPrice)} = {wholeMoney(t.deployed)} deployed
-                        {" · "}P&L {money(t.pnl)}
+                        {" · "}P&L {wholeMoney(t.pnl)}
                       </div>
                     </div>
                   ))}
@@ -544,7 +544,7 @@ function PerfBar({ label, value, maxAbs, tone }) {
       <div className="flex items-center justify-between text-sm mb-1">
         <span className={faint}>{label}</span>
         <span className={`font-bold ${good ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>
-          {value != null ? money(value) : "—"}
+          {value != null ? wholeMoney(value) : "—"}
         </span>
       </div>
       <div className="h-1.5 rounded-full bg-zinc-200 dark:bg-zinc-800 overflow-hidden">
@@ -781,7 +781,7 @@ function DayBox({ dayNum, data, ghost, lane, onOpen }) {
       {traded && (
         <>
           <div className={`text-sm font-bold ${pos ? "text-emerald-600 dark:text-emerald-400" : neg ? "text-red-600 dark:text-red-400" : "text-zinc-600"}`}>
-            {data.pnl > 0 ? "+" : ""}{money(data.pnl)}
+            {data.pnl > 0 ? "+" : ""}{wholeMoney(data.pnl)}
           </div>
           <div className={`text-[11px] ${faint}`}>{data.trades} trade{data.trades === 1 ? "" : "s"}</div>
           {Number(data.deployed) > 0 && (
@@ -815,7 +815,7 @@ function MonthBox({ month, totals, lane, onOpen }) {
       {traded ? (
         <>
           <div className={`text-lg font-bold mt-1 ${pos ? "text-emerald-600 dark:text-emerald-400" : neg ? "text-red-600 dark:text-red-400" : "text-zinc-600"}`}>
-            {pnl > 0 ? "+" : ""}{money(pnl)}
+            {pnl > 0 ? "+" : ""}{wholeMoney(pnl)}
           </div>
           <div className={`text-[11px] mt-0.5 ${faint}`}>{trades} trade{trades === 1 ? "" : "s"}</div>
           {Number(totals?.[config.deployedKey]) > 0 && (
