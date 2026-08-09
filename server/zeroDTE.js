@@ -240,7 +240,8 @@ export async function analyzeZeroDTESession({ symbol = "SPY", sessionDate }) {
   const touchedSlots = new Set();
   let dayHighSoFar = null, dayLowSoFar = null;
   let lastCallBar = -999, lastPutBar = -999, lastCallABar = -999, lastPutABar = -999, lastCallExtBar = -999, lastPutExtBar = -999;
-  let prevCallAplus = false, prevPutAplus = false, prevCallElig = false, prevPutElig = false;
+  let prevCallAplus = false, prevPutAplus = false;
+  let prevCallA = false, prevPutA = false, prevCallExt = false, prevPutExt = false;
 
   const barRows = [];
   const fires = [];
@@ -407,10 +408,14 @@ export async function analyzeZeroDTESession({ symbol = "SPY", sessionDate }) {
 
     const fireCallAp = callAplus && callCooled && (firstTouch || atOrLow || atPdl || atPml || atOrb15Sup || atVwap) && !prevCallAplus;
     const firePutAp = putAplus && putCooled && (firstTouch || atOrHigh || atPdh || atPmh || atOrb15Res || atVwap) && !prevPutAplus;
-    const fireCallA = callA && callACooled;
-    const firePutA = putA && putACooled;
-    const fireCallExt = callRsiExtElig && callExtCooled;
-    const firePutExt = putRsiExtElig && putExtCooled;
+    // EDGE TRIGGERS. Pine fires these with `and not <cond>[1]` — only on the
+    // bar the condition FIRST becomes true. Without that, a condition that
+    // stays true for 40 bars re-fires every time its cooldown lapses, which
+    // inflated the signal count well beyond what the live tool shows.
+    const fireCallA = callA && callACooled && !prevCallA;
+    const firePutA = putA && putACooled && !prevPutA;
+    const fireCallExt = callRsiExtElig && callExtCooled && !prevCallExt;
+    const firePutExt = putRsiExtElig && putExtCooled && !prevPutExt;
 
     const suggestedStop = atrV != null ? +(atrV * 1.8).toFixed(2) : null;
     const sizeFor = (pts) => pts >= aplusThresh + 3 ? "MAX $500" : pts >= aplusThresh + 1 ? "SIZE UP $375" : pts >= aplusThresh ? "FULL $250" : "HALF $125";
@@ -433,6 +438,8 @@ export async function analyzeZeroDTESession({ symbol = "SPY", sessionDate }) {
     if (firePutExt) { lastPutExtBar = i; fires.push({ tier: "RSI Extreme", direction: "PUT", idx: i, ts: bar.ts, clock: clockLabel(minutes), price: bar.close, rsi: r != null ? Math.round(r) : null, swing: Math.round(putSwing), suggestedStop }); }
 
     prevCallAplus = callAplus; prevPutAplus = putAplus;
+    prevCallA = callA; prevPutA = putA;
+    prevCallExt = callRsiExtElig; prevPutExt = putRsiExtElig;
 
     barRows.push({ ts: bar.ts, clock: clockLabel(minutes), open: bar.open, high: bar.high, low: bar.low, close: bar.close, volume: bar.volume,
       rsi: r != null ? +r.toFixed(1) : null, callPts, putPts, vwap: vwap != null ? +vwap.toFixed(2) : null, inSession: inSess });

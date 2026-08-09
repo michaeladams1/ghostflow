@@ -98,7 +98,7 @@ function TradeCard({ fire, contracts, pnl }) {
           <span className="text-base font-bold text-zinc-900 dark:text-zinc-100">
             SPY ${t.strike}{isCall ? "C" : "P"}
           </span>
-          <span className={`text-xs ${faint}`}>same-day expiry</span>
+          <span className={`text-xs ${faint}`}>{t.contract}</span>
         </div>
         <div className={`text-xl font-bold ${won ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>
           {t.pctReturn > 0 ? "+" : ""}{t.pctReturn}% · {money(pnl)}

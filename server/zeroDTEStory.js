@@ -100,7 +100,8 @@ export function buildSessionStory({ symbol = "SPY", sessionDate, levels, gap, fi
     lines.push({
       heading: `${noLevel.length} more signal${noLevel.length === 1 ? "" : "s"} fired — but weren't trades`,
       body: `RSI Extreme fired ${noLevel.length} time${noLevel.length === 1 ? "" : "s"} away from any level (${noLevel.map((f) => f.clock).join(", ")}). `
-        + `Same visual as an A-tier dot on the chart, but with no level to anchor a strike to, the playbook gives you no contract to buy. Watch, don't trade.`,
+        + `The Edge Lens guide is explicit that these come with no sizing recommendation and should be treated as information, not instructions — and that A+ is the only tier with real trade history behind it. `
+        + `The playbook's strike rule also anchors every contract to a level ("1 strike OTM from the level"), so with no level touched there is no defined contract to buy. Watch, don't trade.`,
     });
   }
 

@@ -57,3 +57,51 @@ export async function fetchAlpacaBars({ symbol, startDate, endDate, feed = "sip"
 
   return bars.sort((a, b) => a.ts - b.ts);
 }
+
+// ---- OPTIONS ----
+//
+// OCC symbol format: SPY + YYMMDD + C|P + strike x1000, zero-padded to 8.
+//   SPY $770 call expiring 2026-08-06 -> SPY260806C00770000
+export function occSymbol({ underlying = "SPY", expiration, contractType, strike }) {
+  const [y, m, d] = expiration.split("-");
+  const cp = String(contractType).toUpperCase().startsWith("C") ? "C" : "P";
+  const strikePart = String(Math.round(Number(strike) * 1000)).padStart(8, "0");
+  return `${underlying}${y.slice(2)}${m}${d}${cp}${strikePart}`;
+}
+
+// Historical 1-min bars for ONE option contract. Unlike the closes-only feed
+// this returns full OHLC — which is what makes an honest bracket simulation
+// possible: a +20% target can be touched INSIDE a minute and never show up
+// in that minute's close.
+//
+// NOTE ON SPREAD: Alpaca does not offer historical option QUOTES (bid/ask
+// time series) on any plan — only latest-quote snapshots. So these are
+// traded prices, and any simulation built on them is implicitly assuming
+// you could transact at the last trade. Real fills cross the spread, which
+// on a $0.20 contract is material. Stated here so it isn't forgotten.
+export async function fetchAlpacaOptionBars({ occ, sessionDate }) {
+  const bars = [];
+  let pageToken = null;
+  do {
+    // NOTE: unlike the stock bars endpoint, /v1beta1/options/bars rejects a
+    // `feed` parameter outright (400 "unexpected query parameter(s): feed").
+    // The feed is implied by the account's entitlements.
+    const params = new URLSearchParams({
+      symbols: occ, timeframe: "1Min",
+      start: `${sessionDate}T00:00:00Z`, end: `${sessionDate}T23:59:59Z`,
+      limit: "10000",
+    });
+    if (pageToken) params.set("page_token", pageToken);
+    const res = await fetch(`${DATA_BASE_URL}/v1beta1/options/bars?${params}`, { headers: authHeaders() });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(`Alpaca option bars failed (${res.status}): ${text || res.statusText}`);
+    }
+    const json = await res.json();
+    for (const b of (json.bars?.[occ] || [])) {
+      bars.push({ ts: new Date(b.t).getTime(), open: b.o, high: b.h, low: b.l, close: b.c, vwap: b.vw, volume: b.v, trades: b.n });
+    }
+    pageToken = json.next_page_token || null;
+  } while (pageToken);
+  return bars.sort((a, b) => a.ts - b.ts);
+}
