@@ -64,30 +64,47 @@ export function classifyShenConviction({ minutes, levelType, touchNumber, exhaus
   return { checks, convictionCount, grade: convictionCount === 3 ? "FULL" : "STANDARD" };
 }
 
-// FRONTIER MODEL — paper-only filter over official counted fires.
-// Derived from the 24-month 89d991cddb31 analysis: drop CALL@PDL, drop A+,
-// keep Edge Lens score 12–14, skip entries before 10:00 ET, skip sub-$0.50
-// premiums. Does not invent new signals; it only keeps a subset of playbook-
-// hours official trades for comparison. Official P&L is never changed.
+// FRONTIER MODEL — paper-only selection across ALL 24-month segments
+// (playbook hours, outside hours, research lanes, Shen). Does not invent
+// signals; it keeps a filtered subset for comparison. Official P&L is never
+// changed. Dialed from the 89d991cddb31 all-segment analysis:
+//   drop CALL@PDL, drop A+/Extended A+, score 12–14, premium ≥ $0.50,
+//   and the 10:00–10:15 ET clock (the strongest single clock factor).
 export const FRONTIER_MIN_MINUTE = 600; // 10:00 ET
+export const FRONTIER_MAX_MINUTE = 615; // exclusive — through 10:14
 export const FRONTIER_MIN_POINTS = 12;
 export const FRONTIER_MAX_POINTS = 14;
 export const FRONTIER_MIN_ENTRY = 0.5;
 
-export function isFrontierOfficialFire({
-  direction, levelType, tier, points, etMinute, entryPrice, window, counted,
+export function isFrontierFire({
+  direction, levelType, tier, points, etMinute, entryPrice,
 } = {}) {
-  if (counted === false) return false;
-  if (window != null && window !== "in") return false;
   if (direction === "CALL" && levelType === "PDL") return false;
-  if (tier === "A+") return false;
+  if (tier === "A+" || tier === "Extended A+") return false;
   const pts = Number(points);
   if (!Number.isFinite(pts) || pts < FRONTIER_MIN_POINTS || pts > FRONTIER_MAX_POINTS) return false;
   const minute = Number(etMinute);
-  if (!Number.isFinite(minute) || minute < FRONTIER_MIN_MINUTE) return false;
+  if (!Number.isFinite(minute) || minute < FRONTIER_MIN_MINUTE || minute >= FRONTIER_MAX_MINUTE) return false;
   const entry = Number(entryPrice);
   if (!Number.isFinite(entry) || entry < FRONTIER_MIN_ENTRY) return false;
   return true;
+}
+
+// Backward-compatible alias used by earlier Frontier v0 call sites/tests.
+export function isFrontierOfficialFire(args = {}) {
+  return isFrontierFire(args);
+}
+
+export function frontierLanePriority(lane, { counted = false } = {}) {
+  if (lane === "official" && counted) return 0;
+  if (lane === "HIGH_QUALITY_A" || lane === "EXTENDED_A_PLUS") return 1;
+  if (lane === "official") return 2;
+  if (lane === "SHEN_CONVICTION") return 3;
+  return 4;
+}
+
+export function frontierDedupeKey({ sessionDate, etMinute, direction, levelType, touchNumber }) {
+  return [sessionDate || "", etMinute ?? "", direction || "", levelType || "", touchNumber ?? ""].join("|");
 }
 
 // THE PLAYBOOK'S SCHEDULE (Shen Lao, section 09 + Rule R5), in ET minutes:
