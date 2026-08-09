@@ -38,7 +38,7 @@ assert.equal(classifyShenConviction({ minutes: 600, levelType: "PDL", touchNumbe
 
 const frontierBase = {
   direction: "PUT", levelType: "WHOLE_DOLLAR", tier: "A", points: 13,
-  etMinute: 610, entryPrice: 1.05,
+  etMinute: 610, entryPrice: 1.05, touchNumber: 1,
 };
 assert.equal(isFrontierFire(frontierBase), true);
 assert.equal(isFrontierFire({ ...frontierBase, direction: "CALL", levelType: "PDL" }), false);
@@ -52,19 +52,23 @@ assert.equal(isFrontierFire({ ...frontierBase, etMinute: 595 }), false);
 assert.equal(isFrontierFire({ ...frontierBase, etMinute: 615 }), true);
 assert.equal(isFrontierFire({ ...frontierBase, etMinute: 670 }), true);
 assert.equal(isFrontierFire({ ...frontierBase, entryPrice: 0.49 }), false);
+assert.equal(isFrontierFire({ ...frontierBase, touchNumber: 2 }), false); // v3.1 first touch
+assert.equal(isFrontierFire({ ...frontierBase, touchNumber: null }), false);
 // All segments eligible — Shen / research / outside pass the same feature gates.
 assert.equal(isFrontierFire({ ...frontierBase, tier: "Shen FULL 3/3" }), true);
 assert.equal(isFrontierFire({ ...frontierBase, tier: "Research 13-14" }), true);
-assert.equal(frontierV3FlowVeto("CALL", -0.20), true);
-assert.equal(frontierV3FlowVeto("PUT", 0.20), true);
-assert.equal(frontierV3FlowVeto("CALL", 0.20), false);
-assert.equal(frontierV3FlowVeto("PUT", -0.20), false);
+// Default veto threshold is 0.25 (v3.1).
+assert.equal(frontierV3FlowVeto("CALL", -0.30), true);
+assert.equal(frontierV3FlowVeto("PUT", 0.30), true);
+assert.equal(frontierV3FlowVeto("CALL", -0.20), false);
+assert.equal(frontierV3FlowVeto("PUT", 0.20), false);
 assert.equal(frontierV3FlowVeto("CALL", null), false);
 // frontierBase is PUT — opposing early flow is call-heavy (positive imbalance).
-assert.equal(passesFrontierV3({ ...frontierBase, flowImbalance: 0.20 }), false);
+assert.equal(passesFrontierV3({ ...frontierBase, flowImbalance: 0.30 }), false);
+assert.equal(passesFrontierV3({ ...frontierBase, flowImbalance: 0.20 }), true);
 assert.equal(passesFrontierV3({ ...frontierBase, flowImbalance: -0.20 }), true);
 assert.equal(passesFrontierV3({ ...frontierBase, flowImbalance: 0.05 }), true);
-assert.equal(passesFrontierV3({ ...frontierBase, direction: "CALL", flowImbalance: -0.20 }), false);
+assert.equal(passesFrontierV3({ ...frontierBase, direction: "CALL", flowImbalance: -0.30 }), false);
 
 const bars = [
   { ts: ts("11:13"), open: 1.00, high: 1.01, low: 0.99, close: 1.00 },

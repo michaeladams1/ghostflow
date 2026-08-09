@@ -104,6 +104,7 @@ async function loadDayBooks(client) {
       points: row.points != null ? Number(row.points) : null,
       etMinute: row.et_minute != null ? Number(row.et_minute) : null,
       entryPrice: row.entry_price != null ? Number(row.entry_price) : null,
+      touchNumber: row.touch_number != null ? Number(row.touch_number) : null,
     })) {
       if (!v2Keys.has(row.session_date)) v2Keys.set(row.session_date, new Map());
       const key = frontierDedupeKey({
