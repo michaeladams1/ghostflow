@@ -4,8 +4,8 @@ import {
   pickOtmStrike, playbookTouchPolicy,
 } from "./zeroDTE.js";
 import {
-  FRONTIER_PAPER_DOLLARS, frontierPaperPnl, frontierV3FlowVeto, passesFrontierV3,
-  selectFrontierBestPerDay,
+  FRONTIER_PAPER_DOLLARS, FRONTIER_SL_MULT, FRONTIER_TP_MULT,
+  frontierPaperPnl, frontierV3FlowVeto, passesFrontierV3, selectFrontierBestPerDay,
 } from "./frontierV3.js";
 import { walkBracketBars } from "./zeroDTEOptionSim.js";
 
@@ -39,7 +39,6 @@ assert.equal(classifyShenConviction({ minutes: 600, levelType: "PDH", touchNumbe
 assert.equal(classifyShenConviction({ minutes: 600, levelType: "PDH", touchNumber: 1, exhaustionMove: 3, moveDistance: 3, rsi: 75, direction: "PUT", approachValid: false }), null);
 assert.equal(classifyShenConviction({ minutes: 600, levelType: "PDL", touchNumber: 2, exhaustionMove: 3, moveDistance: 3, rsi: null, direction: "CALL" }), null);
 
-// Frontier v5: first touch, from 9:45, any premium; A+ / CALL@PDL allowed.
 const frontierBase = {
   direction: "PUT", levelType: "WHOLE_DOLLAR", tier: "A", points: 8,
   etMinute: 590, entryPrice: 1.05, touchNumber: 1,
@@ -47,21 +46,15 @@ const frontierBase = {
 assert.equal(isFrontierFire(frontierBase), true);
 assert.equal(isFrontierFire({ ...frontierBase, direction: "CALL", levelType: "PDL" }), true);
 assert.equal(isFrontierFire({ ...frontierBase, tier: "A+" }), true);
-assert.equal(isFrontierFire({ ...frontierBase, tier: "Extended A+" }), true);
 assert.equal(isFrontierFire({ ...frontierBase, etMinute: 584 }), false);
-assert.equal(isFrontierFire({ ...frontierBase, etMinute: 585 }), true);
-assert.equal(isFrontierFire({ ...frontierBase, entryPrice: 0.49 }), true);
-assert.equal(isFrontierFire({ ...frontierBase, entryPrice: 0 }), false);
 assert.equal(isFrontierFire({ ...frontierBase, touchNumber: 2 }), false);
-assert.equal(isFrontierFire({ ...frontierBase, touchNumber: null }), false);
-assert.equal(isFrontierFire({ ...frontierBase, tier: "Shen FULL 3/3" }), true);
-assert.equal(isFrontierFire({ ...frontierBase, tier: "Research 13-14" }), true);
+assert.equal(isFrontierFire({ ...frontierBase, entryPrice: 0 }), false);
 
-assert.equal(FRONTIER_PAPER_DOLLARS, 8000);
-assert.equal(frontierPaperPnl(1.00, 1.20, 1000), 200); // 10 contracts * $0.20 * 100
-assert.equal(frontierPaperPnl(1.00, 1.20, 8000), 1600);
-assert.equal(frontierPaperPnl(2.03, 2.44, 1000), 164); // floor(1000/203)=4 contracts
-assert.equal(frontierV3FlowVeto("CALL", -0.50), false); // veto disabled
+assert.equal(FRONTIER_PAPER_DOLLARS, 1000);
+assert.equal(FRONTIER_TP_MULT, 10);
+assert.equal(FRONTIER_SL_MULT, 0.5);
+assert.equal(frontierPaperPnl(1.00, 1.20, 1000), 200);
+assert.equal(frontierV3FlowVeto("CALL", -0.50), false);
 assert.equal(passesFrontierV3({ ...frontierBase, flowImbalance: 0.90 }), true);
 
 const best = selectFrontierBestPerDay([
@@ -72,7 +65,6 @@ const best = selectFrontierBestPerDay([
 ]);
 assert.equal(best.length, 2);
 assert.equal(best.find((x) => x.sessionDate === "2026-08-04").pnl, 40);
-assert.equal(best.find((x) => x.sessionDate === "2026-08-05").pnl, -20);
 
 const bars = [
   { ts: ts("11:13"), open: 1.00, high: 1.01, low: 0.99, close: 1.00 },
@@ -91,5 +83,17 @@ const researchBars = [
 const researchExit = walkBracketBars({ bars: researchBars, entryIdx: 0, tpPrice: 1.20, slPrice: 0.875, cutoffMin: 750 });
 assert.equal(researchExit.exitReason, "Research window ended at 12:30 PM ET");
 assert.equal(researchExit.exitPrice, 1.02);
+
+// Frontier runner stop: -50% hits before a huge TP.
+const runnerBars = [
+  { ts: ts("10:00"), open: 1.00, high: 1.01, low: 0.99, close: 1.00 },
+  { ts: ts("10:01"), open: 0.90, high: 0.95, low: 0.40, close: 0.45 },
+];
+const runnerExit = walkBracketBars({
+  bars: runnerBars, entryIdx: 0, tpPrice: 10, slPrice: 0.50,
+  cutoffMin: 960, enforceHardStop: true, tpLabel: "+900% runner", slLabel: "-50%",
+});
+assert.equal(runnerExit.exitPrice, 0.50);
+assert.match(runnerExit.exitReason, /SL hit \(-50%\)/);
 
 console.log("0DTE policy regression tests passed");

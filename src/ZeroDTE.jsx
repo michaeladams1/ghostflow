@@ -522,7 +522,7 @@ const CALENDAR_LANES = {
   outside: { label: "Outside hours", pnlKey: "excludedPnl", tradesKey: "excludedTradePnls" },
   research: { label: "Research lanes", pnlKey: "experimentalPnl", tradesKey: "experimentalTradePnls" },
   shen: { label: "Shen conviction", pnlKey: "shenPnl", tradesKey: "shenTradePnls" },
-  frontier: { label: "Frontier v5", pnlKey: "frontierPnl", tradesKey: "frontierTradePnls" },
+  frontier: { label: "Frontier v6", pnlKey: "frontierPnl", tradesKey: "frontierTradePnls" },
 };
 
 function laneDay(day, lane) {
@@ -883,9 +883,9 @@ function CalendarView({ onBack, onOpenDay, initialReturn }) {
           className={`w-full rounded-2xl bg-gradient-to-br from-teal-600 to-emerald-800 text-white p-5 flex items-center gap-4 text-left transition ${calendarLane === "frontier" ? "ring-4 ring-teal-300 ring-offset-2 dark:ring-offset-zinc-950" : "hover:scale-[1.01]"}`}>
           <div className="w-11 h-11 rounded-xl bg-white/15 flex items-center justify-center"><Sparkles size={20} /></div>
           <div className="min-w-0">
-            <div className="text-[11px] uppercase tracking-wider font-semibold text-teal-100">Frontier v5 · paper only · $8k tickets · ~$250/day target</div>
+            <div className="text-[11px] uppercase tracking-wider font-semibold text-teal-100">Frontier v6 · paper only · $1k max · runner / −50%</div>
             <div className="text-3xl font-bold whitespace-nowrap">{allTotals ? (allTotals.frontierPnl >= 0 ? "+" : "") + wholeMoney(allTotals.frontierPnl) : "—"}</div>
-            <div className="text-xs text-teal-100">{tradeSummary(allTotals?.frontierTrades, allTotals?.frontierWinRate)} · touch 1 · from 9:45 ET · best score/day · $8k paper</div>
+            <div className="text-xs text-teal-100">{tradeSummary(allTotals?.frontierTrades, allTotals?.frontierWinRate)} · touch 1 · from 9:45 · best score/day · re-sim for true exits</div>
           </div>
         </button>
       </div>
@@ -975,8 +975,8 @@ function CalendarView({ onBack, onOpenDay, initialReturn }) {
                   Click a day to open the full debrief — option entry/exit chart plus the underlying SPY chart.
                   $1,000 base campaign per trade (playbook tiers ×4: half $500 · full $1,000 · size-up $1,500 · max $2,000).
                   Outside-hours / research / Shen / Frontier are paper comparison lanes and never change official P&L.
-                  Frontier v5 (live): first touch from 9:45 ET, best Edge Lens score/day, P&L recomputed at $8,000 paper (holdout ~$250/day avg). No toxin gates; no 24-month re-sim needed.
-                  $1,000 tickets cannot hit that target under the stored +20%/−12.5% bracket (full TP tops out near +$200). Wider exits would need a new backtest.
+                  Frontier v6 (live): $1,000 max, first touch, best score/day, Frontier-only exits (runner / −50% stop, no 11:15 flat). Official boxes still use +20%/−12.5%.
+                  Re-run the 24-month backtest so frontier_* exit columns fill in — until then totals may fall back to $1k on playbook exits.
                 </p>
               </>
             )}

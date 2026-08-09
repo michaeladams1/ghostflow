@@ -43,12 +43,18 @@ export async function saveSessionTrades({ symbol = "SPY", sessionDate, rows }) {
            level_type, level, touch_number, points, rsi, swing, vol_pts, speed_pts, wick_pts, mtf_aligned,
            contract, strike, entry_price, exit_price, entry_clock, exit_clock, hold_minutes, exit_reason,
            pct_return, contracts, pnl, counted, features,
+           frontier_exit_price, frontier_pct_return, frontier_pnl, frontier_exit_reason,
            deployment_id, commit_sha, code_version, branch, environment
          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
-                   $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38)
+                   $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,
+                   $39,$40,$41,$42)
          ON CONFLICT (id) DO UPDATE SET
            pnl = EXCLUDED.pnl, pct_return = EXCLUDED.pct_return,
-           exit_reason = EXCLUDED.exit_reason, features = EXCLUDED.features`,
+           exit_reason = EXCLUDED.exit_reason, features = EXCLUDED.features,
+           frontier_exit_price = EXCLUDED.frontier_exit_price,
+           frontier_pct_return = EXCLUDED.frontier_pct_return,
+           frontier_pnl = EXCLUDED.frontier_pnl,
+           frontier_exit_reason = EXCLUDED.frontier_exit_reason`,
         [
           tradeId({ symbol, sessionDate, lane: r.lane || "official", direction: r.direction, clock: r.clock, tier: r.tier, codeVersion: build.codeVersion }),
           symbol, sessionDate, r.ts ? new Date(r.ts) : null, r.clock || null, num(r.etMinute),
@@ -64,6 +70,7 @@ export async function saveSessionTrades({ symbol = "SPY", sessionDate, rows }) {
             method: r.method, convictionCount: r.convictionCount,
             convictionChecks: r.convictionChecks, moveDistance: r.moveDistance,
           }),
+          num(t.frontierExitPrice), num(t.frontierPctReturn), num(t.frontierPnl), t.frontierExitReason || null,
           build.deploymentId, build.commitSha, build.codeVersion, build.branch, build.environment,
         ],
       );
@@ -125,14 +132,16 @@ export async function loadSavedCalendarDays({ symbol = "SPY", year, month }) {
   // 24-month history lights up without a full resim.
   const { rows } = await pool.query(
     `SELECT session_date, lane, pb_window, entry_price, exit_price, pnl, counted,
-            direction, level_type, tier, points, et_minute, touch_number, level
+            direction, level_type, tier, points, et_minute, touch_number, level,
+            frontier_exit_price, frontier_pnl
      FROM zerodte_trades
      WHERE symbol = $1 AND code_version = $2
        AND session_date >= $3 AND session_date < $4
      ORDER BY session_date, et_minute`,
     [symbol, version.code_version, from, to]);
 
-  // Frontier v5 recomputes P&L from entry/exit at paper size — no re-sim, no QD.
+  // Frontier uses frontier_* exits when present (post v6 re-sim); otherwise
+  // falls back to $1k paper on playbook exit prices until the backtest lands.
   return {
     codeVersion: version.code_version,
     sessionsCovered: version.sessions,
@@ -186,8 +195,15 @@ export function calendarDaysFromRows(rows, { flowByDate = null } = {}) {
       touchNumber: row.touch_number != null ? Number(row.touch_number) : null,
       flowImbalance,
     })) {
-      const frontierPnl = frontierPaperPnl(entryPrice, row.exit_price);
-      if (frontierPnl == null) continue;
+      // Prefer Frontier-specific exit P&L from the re-sim; fall back to $1k on
+      // playbook exit until those columns are populated.
+      const frontierPnl = row.frontier_pnl != null
+        ? Number(row.frontier_pnl)
+        : frontierPaperPnl(
+          entryPrice,
+          row.frontier_exit_price != null ? row.frontier_exit_price : row.exit_price,
+        );
+      if (frontierPnl == null || Number.isNaN(frontierPnl)) continue;
       const key = frontierDedupeKey({
         sessionDate: row.session_date,
         etMinute,

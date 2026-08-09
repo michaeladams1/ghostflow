@@ -113,6 +113,11 @@ export function ensureSchema() {
       CREATE INDEX IF NOT EXISTS zerodte_by_session ON zerodte_trades (symbol, session_date);
       CREATE INDEX IF NOT EXISTS zerodte_by_lane ON zerodte_trades (lane, counted);
       CREATE INDEX IF NOT EXISTS zerodte_by_version ON zerodte_trades (code_version, counted);
+      -- Frontier-only exit path (runner / -50%, $1k paper). Official exit_* unchanged.
+      ALTER TABLE zerodte_trades ADD COLUMN IF NOT EXISTS frontier_exit_price NUMERIC;
+      ALTER TABLE zerodte_trades ADD COLUMN IF NOT EXISTS frontier_pct_return NUMERIC;
+      ALTER TABLE zerodte_trades ADD COLUMN IF NOT EXISTS frontier_pnl NUMERIC;
+      ALTER TABLE zerodte_trades ADD COLUMN IF NOT EXISTS frontier_exit_reason TEXT;
       -- DURABLE 0DTE BACKTEST JOBS. The browser starts a job and may disappear;
       -- Railway advances this persisted checkpoint one month at a time.
       CREATE TABLE IF NOT EXISTS zerodte_backtest_jobs (
