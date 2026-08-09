@@ -2,6 +2,8 @@
 
 ## Cursor Cloud specific instructions
 
+**Current focus: the 0DTE tab only.** Treat Analyses, Strategy Lab, and Theses as out of scope unless the user explicitly asks. Prefer changes, tests, demos, and secrets work that unblocks SPY 0DTE debrief / calendar / performance / 24-month backtest.
+
 GHOSTFLOW is a single app: a React (Vite) frontend + one Express backend (`server.js`) backed by PostgreSQL, with external vendor/AI integrations (Quant Data, Alpaca, Databento, Anthropic/OpenAI/xAI). npm scripts are the source of truth (`package.json`); the root `README.md` is outdated — `docs/architecture.md` and `docs/0DTE_HANDOFF.md` are accurate.
 
 Dependencies (`npm install`) are refreshed automatically by the startup update script — don't reinstall unless something is missing.
