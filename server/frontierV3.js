@@ -1,40 +1,40 @@
-// FRONTIER v3.1 — live paper lane (beats Frontier v3 / v2 on 2026 holdout).
+// FRONTIER v4 — live paper lane targeting high session coverage.
 //
-// Price-action core: soft score 11–15, first touch only, from 10:00, toxins,
-// premium ≥ $0.50.
-// QuantData veto: skip when first ~30 flow buckets oppose the trade direction
-// by more than 0.25. Missing QD data does NOT veto.
+// Eligibility (all segments): not CALL@PDL, not A+/Extended A+, et_minute >= 585
+// (9:45 ET), entry_price >= $0.50.
+// Selection: keep the single highest-points eligible fire per session day
+// (ties → earlier et_minute). No QuantData veto — coverage comes from the
+// wide net + 1-trade/day score pick.
 //
-// Evidence: server/frontierV3PlusSearch.js → data/frontier-v3/plus-search-latest.json
-// Champion id: v3_soft_11_15_touch1__flow_oppose_025
+// Evidence: server/frontierCoverageSearch.js
+// Champion id: any_from945__cap1_best
+//   ~69% day coverage, holdout +$2081 vs v2 +$991 / v3.1 +$2718,
+//   full +$4012 (best full-sample among profitable high-coverage books).
 
 import { QD_ENDPOINTS } from "./quantDataRegistry.js";
 import { fetchEndpointCached } from "./quantDataClient.js";
 
-export const FRONTIER_V3_MIN_MINUTE = 600;
-export const FRONTIER_V3_MIN_POINTS = 11;
-export const FRONTIER_V3_MAX_POINTS = 15;
+export const FRONTIER_V3_MIN_MINUTE = 585; // 9:45 ET — playbook open
+export const FRONTIER_V3_MIN_POINTS = null; // no score floor (best-of-day picks quality)
+export const FRONTIER_V3_MAX_POINTS = null;
 export const FRONTIER_V3_MIN_ENTRY = 0.5;
-export const FRONTIER_V3_FLOW_VETO = 0.25;
+export const FRONTIER_V3_FLOW_VETO = null; // disabled for v4 coverage book
 export const FRONTIER_V3_FLOW_BUCKETS = 30;
-export const FRONTIER_V3_REQUIRE_FIRST_TOUCH = true;
-export const FRONTIER_V3_VERSION = "v3_soft_11_15_touch1__flow_oppose_025";
+export const FRONTIER_V3_REQUIRE_FIRST_TOUCH = false;
+export const FRONTIER_V3_ONE_PER_DAY = true;
+export const FRONTIER_V3_VERSION = "any_from945__cap1_best";
 
+/** Price-action eligibility only (before per-day selection). */
 export function isFrontierV3Fire({
   direction, levelType, tier, points, etMinute, entryPrice, touchNumber,
 } = {}) {
+  void points; void touchNumber;
   if (direction === "CALL" && levelType === "PDL") return false;
   if (tier === "A+" || tier === "Extended A+") return false;
-  const pts = Number(points);
-  if (!Number.isFinite(pts) || pts < FRONTIER_V3_MIN_POINTS || pts > FRONTIER_V3_MAX_POINTS) return false;
   const minute = Number(etMinute);
   if (!Number.isFinite(minute) || minute < FRONTIER_V3_MIN_MINUTE) return false;
   const entry = Number(entryPrice);
   if (!Number.isFinite(entry) || entry < FRONTIER_V3_MIN_ENTRY) return false;
-  if (FRONTIER_V3_REQUIRE_FIRST_TOUCH) {
-    const touch = Number(touchNumber);
-    if (!Number.isFinite(touch) || touch !== 1) return false;
-  }
   return true;
 }
 
@@ -51,17 +51,17 @@ export function netFlowEarlyImbalance(flowData, buckets = FRONTIER_V3_FLOW_BUCKE
 
 /** @returns {boolean} true when the trade should be excluded */
 export function frontierV3FlowVeto(direction, flowImbalance, threshold = FRONTIER_V3_FLOW_VETO) {
+  if (threshold == null || !Number.isFinite(threshold)) return false;
   if (flowImbalance == null || !Number.isFinite(flowImbalance)) return false;
   if (direction === "CALL" && flowImbalance < -threshold) return true;
   if (direction === "PUT" && flowImbalance > threshold) return true;
   return false;
 }
 
-// Process-local memo so Year view (12 month loads) does not re-hit QuantData
-// for the same session dates within one server lifetime.
 const flowImbalanceMemo = new Map();
 const FLOW_FETCH_CONCURRENCY = 4;
 
+/** Kept for research / optional future vetoes; calendar no longer requires QD. */
 export async function loadFrontierV3FlowByDate(sessionDates) {
   const ep = QD_ENDPOINTS.find((e) => e.id === "net_flow");
   const out = new Map();
@@ -108,4 +108,25 @@ export function passesFrontierV3({
   })) return false;
   if (frontierV3FlowVeto(direction, flowImbalance)) return false;
   return true;
+}
+
+/**
+ * Among same-day Frontier candidates, keep the highest points trade
+ * (tie → earlier et_minute). Used after setup-key dedupe.
+ */
+export function selectFrontierBestPerDay(candidates) {
+  if (!FRONTIER_V3_ONE_PER_DAY) return candidates;
+  const byDay = new Map();
+  for (const c of candidates) {
+    const date = c.sessionDate || c.session_date || c.date;
+    const points = Number(c.points);
+    const minute = Number(c.etMinute ?? c.et_minute);
+    const prev = byDay.get(date);
+    if (!prev
+      || points > prev._points
+      || (points === prev._points && minute < prev._minute)) {
+      byDay.set(date, { ...c, _points: points, _minute: minute });
+    }
+  }
+  return [...byDay.values()].map(({ _points, _minute, ...rest }) => rest);
 }
