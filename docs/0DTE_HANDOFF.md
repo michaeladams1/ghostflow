@@ -224,8 +224,6 @@ Per-bar series (price, RSI, running scores) are **not** persisted — only fires
 calendar's day-level aggregates live in an **in-memory Map** that dies on restart. Adding
 bar-level analysis means a new table, not a tweak.
 
----
-
 ### What a row actually represents — read before interpreting row counts
 
 **A row is a SIGNAL, not a taken trade.** Three distinct states, distinguished by two
@@ -309,7 +307,7 @@ what makes "did that change help?" answerable instead of silently overwritten.
 
 ---
 
-## 7. Current state (as of commit `c56e160`)
+## 7. Current state (as of commit `3141007`)
 
 Working: daily debrief with trade cards (BOUGHT/SOLD blocks, contract details, option
 price chart with entry/exit markers and a zoom/full-day toggle), SPY chart with levels +
@@ -319,10 +317,19 @@ stats sidebar, DB persistence, feature analysis, version comparison.
 **Sizing:** $1,000 base campaign (playbook tiers ×4: half $500 / full $1,000 /
 size-up $1,500 / max $2,000).
 
-**Results so far are NOT evidence of anything.** July 2026: 6 counted trades. August: 7.
-At n=6 a 50% win rate has a confidence interval roughly 12%–88%. Early feature slices hint
-that PDH/PDL levels outperform plain whole dollars — on 2 and 4 trades respectively. The
-analyzer flags every bucket under 20 trades as `reliable: false`. **Respect that flag.**
+**Results so far are NOT evidence of anything.** Under the current code version, August
+2026 has **2 counted trades** (+$190 on 8/3, −$120 on 8/4 = **+$70**), plus 5 more
+simulated outside playbook hours (+$324) and 56 non-tradeable RSI Extreme signals.
+
+⚠ **Headline numbers move whenever the logic changes.** Earlier drafts of this doc quoted
+"July: 6 trades / +$307" and "August: 7 trades" — those came from *older code versions*
+that are still sitting in the table alongside the current ones. **Do not quote a number
+from this section without re-querying and filtering by the current `code_version`.** This
+is precisely why provenance is in the row key.
+
+Early feature slices hint that PDH/PDL levels outperform plain whole dollars — on a
+handful of trades. The analyzer flags every bucket under 20 trades as `reliable: false`.
+**Respect that flag.**
 
 ---
 
