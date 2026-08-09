@@ -528,20 +528,49 @@ function CalendarView({ onBack }) {
   const now = new Date();
   const [ym, setYm] = useState({ year: now.getFullYear(), month: now.getMonth() + 1 });
   const [loading, setLoading] = useState(false);
+  const [bulkRun, setBulkRun] = useState(null);
   const [err, setErr] = useState(null);
   const [data, setData] = useState(null);
 
+  async function requestMonth(year, month) {
+    const res = await fetch("/api/0dte/month", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ symbol: "SPY", year, month }),
+    });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.error || "Request failed");
+    return json;
+  }
+
   async function load(y, m) {
     setLoading(true); setErr(null);
+    try { setData(await requestMonth(y, m)); }
+    catch (e) { setErr(e.message); }
+    finally { setLoading(false); }
+  }
+
+  async function runLast24Months() {
+    setErr(null);
+    const months = [];
+    for (let offset = 23; offset >= 0; offset--) {
+      const d = new Date(Date.UTC(now.getFullYear(), now.getMonth() - offset, 1));
+      months.push({ year: d.getUTCFullYear(), month: d.getUTCMonth() + 1 });
+    }
+
+    setBulkRun({ completed: 0, total: months.length, current: months[0] });
     try {
-      const res = await fetch("/api/0dte/month", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ symbol: "SPY", year: y, month: m }),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Request failed");
-      setData(json);
-    } catch (e) { setErr(e.message); } finally { setLoading(false); }
+      for (let i = 0; i < months.length; i++) {
+        const current = months[i];
+        setBulkRun({ completed: i, total: months.length, current });
+        await requestMonth(current.year, current.month);
+        setBulkRun({ completed: i + 1, total: months.length, current });
+      }
+      setData(await requestMonth(ym.year, ym.month));
+    } catch (e) {
+      setErr(`24-month backtest stopped: ${e.message}. Click the button to safely resume.`);
+    } finally {
+      setBulkRun(null);
+    }
   }
   // Load on first render and whenever the month changes.
   useEffect(() => { load(ym.year, ym.month); }, [ym.year, ym.month]);
@@ -583,7 +612,15 @@ function CalendarView({ onBack }) {
             </button>
           ))}
         </div>
-        <div className="w-40" />
+        <div className="w-56 flex justify-end">
+          <button onClick={runLast24Months} disabled={loading || !!bulkRun}
+            className="rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:bg-zinc-300 dark:disabled:bg-zinc-700 text-white px-3 py-2 text-xs font-semibold flex items-center gap-2">
+            {bulkRun ? <Loader2 size={14} className="animate-spin" /> : <CalendarDays size={14} />}
+            {bulkRun
+              ? `${bulkRun.completed}/${bulkRun.total} · ${MONTH_NAMES[bulkRun.current.month - 1]} ${bulkRun.current.year}`
+              : "Backtest last 24 months"}
+          </button>
+        </div>
       </div>
 
       <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-4">
@@ -634,6 +671,22 @@ function CalendarView({ onBack }) {
         <div className={`flex items-center gap-2 text-sm px-4 py-10 justify-center ${faint}`}>
           <Loader2 size={16} className="animate-spin" />
           Simulating every session in {MONTH_NAMES[ym.month - 1]}… first run takes a few minutes, then it's cached.
+        </div>
+      )}
+
+      {bulkRun && (
+        <div className={`${card} rounded-lg px-4 py-3 mb-4`}>
+          <div className="flex items-center justify-between text-xs mb-2">
+            <span className="font-semibold text-zinc-800 dark:text-zinc-200">Building the 24-month history</span>
+            <span className={faint}>{bulkRun.completed} of {bulkRun.total} months saved</span>
+          </div>
+          <div className="h-2 rounded-full bg-zinc-200 dark:bg-zinc-800 overflow-hidden">
+            <div className="h-full bg-indigo-600 transition-all"
+              style={{ width: `${(bulkRun.completed / bulkRun.total) * 100}%` }} />
+          </div>
+          <div className={`text-[11px] mt-2 ${faint}`}>
+            Keep this page open while it runs. Completed months remain saved, so rerunning is safe if the connection stops.
+          </div>
         </div>
       )}
 

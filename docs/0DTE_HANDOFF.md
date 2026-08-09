@@ -116,6 +116,12 @@ API: POST /api/0dte/analyze · POST /api/0dte/month · GET /api/0dte/performance
      GET /api/0dte/versions · GET /api/build
 ```
 
+The calendar includes a **Backtest last 24 months** button. It intentionally calls the
+existing month endpoint sequentially, oldest month first, instead of holding one giant
+HTTP request open. Each day is persisted as its month completes, and the store's
+same-version replace semantics make the button safe to rerun after a browser sleep,
+connection failure, or partial run. The page must remain open while the batch is active.
+
 ---
 
 ## 4b. Database — what gets logged and how to query it
