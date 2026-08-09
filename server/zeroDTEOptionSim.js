@@ -20,6 +20,7 @@ import { pickOtmStrike } from "./zeroDTE.js";
 
 const TP_MULT = 1.20;   // +20% target — the playbook's bracket TP
 const SL_MULT = 0.875;  // -12.5% stop — the playbook's bracket SL
+const HARD_STOP_MIN = 675; // 11:15 ET / 8:15 PST
 
 function etMinutes(ts) {
   const parts = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour12: false, hour: "2-digit", minute: "2-digit" }).formatToParts(new Date(ts));
@@ -29,6 +30,23 @@ function etMinutes(ts) {
 function minToClock(min) {
   const h = Math.floor(min / 60), m = min % 60;
   return `${((h + 11) % 12) + 1}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"} ET`;
+}
+
+export function walkBracketBars({ bars, entryIdx, tpPrice, slPrice, enforceHardStop = true }) {
+  for (let i = entryIdx + 1; i < bars.length; i++) {
+    const b = bars[i];
+    if (enforceHardStop && etMinutes(b.ts) >= HARD_STOP_MIN) {
+      return { exitBar: b, exitPrice: b.open ?? b.close, exitReason: "Playbook hard stop at 11:15 AM ET" };
+    }
+    const hitTp = b.high >= tpPrice, hitSl = b.low <= slPrice;
+    if (hitTp && hitSl) {
+      return { exitBar: b, exitPrice: slPrice, exitReason: "SL hit (-12.5%) — TP and SL both touched in the same minute, stop assumed first" };
+    }
+    if (hitTp) return { exitBar: b, exitPrice: tpPrice, exitReason: "TP hit (+20%)" };
+    if (hitSl) return { exitBar: b, exitPrice: slPrice, exitReason: "SL hit (-12.5%)" };
+  }
+  const exitBar = bars[bars.length - 1];
+  return { exitBar, exitPrice: exitBar.close, exitReason: "Neither TP nor SL hit — held to the last trade of the day" };
 }
 
 export async function simulateBracketTrade({ ticker = "SPY", sessionDate, fire }) {
@@ -58,25 +76,12 @@ export async function simulateBracketTrade({ ticker = "SPY", sessionDate, fire }
 
   // Walk forward against the minute's HIGH and LOW, not its close — a
   // resting bracket triggers the moment price trades through it.
-  let exitBar = null, exitPrice = null, exitReason = null;
-  for (let i = entryIdx + 1; i < bars.length; i++) {
-    const b = bars[i];
-    const hitTp = b.high >= tpPrice, hitSl = b.low <= slPrice;
-    if (hitTp && hitSl) {
-      // Both touched inside one minute and 1-min bars can't say which came
-      // first. Assume the STOP — the pessimistic read, so the simulation
-      // never flatters itself on an ambiguous bar.
-      exitBar = b; exitPrice = slPrice; exitReason = "SL hit (-12.5%) — TP and SL both touched in the same minute, stop assumed first";
-      break;
-    }
-    if (hitTp) { exitBar = b; exitPrice = tpPrice; exitReason = "TP hit (+20%)"; break; }
-    if (hitSl) { exitBar = b; exitPrice = slPrice; exitReason = "SL hit (-12.5%)"; break; }
-  }
-  if (!exitBar) {
-    exitBar = bars[bars.length - 1];
-    exitPrice = exitBar.close;
-    exitReason = "Neither TP nor SL hit — held to the last trade of the day";
-  }
+  // Entries before the playbook cutoff must be flat at 11:15 ET. Signals
+  // after the cutoff are still simulated for learning and remain excluded
+  // from playbook P&L, so they cannot be force-exited before they exist.
+  const { exitBar, exitPrice, exitReason } = walkBracketBars({
+    bars, entryIdx, tpPrice, slPrice, enforceHardStop: fireMin < HARD_STOP_MIN,
+  });
 
   const entryMin = etMinutes(entryBar.ts), exitMin = etMinutes(exitBar.ts);
   const pctReturn = +(((exitPrice - entryPrice) / entryPrice) * 100).toFixed(1);

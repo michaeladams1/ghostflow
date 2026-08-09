@@ -76,7 +76,10 @@ export function buildSessionStory({ symbol = "SPY", sessionDate, levels, gap, fi
       steps.push(`**⏰ Outside the playbook's hours** — this fired at ${f.clock}, but the playbook's trade window is 9:45–11:15 AM ET (${f.window === "before" ? '"Watch the open... Zero trades" until 6:45 PST' : '"Close the platform. Physically. Not minimize. CLOSE." at 8:15 PST'}). By the rules this trade doesn't exist — it's simulated below for learning only and excluded from the day's P&L.`);
     }
 
-    steps.push(`**Identify the level** — $${f.level} came into play at ${f.clock}.`);
+    steps.push(`**Identify the level** — ${f.levelType ? `${f.levelType.replaceAll("_", " ")} at ` : ""}$${Number(f.level).toFixed(2)} came into play at ${f.clock}.`);
+    if (f.touchNumber != null) {
+      steps.push(`**Touch rule** — touch #${f.touchNumber}${f.touchNumber === 2 ? "; position size dropped one tier" : f.exhaustionException ? "; allowed by the $4+ exhaustion exception" : ""}.`);
+    }
     steps.push(`**Check RSI** — 1-min RSI read ${f.rsi}${f.direction === "PUT" ? " (overbought at resistance → puts)" : " (oversold at support → calls)"}.`);
     if (f.swing != null) steps.push(`**Swing** — RSI had swung ${f.swing} points into that reading, which is what separates a real exhaustion from a drift.`);
     if (f.volPts != null) steps.push(`**Confirmation** — volume ${f.volPts}/2, speed of move ${f.speedPts}/2, wick rejection ${f.wickPts}/1.`);
