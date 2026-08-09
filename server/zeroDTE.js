@@ -64,6 +64,32 @@ export function classifyShenConviction({ minutes, levelType, touchNumber, exhaus
   return { checks, convictionCount, grade: convictionCount === 3 ? "FULL" : "STANDARD" };
 }
 
+// FRONTIER MODEL — paper-only filter over official counted fires.
+// Derived from the 24-month 89d991cddb31 analysis: drop CALL@PDL, drop A+,
+// keep Edge Lens score 12–14, skip entries before 10:00 ET, skip sub-$0.50
+// premiums. Does not invent new signals; it only keeps a subset of playbook-
+// hours official trades for comparison. Official P&L is never changed.
+export const FRONTIER_MIN_MINUTE = 600; // 10:00 ET
+export const FRONTIER_MIN_POINTS = 12;
+export const FRONTIER_MAX_POINTS = 14;
+export const FRONTIER_MIN_ENTRY = 0.5;
+
+export function isFrontierOfficialFire({
+  direction, levelType, tier, points, etMinute, entryPrice, window, counted,
+} = {}) {
+  if (counted === false) return false;
+  if (window != null && window !== "in") return false;
+  if (direction === "CALL" && levelType === "PDL") return false;
+  if (tier === "A+") return false;
+  const pts = Number(points);
+  if (!Number.isFinite(pts) || pts < FRONTIER_MIN_POINTS || pts > FRONTIER_MAX_POINTS) return false;
+  const minute = Number(etMinute);
+  if (!Number.isFinite(minute) || minute < FRONTIER_MIN_MINUTE) return false;
+  const entry = Number(entryPrice);
+  if (!Number.isFinite(entry) || entry < FRONTIER_MIN_ENTRY) return false;
+  return true;
+}
+
 // THE PLAYBOOK'S SCHEDULE (Shen Lao, section 09 + Rule R5), in ET minutes:
 //   6:30 PST / 9:30 ET  observe only — "Zero trades"
 //   6:45 PST / 9:45 ET  "TRADE WINDOW OPENS"

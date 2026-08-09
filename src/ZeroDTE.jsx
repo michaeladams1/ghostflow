@@ -8,7 +8,7 @@
 // a red down-arrow where you'd have sold.
 import { useState, useEffect } from "react";
 import {
-  Zap, Loader2, AlertTriangle, ArrowUp, ArrowDown, Target, ShieldAlert, Clock, Hash, CalendarDays, FlaskConical, BookOpenCheck,
+  Zap, Loader2, AlertTriangle, ArrowUp, ArrowDown, Target, ShieldAlert, Clock, Hash, CalendarDays, FlaskConical, BookOpenCheck, Sparkles,
 } from "lucide-react";
 import {
   ResponsiveContainer, ComposedChart, Line, XAxis, YAxis, Tooltip,
@@ -495,6 +495,7 @@ const CALENDAR_LANES = {
   outside: { label: "Outside hours", pnlKey: "excludedPnl", tradesKey: "excludedTradePnls" },
   research: { label: "Research lanes", pnlKey: "experimentalPnl", tradesKey: "experimentalTradePnls" },
   shen: { label: "Shen conviction", pnlKey: "shenPnl", tradesKey: "shenTradePnls" },
+  frontier: { label: "Frontier model", pnlKey: "frontierPnl", tradesKey: "frontierTradePnls" },
 };
 
 function laneDay(day, lane) {
@@ -683,7 +684,7 @@ function CalendarView({ onBack }) {
         </div>
       </div>
 
-      <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-4">
+      <div className="grid sm:grid-cols-2 xl:grid-cols-5 gap-4 mb-4">
         <button type="button" onClick={() => setCalendarLane("official")} aria-pressed={calendarLane === "official"}
           className={`rounded-2xl bg-gradient-to-br from-emerald-600 to-emerald-700 text-white p-5 flex items-center gap-4 text-left transition ${calendarLane === "official" ? "ring-4 ring-emerald-300 ring-offset-2 dark:ring-offset-zinc-950" : "hover:scale-[1.01]"}`}>
           <div className="w-11 h-11 rounded-xl bg-white/15 flex items-center justify-center"><Zap size={20} /></div>
@@ -718,6 +719,15 @@ function CalendarView({ onBack }) {
             <div className="text-[11px] uppercase tracking-wider font-semibold text-sky-100">Shen conviction · paper only</div>
             <div className="text-3xl font-bold whitespace-nowrap">{allTotals ? (allTotals.shenPnl >= 0 ? "+" : "") + wholeMoney(allTotals.shenPnl) : "—"}</div>
             <div className="text-xs text-sky-100">{tradeSummary(allTotals?.shenTrades, allTotals?.shenWinRate)}</div>
+          </div>
+        </button>
+        <button type="button" onClick={() => setCalendarLane("frontier")} aria-pressed={calendarLane === "frontier"}
+          className={`rounded-2xl bg-gradient-to-br from-teal-600 to-emerald-800 text-white p-5 flex items-center gap-4 text-left transition ${calendarLane === "frontier" ? "ring-4 ring-teal-300 ring-offset-2 dark:ring-offset-zinc-950" : "hover:scale-[1.01]"}`}>
+          <div className="w-11 h-11 rounded-xl bg-white/15 flex items-center justify-center"><Sparkles size={20} /></div>
+          <div>
+            <div className="text-[11px] uppercase tracking-wider font-semibold text-teal-100">Frontier model · paper only</div>
+            <div className="text-3xl font-bold whitespace-nowrap">{allTotals ? (allTotals.frontierPnl >= 0 ? "+" : "") + wholeMoney(allTotals.frontierPnl) : "—"}</div>
+            <div className="text-xs text-teal-100">{tradeSummary(allTotals?.frontierTrades, allTotals?.frontierWinRate)}</div>
           </div>
         </button>
       </div>
@@ -776,6 +786,7 @@ function CalendarView({ onBack }) {
               Outside-hours signals are simulated but never counted in official P&L.
               Purple research results are paper-only: strict 13–14 point first touches plus strict A+ setups from 11:15–12:30 ET.
               Blue Shen results are paper-only and use the PDF's original 3-check conviction stack without an Edge Lens score gate.
+              Teal Frontier results are paper-only: official playbook-hours trades kept after dropping CALL@PDL and A+, requiring score 12–14, entries from 10:00 ET, and premium ≥ $0.50.
             </p>
           </div>
 

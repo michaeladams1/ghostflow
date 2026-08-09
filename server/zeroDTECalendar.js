@@ -4,7 +4,7 @@
 // first month costs ~20 sequential day-sims and every later view is free
 // until the server restarts.
 
-import { analyzeZeroDTESession } from "./zeroDTE.js";
+import { analyzeZeroDTESession, isFrontierOfficialFire } from "./zeroDTE.js";
 import { simulateAllFires } from "./zeroDTEOptionSim.js";
 import { buildSessionStory } from "./zeroDTEStory.js";
 import { saveSessionTrades } from "./zeroDTEStore.js";
@@ -46,6 +46,15 @@ async function simulateDay(symbol, date) {
       const excluded = simmed.filter((f) => f.window !== "in");
       const experimental = experiments.filter((f) => f.level && f.trade?.ok);
       const shen = playbookExperiments.filter((f) => f.level && f.trade?.ok);
+      const frontier = counted.filter((f) => isFrontierOfficialFire({
+        direction: f.direction,
+        levelType: f.levelType,
+        tier: f.tier,
+        points: f.points,
+        etMinute: f.ts ? etMinuteOf(f.ts) : null,
+        entryPrice: f.trade?.entryPrice,
+        window: f.window,
+      }));
       summary = {
         date,
         pnl: +story.totalPnl.toFixed(2),
@@ -64,6 +73,10 @@ async function simulateDay(symbol, date) {
         shenTrades: shen.length,
         shenWins: shen.filter((f) => f.trade.pctReturn > 0).length,
         shenTradePnls: shen.map(pnlOf),
+        frontierPnl: +frontier.reduce((sum, f) => sum + pnlOf(f), 0).toFixed(2),
+        frontierTrades: frontier.length,
+        frontierWins: frontier.filter((f) => f.trade.pctReturn > 0).length,
+        frontierTradePnls: frontier.map(pnlOf),
         nearMissReasons: (s.nearMisses || []).flatMap((x) => x.reasons),
       };
 
@@ -111,6 +124,9 @@ export function summarizeMonth({ symbol = "SPY", year, month, days, saved = fals
   const shenTradePnls = days.flatMap((x) => x.shenTradePnls || []);
   const shenTrades = shenTradePnls.length;
   const shenWins = shenTradePnls.filter((p) => p > 0).length;
+  const frontierTradePnls = days.flatMap((x) => x.frontierTradePnls || []);
+  const frontierTrades = frontierTradePnls.length;
+  const frontierWins = frontierTradePnls.filter((p) => p > 0).length;
   const nearMissReasons = {};
   for (const reason of days.flatMap((x) => x.nearMissReasons || [])) nearMissReasons[reason] = (nearMissReasons[reason] || 0) + 1;
 
@@ -138,6 +154,11 @@ export function summarizeMonth({ symbol = "SPY", year, month, days, saved = fals
       shenWins,
       shenLosses: shenTrades - shenWins,
       shenWinRate: shenTrades ? +((shenWins / shenTrades) * 100).toFixed(1) : null,
+      frontierPnl: +frontierTradePnls.reduce((sum, x) => sum + x, 0).toFixed(2),
+      frontierTrades,
+      frontierWins,
+      frontierLosses: frontierTrades - frontierWins,
+      frontierWinRate: frontierTrades ? +((frontierWins / frontierTrades) * 100).toFixed(1) : null,
       nearMissReasons,
     },
   };
