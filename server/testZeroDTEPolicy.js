@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
-import { classifyResearchCandidate, classifyShenConviction, pickOtmStrike, playbookTouchPolicy } from "./zeroDTE.js";
+import {
+  classifyResearchCandidate, classifyShenConviction, isFrontierOfficialFire,
+  pickOtmStrike, playbookTouchPolicy,
+} from "./zeroDTE.js";
 import { walkBracketBars } from "./zeroDTEOptionSim.js";
 
 const ts = (clock) => `2026-08-07T${clock}:00-04:00`;
@@ -31,6 +34,20 @@ assert.equal(classifyShenConviction({ minutes: 580, levelType: "PDH", touchNumbe
 assert.equal(classifyShenConviction({ minutes: 600, levelType: "PDH", touchNumber: 2, exhaustionMove: 1, moveDistance: 1, rsi: 75, direction: "PUT" }), null);
 assert.equal(classifyShenConviction({ minutes: 600, levelType: "PDH", touchNumber: 1, exhaustionMove: 3, moveDistance: 3, rsi: 75, direction: "PUT", approachValid: false }), null);
 assert.equal(classifyShenConviction({ minutes: 600, levelType: "PDL", touchNumber: 2, exhaustionMove: 3, moveDistance: 3, rsi: null, direction: "CALL" }), null);
+
+const frontierBase = {
+  direction: "PUT", levelType: "WHOLE_DOLLAR", tier: "A", points: 13,
+  etMinute: 610, entryPrice: 1.05, window: "in", counted: true,
+};
+assert.equal(isFrontierOfficialFire(frontierBase), true);
+assert.equal(isFrontierOfficialFire({ ...frontierBase, direction: "CALL", levelType: "PDL" }), false);
+assert.equal(isFrontierOfficialFire({ ...frontierBase, tier: "A+" }), false);
+assert.equal(isFrontierOfficialFire({ ...frontierBase, points: 11 }), false);
+assert.equal(isFrontierOfficialFire({ ...frontierBase, points: 15 }), false);
+assert.equal(isFrontierOfficialFire({ ...frontierBase, etMinute: 595 }), false);
+assert.equal(isFrontierOfficialFire({ ...frontierBase, entryPrice: 0.49 }), false);
+assert.equal(isFrontierOfficialFire({ ...frontierBase, window: "after" }), false);
+assert.equal(isFrontierOfficialFire({ ...frontierBase, counted: false }), false);
 
 const bars = [
   { ts: ts("11:13"), open: 1.00, high: 1.01, low: 0.99, close: 1.00 },

@@ -130,16 +130,16 @@ because trade provenance would change mid-run, so startup explicitly fails super
 jobs and the new version gets its own run. Retrying a failed same-version job keeps its
 completed-month checkpoint. Trade writes remain idempotent per day and code version.
 
-The four monthly summary cards are also calendar filters. Clicking playbook hours,
-outside hours, research lanes, or Shen conviction switches every day cell and the full
-statistics sidebar to that lane. Winning days are green and losing days are red regardless
-of lane color; the active summary card gets a visible focus ring. Day summaries include
-per-trade P&L arrays for all four lanes so win rate and best/worst trade are not inferred
-from aggregate daily P&L. Every card shows its own trade count and win percentage;
-outside-hours win rate is computed from its individual simulated trades and remains
-explicitly excluded from official P&L. The calendar is a five-column Monday-Friday view;
-Saturday and Sunday headers and cells are intentionally omitted so trading sessions have
-more horizontal room while weekday ghost cells preserve correct date alignment. The four
+The five monthly summary cards are also calendar filters. Clicking playbook hours,
+outside hours, research lanes, Shen conviction, or Frontier model switches every day
+cell and the full statistics sidebar to that lane. Winning days are green and losing days
+are red regardless of lane color; the active summary card gets a visible focus ring. Day
+summaries include per-trade P&L arrays for all five lanes so win rate and best/worst trade
+are not inferred from aggregate daily P&L. Every card shows its own trade count and win
+percentage; outside-hours win rate is computed from its individual simulated trades and
+remains explicitly excluded from official P&L. The calendar is a five-column Monday-Friday
+view; Saturday and Sunday headers and cells are intentionally omitted so trading sessions
+have more horizontal room while weekday ghost cells preserve correct date alignment. The
 large summary-card P&L totals display rounded whole dollars and never split the sign from
 the amount; detailed calendar and trade values retain cents.
 
@@ -343,6 +343,14 @@ caps itself at two signals per day. Every entry uses a fixed paper $1,000 so
 the experiment measures entry quality without inventing a dollar mapping for the PDF's
 "standard" versus "full" language. Results have their own fourth calendar box and are
 excluded from official and existing research totals.
+
+**Frontier model is a paper-only filter over official counted fires.** It does **not**
+create new signals. `isFrontierOfficialFire()` in `zeroDTE.js` keeps an official
+playbook-hours trade only when all of these hold: not CALL@PDL, not A+, Edge Lens
+points in 12–14, `et_minute >= 600` (10:00 ET), and `entry_price >= 0.50`. The calendar
+derives Frontier totals at read time from existing `zerodte_trades` rows (no resim
+required), and month simulation applies the same filter. Official / outside / research /
+Shen boxes are unchanged. QuantData is intentionally not part of Frontier v0.
 
 ---
 
