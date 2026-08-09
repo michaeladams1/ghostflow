@@ -116,6 +116,8 @@ export async function simulateBracketTrade({ ticker = "SPY", sessionDate, fire }
   const frontierExitPrice = +Number(frontierWalk.exitPrice).toFixed(2);
   const frontierPctReturn = +(((frontierExitPrice - entryPrice) / entryPrice) * 100).toFixed(1);
   const frontierPnl = frontierPaperPnl(entryPrice, frontierExitPrice, FRONTIER_PAPER_DOLLARS);
+  const frontierExitMin = etMinutes(frontierWalk.exitBar.ts);
+  const frontierContractsN = frontierContracts(entryPrice, FRONTIER_PAPER_DOLLARS);
 
   const entryMin = etMinutes(entryBar.ts), exitMin = etMinutes(exitBar.ts);
   const pctReturn = +(((exitPrice - entryPrice) / entryPrice) * 100).toFixed(1);
@@ -129,12 +131,18 @@ export async function simulateBracketTrade({ ticker = "SPY", sessionDate, fire }
     exitClock: minToClock(exitMin), exitPrice: +exitPrice.toFixed(2), exitMin,
     tpPrice, slPrice, exitReason, pctReturn, holdMinutes: exitMin - entryMin,
     frontierExitPrice,
+    frontierExitClock: minToClock(frontierExitMin),
+    frontierExitMin,
     frontierExitReason: frontierWalk.exitReason,
     frontierPctReturn,
     frontierPnl,
-    frontierContracts: frontierContracts(entryPrice, FRONTIER_PAPER_DOLLARS),
+    frontierContracts: frontierContractsN,
+    frontierHoldMinutes: frontierExitMin - entryMin,
     frontierTpPrice: frontierTp,
     frontierSlPrice: frontierSl,
+    frontierDeployed: frontierContractsN != null
+      ? +(frontierContractsN * entryPrice * 100).toFixed(2)
+      : null,
     series: bars.map((b) => {
       const m = etMinutes(b.ts);
       return { min: m, clock: minToClock(m), price: +b.close.toFixed(2), high: +b.high.toFixed(2), low: +b.low.toFixed(2) };

@@ -362,8 +362,14 @@ the calendar may fall back to $1k on playbook exit prices.
 
 **Calendar capital + P&L chart:** each lane day includes `*Deployed` notionals
 (contracts × entry × 100; Frontier uses $1k paper sizing). Month/Year views
-draw a cumulative P&L line with deployed-capital bars above the grid; the
-daily debrief shows Frontier deployed capital for that session.
+draw a cumulative P&L line with deployed-capital bars above the grid.
+
+**Audit layers (do not mix):** Official Day P&L = playbook +20%/−12.5% on
+counted in-hours fires. Frontier Day P&L = PUT pts≥12 first-touch selection
+with runner/−50% exits on the same option bars. The daily debrief shows both
+as separate sections with full trade cards; Frontier cards include an
+`Audit: N × (exit − entry) × 100 = P&L` line so calendar totals can be
+checked trade-by-trade.
 
 ---
 
