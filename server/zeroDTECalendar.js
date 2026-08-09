@@ -7,7 +7,7 @@
 import {
   analyzeZeroDTESession, frontierDedupeKey, frontierLanePriority, isFrontierFire,
 } from "./zeroDTE.js";
-import { selectFrontierBestPerDay } from "./frontierV3.js";
+import { frontierPaperPnl, selectFrontierBestPerDay } from "./frontierV3.js";
 import { simulateAllFires } from "./zeroDTEOptionSim.js";
 import { buildSessionStory } from "./zeroDTEStory.js";
 import { saveSessionTrades } from "./zeroDTEStore.js";
@@ -103,10 +103,16 @@ async function simulateDay(symbol, date) {
         shenTrades: shen.length,
         shenWins: shen.filter((f) => f.trade.pctReturn > 0).length,
         shenTradePnls: shen.map(pnlOf),
-        frontierPnl: +frontier.reduce((sum, f) => sum + pnlOf(f), 0).toFixed(2),
+        frontierPnl: +frontier.reduce((sum, f) => {
+          const p = frontierPaperPnl(f.trade?.entryPrice, f.trade?.exitPrice);
+          return sum + (p ?? 0);
+        }, 0).toFixed(2),
         frontierTrades: frontier.length,
-        frontierWins: frontier.filter((f) => f.trade.pctReturn > 0).length,
-        frontierTradePnls: frontier.map(pnlOf),
+        frontierWins: frontier.filter((f) => {
+          const p = frontierPaperPnl(f.trade?.entryPrice, f.trade?.exitPrice);
+          return p != null && p > 0;
+        }).length,
+        frontierTradePnls: frontier.map((f) => frontierPaperPnl(f.trade?.entryPrice, f.trade?.exitPrice) ?? 0),
         nearMissReasons: (s.nearMisses || []).flatMap((x) => x.reasons),
       };
 

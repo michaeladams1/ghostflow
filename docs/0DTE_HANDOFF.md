@@ -344,15 +344,16 @@ the experiment measures entry quality without inventing a dollar mapping for the
 "standard" versus "full" language. Results have their own fourth calendar box and are
 excluded from official and existing research totals.
 
-**Frontier v4.1 is the live paper lane** (promoted for ~75% session coverage with positive EV).
-Eligibility: not CALL@PDL, not A+/Extended A+, `et_minute >= 585` (9:45 ET),
-`entry_price > 0`. After same-setup dedupe across lanes, keep the **single
-highest-points** eligible fire per session day (tie → earlier minute). No QuantData
-veto. Evidence: premium-floor sweep on the v4 net (`any_from945_anyprem__cap1_best`:
-~**75.4%** day coverage, holdout +$2082 vs v2 +$991, full +$4790). Cap-1-first on
-the same net is deeply negative — the edge is the score pick, not the wide net alone.
-Sparse v3.1 (touch1 + flow 0.25) remains a higher holdout-PnL / lower-coverage
-reference in search artifacts. Official / outside / research / Shen boxes are unchanged.
+**Frontier v5 is the live paper lane** (maximize EV toward ~$250 avg holdout day).
+Eligibility: **first touch**, `et_minute >= 585`, `entry_price > 0`. Toxins dropped
+(A+ and CALL@PDL allowed). After same-setup dedupe, keep the highest-points fire
+per day. P&L is **recomputed at $8,000 paper** from stored entry/exit prices (not
+the source lane’s size string). No QuantData veto. Evidence: `touch1_from945_best__paper_8k`
+→ holdout avg day ~**$252**, day WR ~47%, coverage ~72%. **No 24-month re-sim
+required** for this change. Note: with the stored +20%/−12.5% bracket, ~$250/day
+is impossible at $1,000 tickets (full TP tops out near +$200); $8k paper is the
+lever. Wider TP/SL would need a new backtest `code_version`. Official / outside /
+research / Shen boxes are unchanged.
 
 ---
 
