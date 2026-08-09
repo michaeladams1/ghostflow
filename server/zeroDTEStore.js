@@ -55,6 +55,8 @@ export async function saveSessionTrades({ symbol = "SPY", sessionDate, rows }) {
           JSON.stringify({
             size: r.size, suggestedStop: r.suggestedStop, exhaustionException: r.exhaustionException,
             price: r.price, simFailed: t.ok === false ? t.reason : undefined,
+            method: r.method, convictionCount: r.convictionCount,
+            convictionChecks: r.convictionChecks, moveDistance: r.moveDistance,
           }),
           build.deploymentId, build.commitSha, build.codeVersion, build.branch, build.environment,
         ],

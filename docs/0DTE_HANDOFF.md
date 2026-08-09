@@ -65,10 +65,9 @@ A **separate TradingView indicator** with its own, much stricter scoring:
 
 ### ⚠ The central tension
 The playbook fires on **3 simple checks at any Tier 1 level**. Edge Lens requires
-**11+/20 points**. We currently gate the playbook behind the Edge Lens score, which is
-far stricter — this is why we produce ~6 trades/month while the playbook author's own
-calendar shows ~23. **An open decision (see §8) is whether to add the playbook's
-conviction stack as its own parallel lane.**
+**11+/20 points**. Gating the playbook behind the Edge Lens score was far stricter and
+likely contributed to low cadence. The original conviction stack now runs as its own
+paper-only `SHEN_CONVICTION` comparison lane; it never changes official P&L.
 
 ---
 
@@ -143,6 +142,7 @@ et_minute     INT                -- minutes past ET midnight (570 = 9:30) — us
 pb_window     TEXT               -- 'before' | 'in' | 'after'  (playbook 9:45–11:15 window)
                                  --   NB: 'window' is a Postgres reserved word — hence pb_
 lane          TEXT               -- 'official' | 'HIGH_QUALITY_A' | 'EXTENDED_A_PLUS'
+                                 --   | 'SHEN_CONVICTION'
 tier          TEXT               -- 'A+' | 'A' | 'RSI Extreme' | research tier labels
 direction     TEXT               -- 'CALL' | 'PUT'
 
@@ -173,7 +173,8 @@ contracts     INT                -- position size in contracts
 pnl           NUMERIC            -- dollars
 counted       BOOLEAN            -- TRUE only when lane='official' AND pb_window='in' AND sim succeeded
 features      JSONB              -- size tier, suggestedStop, exhaustionException, underlying price,
-                                 --   simFailed reason. Put NEW fields HERE before adding columns.
+                                 --   simFailed reason; Shen method, conviction count/checks and
+                                 --   30-minute move distance. Put NEW fields HERE before adding columns.
 
 -- PROVENANCE (see §5)
 deployment_id TEXT               -- Railway deployment id, or 'local-<sha>'
@@ -235,9 +236,10 @@ columns:
 | Simulated, not counted | set | `false` | A real contract was priced and bracketed, but it fired outside 9:45–11:15 ET. Shown amber in the UI, excluded from P&L. |
 | Counted | set | `true` | Inside playbook hours, contract simulated — **this is the real P&L.** |
 
-Observed distribution on the first 5 sessions (per code version): 56 not-tradeable
-RSI Extreme rows, 10 simulated-but-out-of-window, **4 counted**. So a large row count is
-mostly the tool recording what it *passed on* — which is the point.
+Observed distribution on the first 5 sessions **across two code versions**: 56
+not-tradeable RSI Extreme rows, 10 simulated-but-out-of-window, **4 counted**. Per
+version that is 28 / 5 / 2. So a large row count is mostly the tool recording what it
+*passed on* — which is the point.
 
 ⚠ **Known logging gap:** signals suppressed by the playbook touch policy (3rd+ touch) are
 blocked *before* the fire is created, so they produce **no row at all**. They appear only
@@ -286,6 +288,17 @@ actually has 14 sessions.
 day on the same commit is idempotent but a *new* commit writes a parallel set. This is
 what makes "did that change help?" answerable instead of silently overwritten.
 
+**Shen conviction is a separate paper lane.** `SHEN_CONVICTION` implements the source
+playbook's three checks without an Edge Lens score gate: first touch; a $2+ move into the
+level during the prior 30 minutes (the lower bound of the document's "$2–3+" wording);
+and RSI <30 for calls / >70 for puts. Two checks qualify as STANDARD, all three as FULL.
+It uses only whole-dollar, PDH/PDL and PMH/PML levels, honors 9:45–11:15 ET and the touch
+policy, requires the 30-bar net move to approach the level in the trade's direction, and
+caps itself at two signals per day. Every entry uses a fixed paper $1,000 so
+the experiment measures entry quality without inventing a dollar mapping for the PDF's
+"standard" versus "full" language. Results have their own fourth calendar box and are
+excluded from official and existing research totals.
+
 ---
 
 ## 6. Bugs already found and fixed — do not reintroduce
@@ -307,12 +320,13 @@ what makes "did that change help?" answerable instead of silently overwritten.
 
 ---
 
-## 7. Current state (as of commit `3141007`)
+## 7. Current state (after commit `30f23d9` plus the Shen-lane working change)
 
 Working: daily debrief with trade cards (BOUGHT/SOLD blocks, contract details, option
 price chart with entry/exit markers and a zoom/full-day toggle), SPY chart with levels +
 signals + IN/OUT markers, RSI panel, out-of-hours shading, historical month calendar with
-stats sidebar, DB persistence, feature analysis, version comparison.
+stats sidebar, DB persistence, feature analysis, version comparison, and a fourth
+paper-only Shen conviction comparison box.
 
 **Sizing:** $1,000 base campaign (playbook tiers ×4: half $500 / full $1,000 /
 size-up $1,500 / max $2,000).
@@ -335,10 +349,9 @@ handful of trades. The analyzer flags every bucket under 20 trades as `reliable:
 
 ## 8. Open decisions and known gaps
 
-**OPEN — needs Michael's call:** add the playbook's **conviction stack + grading matrix**
-as a parallel entry lane (see §2's tension). Would roughly quadruple cadence and is fully
-grounded in the playbook text. Options discussed: third lane for comparison / replace
-Edge Lens as primary / keep Edge Lens only.
+**DECIDED:** the playbook's conviction stack is a separate paper-only comparison lane.
+It does not replace Edge Lens and cannot contribute to official P&L. Promotion requires
+enough same-version observations to pass the project's sample-size guardrails.
 
 **Not implemented:**
 - Spread and commission modeling (the biggest realism gap — see §3)
@@ -346,6 +359,9 @@ Edge Lens as primary / keep Edge Lens only.
   above the level, then add). Would need position adds + blended cost basis.
 - Multi-timeframe chart-bouncing beyond the 5m/10m RSI already used for MTF confluence
 - Pine Script export for live automation (the eventual goal — TV alerts → webhook)
+- Half-dollar Tier 2 levels in the Shen lane. The current engine only has whole-dollar
+  psychological levels; adding half dollars should be a deliberate follow-up, not an
+  undocumented expansion of this first comparison.
 
 **Worth auditing:** the touch counter keys VWAP on *type alone*, so every VWAP touch all
 day increments one counter and by the 3rd tag it's permanently skipped. VWAP drifts
@@ -375,6 +391,11 @@ parameters until backtest numbers look good, then losing real money.
 
 ## 10. Practical gotchas
 
+- **Ship 0DTE changes through a pull request.** Start from current `main`, create an
+  `agent/<description>` branch, stage only the intended files, run `npm test`,
+  `npm run build`, and `git diff --check`, push the branch, write a PR explaining the
+  behavior and evidence, then merge the PR into `main`. Update this handoff in the same
+  PR whenever the change affects rules, storage, results interpretation, or open decisions.
 - **There is only ONE database.** Local `.env` `DATABASE_URL` points at the *same* Railway
   Postgres the deployed app uses — local runs and production runs write to the same table,
   distinguished only by `environment` / `code_version`. (An earlier note here claimed

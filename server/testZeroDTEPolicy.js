@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { classifyResearchCandidate, pickOtmStrike, playbookTouchPolicy } from "./zeroDTE.js";
+import { classifyResearchCandidate, classifyShenConviction, pickOtmStrike, playbookTouchPolicy } from "./zeroDTE.js";
 import { walkBracketBars } from "./zeroDTEOptionSim.js";
 
 const ts = (clock) => `2026-08-07T${clock}:00-04:00`;
@@ -23,6 +23,14 @@ assert.equal(classifyResearchCandidate({ minutes: 600, points: 13, aplusThreshol
 assert.equal(classifyResearchCandidate({ minutes: 600, points: 12, aplusThreshold: 15, levelPoints: 4, hasTwoConfirmations: true, touchNumber: 1, isAplus: false }), null);
 assert.equal(classifyResearchCandidate({ minutes: 700, points: 15, aplusThreshold: 15, levelPoints: 4, hasTwoConfirmations: true, touchNumber: 1, isAplus: true }), "EXTENDED_A_PLUS");
 assert.equal(classifyResearchCandidate({ minutes: 751, points: 15, aplusThreshold: 15, levelPoints: 4, hasTwoConfirmations: true, touchNumber: 1, isAplus: true }), null);
+
+assert.equal(classifyShenConviction({ minutes: 600, levelType: "PDL", touchNumber: 1, exhaustionMove: 2.5, moveDistance: 2.5, rsi: 35, direction: "CALL" }).convictionCount, 2);
+assert.equal(classifyShenConviction({ minutes: 600, levelType: "PDH", touchNumber: 1, exhaustionMove: 2.5, moveDistance: 2.5, rsi: 75, direction: "PUT" }).grade, "FULL");
+assert.equal(classifyShenConviction({ minutes: 600, levelType: "VWAP", touchNumber: 1, exhaustionMove: 3, moveDistance: 3, rsi: 75, direction: "PUT" }), null);
+assert.equal(classifyShenConviction({ minutes: 580, levelType: "PDH", touchNumber: 1, exhaustionMove: 3, moveDistance: 3, rsi: 75, direction: "PUT" }), null);
+assert.equal(classifyShenConviction({ minutes: 600, levelType: "PDH", touchNumber: 2, exhaustionMove: 1, moveDistance: 1, rsi: 75, direction: "PUT" }), null);
+assert.equal(classifyShenConviction({ minutes: 600, levelType: "PDH", touchNumber: 1, exhaustionMove: 3, moveDistance: 3, rsi: 75, direction: "PUT", approachValid: false }), null);
+assert.equal(classifyShenConviction({ minutes: 600, levelType: "PDL", touchNumber: 2, exhaustionMove: 3, moveDistance: 3, rsi: null, direction: "CALL" }), null);
 
 const bars = [
   { ts: ts("11:13"), open: 1.00, high: 1.01, low: 0.99, close: 1.00 },

@@ -39,10 +39,12 @@ async function simulateDay(symbol, date) {
     } else {
       const fires = await simulateAllFires({ ticker: symbol, sessionDate: date, fires: s.fires });
       const experiments = await simulateAllFires({ ticker: symbol, sessionDate: date, fires: s.experiments || [] });
+      const playbookExperiments = await simulateAllFires({ ticker: symbol, sessionDate: date, fires: s.playbookExperiments || [] });
       const story = buildSessionStory({ symbol, sessionDate: date, levels: s.levels, gap: s.gap, fires, bars: s.bars });
       const simmed = fires.filter((f) => f.level && f.trade?.ok);
       const counted = simmed.filter((f) => f.window === "in");
       const experimental = experiments.filter((f) => f.level && f.trade?.ok);
+      const shen = playbookExperiments.filter((f) => f.level && f.trade?.ok);
       summary = {
         date,
         pnl: +story.totalPnl.toFixed(2),
@@ -56,6 +58,10 @@ async function simulateDay(symbol, date) {
         experimentalTrades: experimental.length,
         experimentalWins: experimental.filter((f) => f.trade.pctReturn > 0).length,
         experimentalTradePnls: experimental.map(pnlOf),
+        shenPnl: +shen.reduce((sum, f) => sum + pnlOf(f), 0).toFixed(2),
+        shenTrades: shen.length,
+        shenWins: shen.filter((f) => f.trade.pctReturn > 0).length,
+        shenTradePnls: shen.map(pnlOf),
         nearMissReasons: (s.nearMisses || []).flatMap((x) => x.reasons),
       };
 
@@ -73,6 +79,7 @@ async function simulateDay(symbol, date) {
         await saveSessionTrades({ symbol, sessionDate: date, rows: [
           ...fires.map((f) => toRow(f, "official")),
           ...experiments.map((f) => toRow(f, f.lane || "research")),
+          ...playbookExperiments.map((f) => toRow(f, "SHEN_CONVICTION")),
         ] });
       } catch (err) {
         console.error(`[0dte:store] ${date} persist failed:`, err.message);
@@ -109,6 +116,9 @@ export async function simulateMonth({ symbol = "SPY", year, month }) {
   const experimentalTradePnls = days.flatMap((x) => x.experimentalTradePnls || []);
   const experimentalTrades = experimentalTradePnls.length;
   const experimentalWins = experimentalTradePnls.filter((p) => p > 0).length;
+  const shenTradePnls = days.flatMap((x) => x.shenTradePnls || []);
+  const shenTrades = shenTradePnls.length;
+  const shenWins = shenTradePnls.filter((p) => p > 0).length;
   const nearMissReasons = {};
   for (const reason of days.flatMap((x) => x.nearMissReasons || [])) nearMissReasons[reason] = (nearMissReasons[reason] || 0) + 1;
 
@@ -128,6 +138,11 @@ export async function simulateMonth({ symbol = "SPY", year, month }) {
       experimentalWins,
       experimentalLosses: experimentalTrades - experimentalWins,
       experimentalWinRate: experimentalTrades ? +((experimentalWins / experimentalTrades) * 100).toFixed(1) : null,
+      shenPnl: +shenTradePnls.reduce((sum, x) => sum + x, 0).toFixed(2),
+      shenTrades,
+      shenWins,
+      shenLosses: shenTrades - shenWins,
+      shenWinRate: shenTrades ? +((shenWins / shenTrades) * 100).toFixed(1) : null,
       nearMissReasons,
     },
   };

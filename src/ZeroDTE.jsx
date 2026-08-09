@@ -8,7 +8,7 @@
 // a red down-arrow where you'd have sold.
 import { useState, useEffect } from "react";
 import {
-  Zap, Loader2, AlertTriangle, ArrowUp, ArrowDown, Target, ShieldAlert, Clock, Hash, CalendarDays, FlaskConical,
+  Zap, Loader2, AlertTriangle, ArrowUp, ArrowDown, Target, ShieldAlert, Clock, Hash, CalendarDays, FlaskConical, BookOpenCheck,
 } from "lucide-react";
 import {
   ResponsiveContainer, ComposedChart, Line, XAxis, YAxis, Tooltip,
@@ -586,7 +586,7 @@ function CalendarView({ onBack }) {
         <div className="w-40" />
       </div>
 
-      <div className="grid sm:grid-cols-3 gap-4 mb-4">
+      <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-4">
         <div className="rounded-2xl bg-gradient-to-br from-emerald-600 to-emerald-700 text-white p-5 flex items-center gap-4">
           <div className="w-11 h-11 rounded-xl bg-white/15 flex items-center justify-center"><Zap size={20} /></div>
           <div>
@@ -607,6 +607,14 @@ function CalendarView({ onBack }) {
             <div className="text-[11px] uppercase tracking-wider font-semibold text-indigo-100">Research lanes · paper only</div>
             <div className="text-3xl font-bold">{t ? (t.experimentalPnl >= 0 ? "+" : "") + money(t.experimentalPnl) : "—"}</div>
             <div className="text-xs text-indigo-100">{t?.experimentalTrades || 0} trades · {t?.experimentalWinRate != null ? `${t.experimentalWinRate}% wins` : "no sample yet"}</div>
+          </div>
+        </div>
+        <div className="rounded-2xl bg-gradient-to-br from-sky-600 to-cyan-700 text-white p-5 flex items-center gap-4">
+          <div className="w-11 h-11 rounded-xl bg-white/15 flex items-center justify-center"><BookOpenCheck size={20} /></div>
+          <div>
+            <div className="text-[11px] uppercase tracking-wider font-semibold text-sky-100">Shen conviction · paper only</div>
+            <div className="text-3xl font-bold">{t ? (t.shenPnl >= 0 ? "+" : "") + money(t.shenPnl) : "—"}</div>
+            <div className="text-xs text-sky-100">{t?.shenTrades || 0} trades · {t?.shenWinRate != null ? `${t.shenWinRate}% wins` : "no sample yet"}</div>
           </div>
         </div>
       </div>
@@ -644,6 +652,7 @@ function CalendarView({ onBack }) {
               $1,000 base campaign per trade (playbook tiers ×4: half $500 · full $1,000 · size-up $1,500 · max $2,000).
               Green/red = playbook-hours result. Amber = signals fired only outside 9:45–11:15 ET; simulated, never counted.
               Purple research results are paper-only: strict 13–14 point first touches plus strict A+ setups from 11:15–12:30 ET.
+              Blue Shen results are paper-only and use the PDF's original 3-check conviction stack without an Edge Lens score gate.
             </p>
           </div>
 

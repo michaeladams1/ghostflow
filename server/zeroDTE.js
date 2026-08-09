@@ -26,6 +26,8 @@ const APLUS_BASE = 15, A_TIER_MIN = 11;
 const CALL_COOLDOWN = 30, A_COOLDOWN = 15, EXT_COOLDOWN = 20, RSI_EXT_SWING = 50;
 const TREND_GUARD_LOOKBACK = 10, TREND_GUARD_ATR_MULT = 3.0;
 const RESEARCH_SCORE_MIN = 13, RESEARCH_EXTENDED_END_MIN = 750; // 12:30 ET
+const SHEN_FAST_MOVE_MIN = 2.0;
+const SHEN_LEVEL_TYPES = new Set(["WHOLE_DOLLAR", "PDH", "PDL", "PMH", "PML"]);
 
 export function playbookTouchPolicy({ touchNumber, exhaustionMove }) {
   const exhaustionException = touchNumber === 3 && exhaustionMove >= 4;
@@ -42,6 +44,24 @@ export function classifyResearchCandidate({ minutes, points, aplusThreshold, lev
       && levelPoints >= 3 && hasTwoConfirmations && touchNumber === 1) return "HIGH_QUALITY_A";
   if (minutes >= PB_CLOSE_MIN && minutes < RESEARCH_EXTENDED_END_MIN && isAplus) return "EXTENDED_A_PLUS";
   return null;
+}
+
+// The discretionary playbook's original conviction stack, deliberately
+// independent of Edge Lens points: first touch, a $2+ move into the level
+// within the prior 30 minutes, and RSI <30 for calls / >70 for puts.
+// Two checks = standard conviction; all three = full conviction.
+export function classifyShenConviction({ minutes, levelType, touchNumber, exhaustionMove, moveDistance, rsi, direction, approachValid = true }) {
+  if (minutes < PB_OPEN_MIN || minutes >= PB_CLOSE_MIN || !SHEN_LEVEL_TYPES.has(levelType) || !approachValid) return null;
+  const touchPolicy = playbookTouchPolicy({ touchNumber, exhaustionMove });
+  if (!touchPolicy.eligible) return null;
+  const checks = {
+    firstTouch: touchNumber === 1,
+    fastMove: moveDistance >= SHEN_FAST_MOVE_MIN,
+    rsiConfirmed: Number.isFinite(rsi) && (direction === "CALL" ? rsi < 30 : rsi > 70),
+  };
+  const convictionCount = Object.values(checks).filter(Boolean).length;
+  if (convictionCount < 2) return null;
+  return { checks, convictionCount, grade: convictionCount === 3 ? "FULL" : "STANDARD" };
 }
 
 // THE PLAYBOOK'S SCHEDULE (Shen Lao, section 09 + Rule R5), in ET minutes:
@@ -297,9 +317,11 @@ export async function analyzeZeroDTESession({ symbol = "SPY", sessionDate }) {
   const barRows = [];
   const fires = [];
   const experiments = [];
+  const playbookExperiments = [];
   const nearMisses = [];
   const nearMissKeys = new Set();
   let prevCallResearch = null, prevPutResearch = null;
+  const shenFiredKeys = new Set();
 
   for (let k = 0; k < todayIdxs.length; k++) {
     const i = todayIdxs[k];
@@ -557,6 +579,30 @@ export async function analyzeZeroDTESession({ symbol = "SPY", sessionDate }) {
     if (callResearch && callResearch !== prevCallResearch) pushExperiment(callResearch, "CALL", callTrigger, callPts, r != null ? Math.round(r) : null, callSwing, callVolPts, callSpeedPts, callWickPts, callTouchNumber);
     if (putResearch && putResearch !== prevPutResearch) pushExperiment(putResearch, "PUT", putTrigger, putPts, r != null ? Math.round(r) : null, putSwing, putVolPts, putSpeedPts, putWickPts, putTouchNumber);
 
+    // Separate paper-only implementation of the Shen Lao playbook's simpler
+    // three-check conviction stack. It does not require an Edge Lens score.
+    // The source playbook caps the day at two trades, so this lane does too.
+    const pushShenExperiment = (direction, trigger, touchNumber, touchPolicy, moveDistance, rsiValue, points, approachValid) => {
+      if (!trigger || playbookExperiments.length >= 2) return;
+      const result = classifyShenConviction({ minutes, levelType: trigger.type, touchNumber,
+        exhaustionMove: moveDistance, moveDistance, rsi: rsiValue, direction, approachValid });
+      const key = `${direction}:${touchKey(trigger)}:${touchNumber}`;
+      if (!result || shenFiredKeys.has(key)) return;
+      shenFiredKeys.add(key);
+      playbookExperiments.push({ lane: "SHEN_CONVICTION", method: "Shen Lao conviction stack", paperOnly: true,
+        window: "in", tier: `Shen ${result.grade} ${result.convictionCount}/3`, direction,
+        idx: i, ts: bar.ts, clock: clockLabel(minutes), level: trigger.value, levelType: trigger.type,
+        price: bar.close, points, rsi: rsiValue != null ? Math.round(rsiValue) : null,
+        touchNumber, exhaustionException: touchPolicy.exhaustionException, size: "PAPER $1000",
+        convictionCount: result.convictionCount, convictionChecks: result.checks,
+        moveDistance: +moveDistance.toFixed(2), suggestedStop, exitCutoffMin: PB_CLOSE_MIN });
+    };
+    const close30BarsAgo = closes[Math.max(0, i - 29)];
+    pushShenExperiment("CALL", callTrigger, callTouchNumber, callTouchPolicy,
+      callTrigger == null ? 0 : recentHigh30 - callTrigger.value, r, callPts, bar.close < close30BarsAgo);
+    pushShenExperiment("PUT", putTrigger, putTouchNumber, putTouchPolicy,
+      putTrigger == null ? 0 : putTrigger.value - recentLow30, r, putPts, bar.close > close30BarsAgo);
+
     // Compact diagnostic sampling: one identical reason set per direction per
     // 15-minute bucket. This reveals which gate suppresses the most setups
     // without returning hundreds of duplicate bars that sat on one level.
@@ -609,7 +655,7 @@ export async function analyzeZeroDTESession({ symbol = "SPY", sessionDate }) {
     levels: { pdh, pdl, pmh, pml, orHigh, orLow, orb15High, orb15Low, dailyAtr14 },
     gap: { isGapUp, isGapDn, gapSize: dailyAtr14 != null ? +gapSize.toFixed(2) : null },
     bars: barRows,
-    fires, experiments, nearMisses,
+    fires, experiments, playbookExperiments, nearMisses,
   };
 }
 
