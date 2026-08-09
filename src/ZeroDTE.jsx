@@ -488,18 +488,50 @@ function PerfBar({ label, value, maxAbs, tone }) {
   );
 }
 
-function DayBox({ dayNum, data, ghost }) {
+const CALENDAR_LANES = {
+  official: { label: "Playbook hours", pnlKey: "pnl", tradesKey: "tradePnls" },
+  outside: { label: "Outside hours", pnlKey: "excludedPnl", tradesKey: "excludedTradePnls" },
+  research: { label: "Research lanes", pnlKey: "experimentalPnl", tradesKey: "experimentalTradePnls" },
+  shen: { label: "Shen conviction", pnlKey: "shenPnl", tradesKey: "shenTradePnls" },
+};
+
+function laneDay(day, lane) {
+  if (!day) return null;
+  const config = CALENDAR_LANES[lane];
+  const tradePnls = day[config.tradesKey] || [];
+  return { ...day, pnl: Number(day[config.pnlKey] || 0), trades: tradePnls.length, tradePnls };
+}
+
+function laneTotals(days, lane) {
+  const laneDays = (days || []).map((day) => laneDay(day, lane)).filter(Boolean);
+  const tradedDays = laneDays.filter((day) => day.trades > 0);
+  const tradePnls = tradedDays.flatMap((day) => day.tradePnls);
+  const dayPnls = tradedDays.map((day) => day.pnl);
+  const wins = tradePnls.filter((pnl) => pnl > 0).length;
+  const totalTrades = tradePnls.length;
+  return {
+    pnl: +laneDays.reduce((sum, day) => sum + day.pnl, 0).toFixed(2),
+    totalTrades,
+    wins,
+    losses: totalTrades - wins,
+    winRate: totalTrades ? +((wins / totalTrades) * 100).toFixed(1) : null,
+    bestDay: dayPnls.length ? Math.max(...dayPnls) : null,
+    worstDay: dayPnls.length ? Math.min(...dayPnls) : null,
+    bestTrade: tradePnls.length ? Math.max(...tradePnls) : null,
+    worstTrade: tradePnls.length ? Math.min(...tradePnls) : null,
+  };
+}
+
+function DayBox({ dayNum, data, ghost, lane }) {
   if (ghost) return (
     <div className="rounded-lg bg-zinc-50 dark:bg-zinc-900/40 min-h-[86px] p-2">
       <div className={`text-sm ${faint} opacity-50`}>{dayNum}</div>
     </div>
   );
   const traded = data && (data.trades || 0) > 0;
-  const exclOnly = data && !traded && (data.excludedTrades || 0) > 0;
   const pos = traded && data.pnl > 0, neg = traded && data.pnl < 0;
   const cls = pos ? "bg-emerald-100 dark:bg-emerald-950/50 border border-emerald-300 dark:border-emerald-800"
     : neg ? "bg-red-100 dark:bg-red-950/50 border border-red-300 dark:border-red-800"
-    : exclOnly ? "bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900"
     : "bg-white dark:bg-zinc-900 border border-zinc-100 dark:border-zinc-800";
   return (
     <div className={`rounded-lg min-h-[86px] p-2 text-center ${cls}`}>
@@ -510,14 +542,7 @@ function DayBox({ dayNum, data, ghost }) {
             {data.pnl > 0 ? "+" : ""}{money(data.pnl)}
           </div>
           <div className={`text-[11px] ${faint}`}>{data.trades} trade{data.trades === 1 ? "" : "s"}</div>
-        </>
-      )}
-      {exclOnly && (
-        <>
-          <div className="text-xs font-semibold text-amber-600 dark:text-amber-500">
-            {data.excludedPnl > 0 ? "+" : ""}{money(data.excludedPnl)}
-          </div>
-          <div className="text-[10px] text-amber-600/80 dark:text-amber-500/80">outside hrs</div>
+          <div className={`text-[9px] uppercase tracking-wide ${faint}`}>{CALENDAR_LANES[lane].label}</div>
         </>
       )}
     </div>
@@ -529,6 +554,7 @@ function CalendarView({ onBack }) {
   const [ym, setYm] = useState({ year: now.getFullYear(), month: now.getMonth() + 1 });
   const [loading, setLoading] = useState(false);
   const [bulkRun, setBulkRun] = useState(null);
+  const [calendarLane, setCalendarLane] = useState("official");
   const [err, setErr] = useState(null);
   const [data, setData] = useState(null);
 
@@ -605,13 +631,15 @@ function CalendarView({ onBack }) {
   const firstDow = new Date(Date.UTC(ym.year, ym.month - 1, 1)).getUTCDay();
   const daysInMonth = new Date(Date.UTC(ym.year, ym.month, 0)).getUTCDate();
   const prevMonthDays = new Date(Date.UTC(ym.year, ym.month - 1, 0)).getUTCDate();
-  const byDate = Object.fromEntries((data?.days || []).map((d) => [Number(d.date.slice(8, 10)), d]));
+  const byDate = Object.fromEntries((data?.days || []).map((d) => [Number(d.date.slice(8, 10)), laneDay(d, calendarLane)]));
   const cells = [];
   for (let i = firstDow - 1; i >= 0; i--) cells.push({ ghost: true, dayNum: prevMonthDays - i });
   for (let d = 1; d <= daysInMonth; d++) cells.push({ dayNum: d, data: byDate[d] });
   while (cells.length % 7 !== 0) cells.push({ ghost: true, dayNum: cells.length - (firstDow + daysInMonth) + 1 });
 
-  const t = data?.totals;
+  const t = data ? laneTotals(data.days, calendarLane) : null;
+  const allTotals = data?.totals;
+  const selectedLane = CALENDAR_LANES[calendarLane];
   const maxDay = t ? Math.max(Math.abs(t.bestDay ?? 0), Math.abs(t.worstDay ?? 0)) : 0;
   const maxTrade = t ? Math.max(Math.abs(t.bestTrade ?? 0), Math.abs(t.worstTrade ?? 0)) : 0;
 
@@ -644,36 +672,40 @@ function CalendarView({ onBack }) {
       </div>
 
       <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-4">
-        <div className="rounded-2xl bg-gradient-to-br from-emerald-600 to-emerald-700 text-white p-5 flex items-center gap-4">
+        <button type="button" onClick={() => setCalendarLane("official")} aria-pressed={calendarLane === "official"}
+          className={`rounded-2xl bg-gradient-to-br from-emerald-600 to-emerald-700 text-white p-5 flex items-center gap-4 text-left transition ${calendarLane === "official" ? "ring-4 ring-emerald-300 ring-offset-2 dark:ring-offset-zinc-950" : "hover:scale-[1.01]"}`}>
           <div className="w-11 h-11 rounded-xl bg-white/15 flex items-center justify-center"><Zap size={20} /></div>
           <div>
             <div className="text-[11px] uppercase tracking-wider font-semibold text-emerald-100">Monthly net total · playbook hours</div>
-            <div className="text-3xl font-bold">{t ? (t.pnl >= 0 ? "+" : "") + money(t.pnl) : "—"}</div>
+            <div className="text-3xl font-bold">{allTotals ? (allTotals.pnl >= 0 ? "+" : "") + money(allTotals.pnl) : "—"}</div>
           </div>
-        </div>
-        <div className="rounded-2xl bg-gradient-to-br from-amber-500 to-amber-600 text-white p-5 flex items-center gap-4">
+        </button>
+        <button type="button" onClick={() => setCalendarLane("outside")} aria-pressed={calendarLane === "outside"}
+          className={`rounded-2xl bg-gradient-to-br from-amber-500 to-amber-600 text-white p-5 flex items-center gap-4 text-left transition ${calendarLane === "outside" ? "ring-4 ring-amber-300 ring-offset-2 dark:ring-offset-zinc-950" : "hover:scale-[1.01]"}`}>
           <div className="w-11 h-11 rounded-xl bg-white/15 flex items-center justify-center"><Clock size={20} /></div>
           <div>
             <div className="text-[11px] uppercase tracking-wider font-semibold text-amber-100">Outside-hours signals · not counted</div>
-            <div className="text-3xl font-bold">{t ? (t.excludedPnl >= 0 ? "+" : "") + money(t.excludedPnl) : "—"}</div>
+            <div className="text-3xl font-bold">{allTotals ? (allTotals.excludedPnl >= 0 ? "+" : "") + money(allTotals.excludedPnl) : "—"}</div>
           </div>
-        </div>
-        <div className="rounded-2xl bg-gradient-to-br from-indigo-600 to-violet-700 text-white p-5 flex items-center gap-4">
+        </button>
+        <button type="button" onClick={() => setCalendarLane("research")} aria-pressed={calendarLane === "research"}
+          className={`rounded-2xl bg-gradient-to-br from-indigo-600 to-violet-700 text-white p-5 flex items-center gap-4 text-left transition ${calendarLane === "research" ? "ring-4 ring-indigo-300 ring-offset-2 dark:ring-offset-zinc-950" : "hover:scale-[1.01]"}`}>
           <div className="w-11 h-11 rounded-xl bg-white/15 flex items-center justify-center"><FlaskConical size={20} /></div>
           <div>
             <div className="text-[11px] uppercase tracking-wider font-semibold text-indigo-100">Research lanes · paper only</div>
-            <div className="text-3xl font-bold">{t ? (t.experimentalPnl >= 0 ? "+" : "") + money(t.experimentalPnl) : "—"}</div>
-            <div className="text-xs text-indigo-100">{t?.experimentalTrades || 0} trades · {t?.experimentalWinRate != null ? `${t.experimentalWinRate}% wins` : "no sample yet"}</div>
+            <div className="text-3xl font-bold">{allTotals ? (allTotals.experimentalPnl >= 0 ? "+" : "") + money(allTotals.experimentalPnl) : "—"}</div>
+            <div className="text-xs text-indigo-100">{allTotals?.experimentalTrades || 0} trades · {allTotals?.experimentalWinRate != null ? `${allTotals.experimentalWinRate}% wins` : "no sample yet"}</div>
           </div>
-        </div>
-        <div className="rounded-2xl bg-gradient-to-br from-sky-600 to-cyan-700 text-white p-5 flex items-center gap-4">
+        </button>
+        <button type="button" onClick={() => setCalendarLane("shen")} aria-pressed={calendarLane === "shen"}
+          className={`rounded-2xl bg-gradient-to-br from-sky-600 to-cyan-700 text-white p-5 flex items-center gap-4 text-left transition ${calendarLane === "shen" ? "ring-4 ring-sky-300 ring-offset-2 dark:ring-offset-zinc-950" : "hover:scale-[1.01]"}`}>
           <div className="w-11 h-11 rounded-xl bg-white/15 flex items-center justify-center"><BookOpenCheck size={20} /></div>
           <div>
             <div className="text-[11px] uppercase tracking-wider font-semibold text-sky-100">Shen conviction · paper only</div>
-            <div className="text-3xl font-bold">{t ? (t.shenPnl >= 0 ? "+" : "") + money(t.shenPnl) : "—"}</div>
-            <div className="text-xs text-sky-100">{t?.shenTrades || 0} trades · {t?.shenWinRate != null ? `${t.shenWinRate}% wins` : "no sample yet"}</div>
+            <div className="text-3xl font-bold">{allTotals ? (allTotals.shenPnl >= 0 ? "+" : "") + money(allTotals.shenPnl) : "—"}</div>
+            <div className="text-xs text-sky-100">{allTotals?.shenTrades || 0} trades · {allTotals?.shenWinRate != null ? `${allTotals.shenWinRate}% wins` : "no sample yet"}</div>
           </div>
-        </div>
+        </button>
       </div>
 
       <div className={`${card} rounded-xl px-4 py-3 mb-4 flex items-center justify-center gap-6`}>
@@ -719,11 +751,12 @@ function CalendarView({ onBack }) {
               ))}
             </div>
             <div className="grid grid-cols-7 gap-1">
-              {cells.map((c, i) => <DayBox key={i} dayNum={c.dayNum} data={c.data} ghost={c.ghost} />)}
+              {cells.map((c, i) => <DayBox key={i} dayNum={c.dayNum} data={c.data} ghost={c.ghost} lane={calendarLane} />)}
             </div>
             <p className={`text-[11px] mt-3 ${faint}`}>
               $1,000 base campaign per trade (playbook tiers ×4: half $500 · full $1,000 · size-up $1,500 · max $2,000).
-              Green/red = playbook-hours result. Amber = signals fired only outside 9:45–11:15 ET; simulated, never counted.
+              The calendar follows the selected summary card; winning days are green and losing days are red.
+              Outside-hours signals are simulated but never counted in official P&L.
               Purple research results are paper-only: strict 13–14 point first touches plus strict A+ setups from 11:15–12:30 ET.
               Blue Shen results are paper-only and use the PDF's original 3-check conviction stack without an Edge Lens score gate.
             </p>
@@ -731,7 +764,7 @@ function CalendarView({ onBack }) {
 
           <div>
             <div className="text-lg font-bold text-zinc-900 dark:text-zinc-100 mb-3">
-              {MONTH_NAMES[ym.month - 1]} {ym.year} Statistics
+              {MONTH_NAMES[ym.month - 1]} {ym.year} · {selectedLane.label}
             </div>
             <div className={`${card} rounded-xl p-4 mb-3 flex items-center justify-between`}>
               <div>
@@ -744,7 +777,7 @@ function CalendarView({ onBack }) {
             <div className={`${card} rounded-xl p-4 mb-3 text-center`}>
               <div className={heading}>Total trades</div>
               <div className="text-3xl font-bold text-indigo-500 mt-1">{t.totalTrades}</div>
-              <div className={`text-xs mt-0.5 ${faint}`}>{MONTH_NAMES[ym.month - 1]} · playbook hours · {t.excludedTrades} more outside hours</div>
+              <div className={`text-xs mt-0.5 ${faint}`}>{MONTH_NAMES[ym.month - 1]} · {selectedLane.label}</div>
             </div>
             <div className={`${card} rounded-xl p-4 mb-3`}>
               <div className={`${heading} text-center mb-3`}>Daily performance</div>
@@ -756,15 +789,15 @@ function CalendarView({ onBack }) {
               <PerfBar label="Best" value={t.bestTrade} maxAbs={maxTrade} tone="good" />
               <PerfBar label="Worst" value={t.worstTrade} maxAbs={maxTrade} tone="bad" />
             </div>
-            <div className={`${card} rounded-xl p-4 mt-3`}>
+            {calendarLane === "official" && <div className={`${card} rounded-xl p-4 mt-3`}>
               <div className={`${heading} text-center mb-3`}>Why setups were missed</div>
-              {Object.entries(t.nearMissReasons || {}).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([reason, count]) => (
+              {Object.entries(allTotals.nearMissReasons || {}).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([reason, count]) => (
                 <div key={reason} className="flex justify-between text-xs py-1">
                   <span className={faint}>{reason.replaceAll("_", " ")}</span><span className="font-semibold">{count}</span>
                 </div>
               ))}
-              {!Object.keys(t.nearMissReasons || {}).length && <div className={`text-xs text-center ${faint}`}>No near-miss data</div>}
-            </div>
+              {!Object.keys(allTotals.nearMissReasons || {}).length && <div className={`text-xs text-center ${faint}`}>No near-miss data</div>}
+            </div>}
           </div>
         </div>
       )}

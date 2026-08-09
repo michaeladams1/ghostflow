@@ -43,6 +43,7 @@ async function simulateDay(symbol, date) {
       const story = buildSessionStory({ symbol, sessionDate: date, levels: s.levels, gap: s.gap, fires, bars: s.bars });
       const simmed = fires.filter((f) => f.level && f.trade?.ok);
       const counted = simmed.filter((f) => f.window === "in");
+      const excluded = simmed.filter((f) => f.window !== "in");
       const experimental = experiments.filter((f) => f.level && f.trade?.ok);
       const shen = playbookExperiments.filter((f) => f.level && f.trade?.ok);
       summary = {
@@ -54,6 +55,7 @@ async function simulateDay(symbol, date) {
         wins: story.winCount,
         signals: fires.length,
         tradePnls: counted.map(pnlOf),
+        excludedTradePnls: excluded.map(pnlOf),
         experimentalPnl: +experimental.reduce((sum, f) => sum + pnlOf(f), 0).toFixed(2),
         experimentalTrades: experimental.length,
         experimentalWins: experimental.filter((f) => f.trade.pctReturn > 0).length,
