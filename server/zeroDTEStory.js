@@ -83,12 +83,12 @@ export function buildSessionStory({ symbol = "SPY", sessionDate, levels, gap, fi
     steps.push(`**Select the strike** — 1 strike OTM from the level: the **$${strike}${f.direction[0]}** expiring same day.`);
 
     if (t.ok) {
-      const dollars = sizeToDollars(f.size) || 250;
+      const dollars = sizeToDollars(f.size) || 1000;
       const contracts = Math.max(1, Math.floor(dollars / (t.entryPrice * 100)));
       const cost = contracts * t.entryPrice * 100;
       const pnl = contracts * (t.exitPrice - t.entryPrice) * 100;
       steps.push(`**Enter + bracket** — filled at $${t.entryPrice} at ${t.entryClock}. TP $${t.tpPrice} (+20%), SL $${t.slPrice} (-12.5%), both set immediately.`);
-      steps.push(`**Size** — ${f.size || "FULL $250"} → ${contracts} contract${contracts === 1 ? "" : "s"} at ${money(cost)}.`);
+      steps.push(`**Size** — ${f.size || "FULL $1000"} → ${contracts} contract${contracts === 1 ? "" : "s"} at ${money(cost)}.`);
       steps.push(`**Exit** — ${t.exitReason} at ${t.exitClock}, $${t.exitPrice}. Held ${t.holdMinutes} minute${t.holdMinutes === 1 ? "" : "s"}. **${t.pctReturn > 0 ? "+" : ""}${t.pctReturn}% → ${money(pnl)}**`);
     } else {
       steps.push(`**Outcome unavailable** — ${t.reason}`);
@@ -116,7 +116,7 @@ export function buildSessionStory({ symbol = "SPY", sessionDate, levels, gap, fi
   const excluded = simmed.filter((f) => f.window !== "in");
   const wins = counted.filter((f) => f.trade.pctReturn > 0).length;
   const pnlOf = (f) => {
-    const dollars = sizeToDollars(f.size) || 250;
+    const dollars = sizeToDollars(f.size) || 1000;
     const contracts = Math.max(1, Math.floor(dollars / (f.trade.entryPrice * 100)));
     return contracts * (f.trade.exitPrice - f.trade.entryPrice) * 100;
   };

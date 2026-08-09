@@ -6,9 +6,9 @@
 // Built to be READ, not configured. Every trade gets a card showing the
 // option's own price chart with a green up-arrow where you'd have bought and
 // a red down-arrow where you'd have sold.
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
-  Zap, Loader2, AlertTriangle, ArrowUp, ArrowDown, Target, ShieldAlert, Clock, Hash,
+  Zap, Loader2, AlertTriangle, ArrowUp, ArrowDown, Target, ShieldAlert, Clock, Hash, CalendarDays,
 } from "lucide-react";
 import {
   ResponsiveContainer, ComposedChart, Line, XAxis, YAxis, Tooltip,
@@ -243,6 +243,7 @@ const TIER_STYLE = {
 };
 
 export default function ZeroDTE() {
+  const [showCalendar, setShowCalendar] = useState(false);
   const [sessionDate, setSessionDate] = useState(lastWeekdayISO());
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState(null);
@@ -265,13 +266,15 @@ export default function ZeroDTE() {
   const chartData = rth.map((b) => ({ ...b, t: b.clock }));
   const trades = (data?.fires || []).filter((f) => f.level && f.trade?.ok);
   const contractsFor = (f) => {
-    const dollars = Number(String(f.size || "250").replace(/[^0-9.]/g, "")) || 250;
+    const dollars = Number(String(f.size || "1000").replace(/[^0-9.]/g, "")) || 250;
     return Math.max(1, Math.floor(dollars / (f.trade.entryPrice * 100)));
   };
   // Story sections that aren't per-trade (setup, bias, no-trade notes, bottom line).
   const narrative = (data?.story?.lines || []).filter((s) => !s.fire);
   // Attach the story's steps back onto each trade for the expandable walkthrough.
   const stepsByClock = Object.fromEntries((data?.story?.lines || []).filter((s) => s.fire).map((s) => [s.fire.clock + s.fire.direction, s.steps]));
+
+  if (showCalendar) return <CalendarView onBack={() => setShowCalendar(false)} />;
 
   return (
     <div>
@@ -289,6 +292,10 @@ export default function ZeroDTE() {
             className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-sm font-medium px-3 py-1.5 rounded-md">
             {loading ? <Loader2 size={16} className="animate-spin" /> : <Zap size={16} />}
             {loading ? "Replaying session…" : "Run debrief"}
+          </button>
+          <button onClick={() => setShowCalendar(true)}
+            className="flex items-center gap-1.5 border border-zinc-300 dark:border-zinc-700 hover:bg-zinc-100 dark:hover:bg-zinc-800 text-sm font-medium px-3 py-1.5 rounded-md">
+            <CalendarDays size={16} /> Historical calendar
           </button>
         </div>
       </div>
@@ -383,19 +390,19 @@ export default function ZeroDTE() {
             </ResponsiveContainer>
 
             {/* ---- RSI panel, sharing the same x-axis ---- */}
-            <div className={`${heading} mt-3 mb-1`}>RSI (1-min) · 73 = puts zone · 26 = calls zone</div>
+            <div className={`${heading} mt-3 mb-1`}>RSI (1-min) · 73 = puts zone · 29 = calls zone</div>
             <ResponsiveContainer width="100%" height={140}>
               <ComposedChart data={chartData} margin={{ top: 6, right: 62, bottom: 4, left: 4 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#3f3f46" opacity={0.25} />
                 <XAxis dataKey="t" tick={{ fontSize: 10 }} minTickGap={60} stroke="#71717a" />
-                <YAxis domain={[0, 100]} ticks={[0, 26, 50, 73, 100]} tick={{ fontSize: 10 }} stroke="#71717a" width={56} />
+                <YAxis domain={[0, 100]} ticks={[0, 29, 50, 73, 100]} tick={{ fontSize: 10 }} stroke="#71717a" width={56} />
                 <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }}
                   formatter={(v) => [typeof v === "number" ? v.toFixed(1) : v, "RSI"]} />
                 {windowAreas(chartData, "t")}
                 <ReferenceLine y={73} stroke="#ef4444" strokeDasharray="4 3"
                   label={{ value: "73 overbought", fontSize: 9, fill: "#ef4444", position: "insideTopRight" }} />
-                <ReferenceLine y={26} stroke="#10b981" strokeDasharray="4 3"
-                  label={{ value: "26 oversold", fontSize: 9, fill: "#10b981", position: "insideBottomRight" }} />
+                <ReferenceLine y={29} stroke="#10b981" strokeDasharray="4 3"
+                  label={{ value: "29 oversold", fontSize: 9, fill: "#10b981", position: "insideBottomRight" }} />
                 <ReferenceLine y={50} stroke="#71717a" strokeDasharray="2 4" opacity={0.5} />
                 <Line type="monotone" dataKey="rsi" stroke="#a78bfa" dot={false} strokeWidth={1.5} name="rsi" />
                 {data.fires.filter((f) => f.level && f.trade?.ok).map((f, i) => (
@@ -437,6 +444,229 @@ export default function ZeroDTE() {
             No commissions or bid/ask spread — live results will be worse.
           </p>
         </>
+      )}
+    </div>
+  );
+}
+// ===========================================================================
+// HISTORICAL CALENDAR — simulates a whole month and renders it like a
+// trading-journal P&L calendar: green/red day boxes (rounded, thin white
+// gaps), monthly net cards, and a stats sidebar (win rate donut, totals,
+// best/worst day & trade). Day P&L counts playbook-hours trades only;
+// out-of-hours simulations roll up into their own amber total.
+// ===========================================================================
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June",
+  "July", "August", "September", "October", "November", "December"];
+
+function WinRateDonut({ rate }) {
+  const r = 26, c = 2 * Math.PI * r;
+  const frac = rate != null ? Math.min(Math.max(rate / 100, 0), 1) : 0;
+  return (
+    <svg width="68" height="68" viewBox="0 0 68 68">
+      <circle cx="34" cy="34" r={r} fill="none" stroke="currentColor" strokeOpacity="0.12" strokeWidth="8" />
+      <circle cx="34" cy="34" r={r} fill="none" stroke="#6366f1" strokeWidth="8" strokeLinecap="round"
+        strokeDasharray={`${c * frac} ${c}`} transform="rotate(-90 34 34)" />
+    </svg>
+  );
+}
+
+function PerfBar({ label, value, maxAbs, tone }) {
+  const pct = maxAbs ? Math.min(Math.abs(value) / maxAbs, 1) * 100 : 0;
+  const good = tone === "good";
+  return (
+    <div className="mb-2.5">
+      <div className="flex items-center justify-between text-sm mb-1">
+        <span className={faint}>{label}</span>
+        <span className={`font-bold ${good ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}`}>
+          {value != null ? money(value) : "—"}
+        </span>
+      </div>
+      <div className="h-1.5 rounded-full bg-zinc-200 dark:bg-zinc-800 overflow-hidden">
+        <div className={`h-full rounded-full ${good ? "bg-emerald-500" : "bg-red-500"}`} style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function DayBox({ dayNum, data, ghost }) {
+  if (ghost) return (
+    <div className="rounded-lg bg-zinc-50 dark:bg-zinc-900/40 min-h-[86px] p-2">
+      <div className={`text-sm ${faint} opacity-50`}>{dayNum}</div>
+    </div>
+  );
+  const traded = data && (data.trades || 0) > 0;
+  const exclOnly = data && !traded && (data.excludedTrades || 0) > 0;
+  const pos = traded && data.pnl > 0, neg = traded && data.pnl < 0;
+  const cls = pos ? "bg-emerald-100 dark:bg-emerald-950/50 border border-emerald-300 dark:border-emerald-800"
+    : neg ? "bg-red-100 dark:bg-red-950/50 border border-red-300 dark:border-red-800"
+    : exclOnly ? "bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900"
+    : "bg-white dark:bg-zinc-900 border border-zinc-100 dark:border-zinc-800";
+  return (
+    <div className={`rounded-lg min-h-[86px] p-2 text-center ${cls}`}>
+      <div className="text-sm font-medium text-zinc-700 dark:text-zinc-300">{dayNum}</div>
+      {traded && (
+        <>
+          <div className={`text-sm font-bold ${pos ? "text-emerald-600 dark:text-emerald-400" : neg ? "text-red-600 dark:text-red-400" : "text-zinc-600"}`}>
+            {data.pnl > 0 ? "+" : ""}{money(data.pnl)}
+          </div>
+          <div className={`text-[11px] ${faint}`}>{data.trades} trade{data.trades === 1 ? "" : "s"}</div>
+        </>
+      )}
+      {exclOnly && (
+        <>
+          <div className="text-xs font-semibold text-amber-600 dark:text-amber-500">
+            {data.excludedPnl > 0 ? "+" : ""}{money(data.excludedPnl)}
+          </div>
+          <div className="text-[10px] text-amber-600/80 dark:text-amber-500/80">outside hrs</div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function CalendarView({ onBack }) {
+  const now = new Date();
+  const [ym, setYm] = useState({ year: now.getFullYear(), month: now.getMonth() + 1 });
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState(null);
+  const [data, setData] = useState(null);
+
+  async function load(y, m) {
+    setLoading(true); setErr(null);
+    try {
+      const res = await fetch("/api/0dte/month", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbol: "SPY", year: y, month: m }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Request failed");
+      setData(json);
+    } catch (e) { setErr(e.message); } finally { setLoading(false); }
+  }
+  // Load on first render and whenever the month changes.
+  useEffect(() => { load(ym.year, ym.month); }, [ym.year, ym.month]);
+
+  const nav = (delta) => {
+    let { year, month } = ym;
+    month += delta;
+    if (month < 1) { month = 12; year--; }
+    if (month > 12) { month = 1; year++; }
+    if (year > now.getFullYear() || (year === now.getFullYear() && month > now.getMonth() + 1)) return;
+    setYm({ year, month });
+  };
+
+  // Grid scaffolding: leading ghosts from the previous month, then real days.
+  const firstDow = new Date(Date.UTC(ym.year, ym.month - 1, 1)).getUTCDay();
+  const daysInMonth = new Date(Date.UTC(ym.year, ym.month, 0)).getUTCDate();
+  const prevMonthDays = new Date(Date.UTC(ym.year, ym.month - 1, 0)).getUTCDate();
+  const byDate = Object.fromEntries((data?.days || []).map((d) => [Number(d.date.slice(8, 10)), d]));
+  const cells = [];
+  for (let i = firstDow - 1; i >= 0; i--) cells.push({ ghost: true, dayNum: prevMonthDays - i });
+  for (let d = 1; d <= daysInMonth; d++) cells.push({ dayNum: d, data: byDate[d] });
+  while (cells.length % 7 !== 0) cells.push({ ghost: true, dayNum: cells.length - (firstDow + daysInMonth) + 1 });
+
+  const t = data?.totals;
+  const maxDay = t ? Math.max(Math.abs(t.bestDay ?? 0), Math.abs(t.worstDay ?? 0)) : 0;
+  const maxTrade = t ? Math.max(Math.abs(t.bestTrade ?? 0), Math.abs(t.worstTrade ?? 0)) : 0;
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <button onClick={onBack} className={`text-sm ${faint} hover:text-zinc-800 dark:hover:text-zinc-200`}>
+          ← Back to daily debrief
+        </button>
+        <div className="flex rounded-full border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-900 p-1 text-sm">
+          {["Week", "Month", "Year", "All Time"].map((m) => (
+            <button key={m} disabled={m !== "Month"} title={m !== "Month" ? "Coming soon" : undefined}
+              className={`px-4 py-1.5 rounded-full font-medium ${m === "Month" ? "bg-emerald-600 text-white" : `${faint} cursor-not-allowed`}`}>
+              {m}
+            </button>
+          ))}
+        </div>
+        <div className="w-40" />
+      </div>
+
+      <div className="grid sm:grid-cols-2 gap-4 mb-4">
+        <div className="rounded-2xl bg-gradient-to-br from-emerald-600 to-emerald-700 text-white p-5 flex items-center gap-4">
+          <div className="w-11 h-11 rounded-xl bg-white/15 flex items-center justify-center"><Zap size={20} /></div>
+          <div>
+            <div className="text-[11px] uppercase tracking-wider font-semibold text-emerald-100">Monthly net total · playbook hours</div>
+            <div className="text-3xl font-bold">{t ? (t.pnl >= 0 ? "+" : "") + money(t.pnl) : "—"}</div>
+          </div>
+        </div>
+        <div className="rounded-2xl bg-gradient-to-br from-amber-500 to-amber-600 text-white p-5 flex items-center gap-4">
+          <div className="w-11 h-11 rounded-xl bg-white/15 flex items-center justify-center"><Clock size={20} /></div>
+          <div>
+            <div className="text-[11px] uppercase tracking-wider font-semibold text-amber-100">Outside-hours signals · not counted</div>
+            <div className="text-3xl font-bold">{t ? (t.excludedPnl >= 0 ? "+" : "") + money(t.excludedPnl) : "—"}</div>
+          </div>
+        </div>
+      </div>
+
+      <div className={`${card} rounded-xl px-4 py-3 mb-4 flex items-center justify-center gap-6`}>
+        <button onClick={() => nav(-1)} className="p-1.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800 text-lg">‹</button>
+        <div className="font-semibold text-zinc-900 dark:text-zinc-100">{MONTH_NAMES[ym.month - 1]} {ym.year}</div>
+        <button onClick={() => nav(1)} className="p-1.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800 text-lg">›</button>
+      </div>
+
+      {err && (
+        <div className="flex items-start gap-2 text-sm rounded-lg border border-red-300 dark:border-red-900 bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300 px-3 py-2.5 mb-4">
+          <AlertTriangle size={16} className="mt-0.5 shrink-0" /> <div>{err}</div>
+        </div>
+      )}
+      {loading && (
+        <div className={`flex items-center gap-2 text-sm px-4 py-10 justify-center ${faint}`}>
+          <Loader2 size={16} className="animate-spin" />
+          Simulating every session in {MONTH_NAMES[ym.month - 1]}… first run takes a few minutes, then it's cached.
+        </div>
+      )}
+
+      {!loading && data && (
+        <div className="grid lg:grid-cols-[1fr_300px] gap-5">
+          <div>
+            <div className="grid grid-cols-7 gap-1 mb-1">
+              {["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"].map((d) => (
+                <div key={d} className={`text-center text-xs font-semibold py-2 rounded bg-zinc-100 dark:bg-zinc-800/60 ${faint}`}>{d}</div>
+              ))}
+            </div>
+            <div className="grid grid-cols-7 gap-1">
+              {cells.map((c, i) => <DayBox key={i} dayNum={c.dayNum} data={c.data} ghost={c.ghost} />)}
+            </div>
+            <p className={`text-[11px] mt-3 ${faint}`}>
+              $1,000 base campaign per trade (playbook tiers ×4: half $500 · full $1,000 · size-up $1,500 · max $2,000).
+              Green/red = playbook-hours result. Amber = signals fired only outside 9:45–11:15 ET; simulated, never counted.
+            </p>
+          </div>
+
+          <div>
+            <div className="text-lg font-bold text-zinc-900 dark:text-zinc-100 mb-3">
+              {MONTH_NAMES[ym.month - 1]} {ym.year} Statistics
+            </div>
+            <div className={`${card} rounded-xl p-4 mb-3 flex items-center justify-between`}>
+              <div>
+                <div className={heading}>Win rate</div>
+                <div className="text-3xl font-bold text-indigo-500 mt-1">{t.winRate != null ? `${t.winRate}%` : "—"}</div>
+                <div className={`text-xs mt-0.5 ${faint}`}>{t.wins}W / {t.losses}L</div>
+              </div>
+              <WinRateDonut rate={t.winRate} />
+            </div>
+            <div className={`${card} rounded-xl p-4 mb-3 text-center`}>
+              <div className={heading}>Total trades</div>
+              <div className="text-3xl font-bold text-indigo-500 mt-1">{t.totalTrades}</div>
+              <div className={`text-xs mt-0.5 ${faint}`}>{MONTH_NAMES[ym.month - 1]} · playbook hours · {t.excludedTrades} more outside hours</div>
+            </div>
+            <div className={`${card} rounded-xl p-4 mb-3`}>
+              <div className={`${heading} text-center mb-3`}>Daily performance</div>
+              <PerfBar label="Best" value={t.bestDay} maxAbs={maxDay} tone="good" />
+              <PerfBar label="Worst" value={t.worstDay} maxAbs={maxDay} tone="bad" />
+            </div>
+            <div className={`${card} rounded-xl p-4`}>
+              <div className={`${heading} text-center mb-3`}>Trade performance</div>
+              <PerfBar label="Best" value={t.bestTrade} maxAbs={maxTrade} tone="good" />
+              <PerfBar label="Worst" value={t.worstTrade} maxAbs={maxTrade} tone="bad" />
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

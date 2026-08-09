@@ -13,11 +13,12 @@
 
 import { fetchAlpacaBars } from "./alpacaClient.js";
 
-// RSI thresholds per the Edge Lens v4 GUIDE: "RSI thresholds are back to
-// 73 / 26". (The Pine script's input default said 29 for calls; the guide is
-// the documented spec and Michael chose it as authoritative.) The same
-// 73/26 applies to the 5m/10m MTF confluence check, per the guide.
-const RSI_LEN = 14, RSI_PUT = 73, RSI_CALL = 26, SWING_MIN = 35, TOUCH_ZONE = 0.05;
+// RSI thresholds: 73 puts / 29 calls — matching the DEPLOYED Pine script's
+// defaults (i_rsi_put=73, i_rsi_call=29). The v4 guide text says "73 / 26";
+// treated as doc drift, since the script is what actually runs on the chart.
+// NOTE: 29 was re-chosen after 26 disqualified a winning trade in a 2-trade
+// sample — that alone is NOT evidence 29 is better. Judge on months, not days.
+const RSI_LEN = 14, RSI_PUT = 73, RSI_CALL = 29, SWING_MIN = 35, TOUCH_ZONE = 0.05;
 const VELOCITY_FLOOR = 64, EXT_SWING_MIN = 45, SOFT_PUT = 68, SOFT_CALL = 32;
 const VOL_MA_LEN = 20, ATR_LEN = 14, ADX_LEN = 14, ADX_STRONG = 28;
 const SPEED_LOOKBACK = 4, SPEED_ATR_MULT = 0.40, WICK_RATIO = 1.5;
@@ -431,7 +432,7 @@ export async function analyzeZeroDTESession({ symbol = "SPY", sessionDate }) {
     const firePutExt = putRsiExtElig && putExtCooled && !prevPutExt;
 
     const suggestedStop = atrV != null ? +(atrV * 1.8).toFixed(2) : null;
-    const sizeFor = (pts) => pts >= aplusThresh + 3 ? "MAX $500" : pts >= aplusThresh + 1 ? "SIZE UP $375" : pts >= aplusThresh ? "FULL $250" : "HALF $125";
+    const sizeFor = (pts) => pts >= aplusThresh + 3 ? "MAX $2000" : pts >= aplusThresh + 1 ? "SIZE UP $1500" : pts >= aplusThresh ? "FULL $1000" : "HALF $500";
     // Where this minute sits in the playbook's schedule.
     const pbWindow = minutes < PB_OPEN_MIN ? "before" : minutes < PB_CLOSE_MIN ? "in" : "after";
 

@@ -26,6 +26,7 @@ import { runBacktest, getSessionChart } from "./server/priceBacktest.js";
 import { analyzeZeroDTESession } from "./server/zeroDTE.js";
 import { simulateAllFires } from "./server/zeroDTEOptionSim.js";
 import { buildSessionStory } from "./server/zeroDTEStory.js";
+import { simulateMonth } from "./server/zeroDTECalendar.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DIST_DIR = path.join(__dirname, "dist");
@@ -640,6 +641,24 @@ app.post("/api/0dte/analyze", async (req, res) => {
     res.json({ symbol, sessionDate, levels: session.levels, gap: session.gap, bars: session.bars, fires, story });
   } catch (err) {
     console.error("[0dte] FAILED:", err);
+    res.status(500).json({ error: err.message || String(err) });
+  }
+});
+
+// MONTH CALENDAR: simulates every completed trading day of a month through
+// the same pipeline as /api/0dte/analyze and aggregates for the calendar
+// view. Slow on first run (~20 sequential day sims, a few minutes); day
+// results are cached in memory so subsequent months/views are instant.
+app.post("/api/0dte/month", async (req, res) => {
+  const { year, month, symbol = "SPY" } = req.body;
+  if (!year || !month) return res.status(400).json({ error: "year and month are required" });
+  try {
+    console.log(`[0dte:month] simulating ${symbol} ${year}-${month}...`);
+    const result = await simulateMonth({ symbol, year: Number(year), month: Number(month) });
+    console.log(`[0dte:month] done — ${result.totals.totalTrades} trades, $${result.totals.pnl}`);
+    res.json(result);
+  } catch (err) {
+    console.error("[0dte:month] FAILED:", err);
     res.status(500).json({ error: err.message || String(err) });
   }
 });
