@@ -311,18 +311,31 @@ export async function analyzeZeroDTESession({ symbol = "SPY", sessionDate }) {
       if (r <= SOFT_CALL) { softCallToday = true; softCallIdx = i; }
     }
 
-    const watch = Math.round(bar.close);
+    // WICK-AWARE TOUCH DETECTION. The Pine script tests |close - level| <=
+    // zone, but the playbook's own worked example is a WICK tag: "1-min
+    // candle wicks to $750.20, closes at $749.75. Rejection confirmed." A
+    // close-only test cannot see that trade (close is 5x outside the zone).
+    // So a touch = the bar's high-low range intersecting level ± zone. Same
+    // ±$0.05 zone, no padding — this also absorbs most penny-level
+    // differences between Alpaca's SIP tape and TV's composite feed.
+    const touches = (lv) => lv != null && bar.high >= lv - TOUCH_ZONE && bar.low <= lv + TOUCH_ZONE;
+
+    // The whole-dollar level in play: prefer the dollar nearest the close,
+    // but a wick can tag an adjacent dollar the close doesn't round to
+    // (close $770.55 -> 771, wick tags $770). Check all three candidates.
+    const watch = [Math.round(bar.close), Math.round(bar.high), Math.round(bar.low)]
+      .find((lv) => touches(lv)) ?? Math.round(bar.close);
     const isMajor10 = watch % 10 === 0, isMajor5 = watch % 5 === 0;
-    const atLevel = Math.abs(bar.close - watch) <= TOUCH_ZONE;
-    const atOrHigh = orHigh != null && Math.abs(bar.close - orHigh) <= TOUCH_ZONE;
-    const atOrLow = orLow != null && Math.abs(bar.close - orLow) <= TOUCH_ZONE;
-    const atPdh = Math.abs(bar.close - pdh) <= TOUCH_ZONE;
-    const atPdl = Math.abs(bar.close - pdl) <= TOUCH_ZONE;
-    const atPmh = pmh != null && Math.abs(bar.close - pmh) <= TOUCH_ZONE;
-    const atPml = pml != null && Math.abs(bar.close - pml) <= TOUCH_ZONE;
-    const atOrb15Sup = orb15BrokeUp && orb15High != null && Math.abs(bar.close - orb15High) <= TOUCH_ZONE;
-    const atOrb15Res = orb15BrokeDn && orb15Low != null && Math.abs(bar.close - orb15Low) <= TOUCH_ZONE;
-    const atVwap = vwap != null && Math.abs(bar.close - vwap) <= TOUCH_ZONE;
+    const atLevel = touches(watch);
+    const atOrHigh = touches(orHigh);
+    const atOrLow = touches(orLow);
+    const atPdh = touches(pdh);
+    const atPdl = touches(pdl);
+    const atPmh = touches(pmh);
+    const atPml = touches(pml);
+    const atOrb15Sup = orb15BrokeUp && touches(orb15High);
+    const atOrb15Res = orb15BrokeDn && touches(orb15Low);
+    const atVwap = touches(vwap);
 
     const callCtxLv = atOrLow || atPml || atOrb15Sup || atVwap;
     const putCtxLv = atOrHigh || atPmh || atOrb15Res || atVwap;
