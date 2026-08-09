@@ -140,8 +140,22 @@ function adxSeries(bars, period) {
     const sum = pDI + mDI;
     dx[i] = sum === 0 ? 0 : 100 * Math.abs(pDI - mDI) / sum;
   }
-  const adx = smaSeries(dx.map((v) => v ?? 0), period);
-  return adx.map((v, i) => (dx[i] == null ? null : v));
+  // ADX = Wilder RMA of DX (Pine's ta.rma), seeded with a simple average.
+  // (Previously used an SMA here — a different smoother than the script's,
+  // which shifted the strong-trend boundary on marginal days.)
+  const adx = new Array(n).fill(null);
+  let rma = null, seedSum = 0, seedCount = 0;
+  for (let i = 0; i < n; i++) {
+    if (dx[i] == null) continue;
+    if (rma == null) {
+      seedSum += dx[i]; seedCount++;
+      if (seedCount === period) rma = seedSum / period;
+    } else {
+      rma = (rma * (period - 1) + dx[i]) / period;
+    }
+    if (rma != null) adx[i] = rma;
+  }
+  return adx;
 }
 
 // 5-min / 10-min RSI, mapped back onto each 1-min bar using the LAST
@@ -202,8 +216,11 @@ function dailyBarsFrom(bars) {
 // Main entry point: replays one SPY session bar-by-bar and returns every
 // A+/A/RSI-Extreme fire, the full score history, and the day's levels.
 export async function analyzeZeroDTESession({ symbol = "SPY", sessionDate }) {
+  // 30 calendar days back (~21 sessions): enough that the 14-day daily ATR
+  // used by gap protection has a FULL 14 sessions behind it. The previous
+  // 10-day lookback silently fed it only ~7 sessions.
   const start = new Date(sessionDate + "T00:00:00Z");
-  start.setUTCDate(start.getUTCDate() - 10);
+  start.setUTCDate(start.getUTCDate() - 30);
   const startDate = start.toISOString().slice(0, 10);
 
   const allBars = await fetchAlpacaBars({ symbol, startDate, endDate: sessionDate });
