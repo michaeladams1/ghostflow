@@ -2,6 +2,12 @@
 
 Context for an AI assistant picking up this build. Read fully before changing code.
 
+> **MAINTAIN THIS DOC.** It is the project's shared memory. When a meaningful 0DTE change
+> lands — a rule added or altered, a schema change, a bug fixed, a decision made, a gap
+> closed — **update this file in the same commit**. A stale handoff doc is worse than
+> none, because it will be trusted. Sections most likely to need edits: §4b (schema),
+> §5 (decisions), §6 (bugs), §7 (state), §8 (open questions).
+
 ---
 
 ## 1. What this is
@@ -220,6 +226,34 @@ bar-level analysis means a new table, not a tweak.
 
 ---
 
+### What a row actually represents — read before interpreting row counts
+
+**A row is a SIGNAL, not a taken trade.** Three distinct states, distinguished by two
+columns:
+
+| State | `entry_price` | `counted` | Meaning |
+|---|---|---|---|
+| Not tradeable | `NULL` | `false` | Fired with no level touch (RSI Extreme) — the playbook anchors every strike to a level, so there is no contract to buy. Logged so the pass is visible. |
+| Simulated, not counted | set | `false` | A real contract was priced and bracketed, but it fired outside 9:45–11:15 ET. Shown amber in the UI, excluded from P&L. |
+| Counted | set | `true` | Inside playbook hours, contract simulated — **this is the real P&L.** |
+
+Observed distribution on the first 5 sessions (per code version): 56 not-tradeable
+RSI Extreme rows, 10 simulated-but-out-of-window, **4 counted**. So a large row count is
+mostly the tool recording what it *passed on* — which is the point.
+
+⚠ **Known logging gap:** signals suppressed by the playbook touch policy (3rd+ touch) are
+blocked *before* the fire is created, so they produce **no row at all**. They appear only
+in the in-memory `nearMisses` diagnostic, which is not persisted. If "how often did the
+touch rule veto a setup?" matters, that needs its own row type or table.
+
+### Rows are per code version — don't read the table as a flat list
+
+Because `code_version` is in the primary key, the same session simulated under two commits
+produces **two visually identical rows**. In a raw table view (e.g. Railway's Data tab)
+that looks like duplication; it isn't. Always group or filter by `code_version`.
+
+---
+
 ## 5. Key decisions and WHY (do not silently reverse these)
 
 **Wick-aware level touches.** A level counts as touched when the bar's **high–low range**
@@ -334,8 +368,11 @@ parameters until backtest numbers look good, then losing real money.
 
 ## 10. Practical gotchas
 
-- **Railway Postgres needs the `zerodte_trades` table dropped once** to pick up the
-  provenance columns — `CREATE TABLE IF NOT EXISTS` won't add columns to an existing table.
+- **There is only ONE database.** Local `.env` `DATABASE_URL` points at the *same* Railway
+  Postgres the deployed app uses — local runs and production runs write to the same table,
+  distinguished only by `environment` / `code_version`. (An earlier note here claimed
+  Railway needed a separate schema migration; that was wrong — verified by seeing both a
+  `local-*` and a real Railway deployment UUID in the same table.)
 - The calendar's day cache is **in-memory** — restart the server after any logic change or
   you'll read stale results.
 - Local dev needs `node --env-file=.env server.js`; syntax-check with `node --check`;
