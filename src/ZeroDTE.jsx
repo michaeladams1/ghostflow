@@ -66,7 +66,13 @@ function TradeCard({ fire, contracts, pnl }) {
   const won = t.pctReturn > 0;
   const isCall = fire.direction === "CALL";
 
-  const series = t.series || [];
+  // ZOOM vs FULL DAY. A 4-minute trade on a full-day axis is 4 pixels wide
+  // and the day's range crushes the trade zone flat — so the DEFAULT view is
+  // zoomed to the trade window (30 min before entry -> 15 after exit), where
+  // the y-axis auto-fits the prices that actually matter.
+  const [view, setView] = useState("zoom");
+  const zoomFrom = t.entryMin - 30, zoomTo = t.exitMin + 15;
+  const series = (t.series || []).filter((p) => view === "day" || (p.min >= zoomFrom && p.min <= zoomTo));
 
   return (
     <div className={`rounded-lg border-2 ${won ? "border-emerald-400 dark:border-emerald-700" : "border-red-400 dark:border-red-800"} bg-white dark:bg-zinc-900 overflow-hidden`}>
@@ -132,32 +138,50 @@ function TradeCard({ fire, contracts, pnl }) {
 
         {/* ---- Right: the OPTION's own price chart with buy/sell arrows ---- */}
         <div>
-          <div className={`${heading} mb-2`}>The option's price · ${t.strike}{isCall ? "C" : "P"}</div>
+          <div className="flex items-center justify-between mb-2">
+            <div className={heading}>The option's price · ${t.strike}{isCall ? "C" : "P"}</div>
+            <div className="flex rounded-md border border-zinc-300 dark:border-zinc-700 overflow-hidden text-[11px] font-medium">
+              <button onClick={() => setView("zoom")}
+                className={`px-2.5 py-1 ${view === "zoom" ? "bg-emerald-600 text-white" : "text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"}`}>
+                Trade window
+              </button>
+              <button onClick={() => setView("day")}
+                className={`px-2.5 py-1 ${view === "day" ? "bg-emerald-600 text-white" : "text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800"}`}>
+                Full day
+              </button>
+            </div>
+          </div>
           <ResponsiveContainer width="100%" height={250}>
-            <ComposedChart data={series} margin={{ top: 26, right: 58, bottom: 4, left: 0 }}>
+            <ComposedChart data={series} margin={{ top: 24, right: 58, bottom: 4, left: 0 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#3f3f46" opacity={0.2} />
               <XAxis dataKey="clock" tick={{ fontSize: 9 }} minTickGap={40} stroke="#71717a" />
               <YAxis tick={{ fontSize: 9 }} width={52} stroke="#71717a"
-                domain={["dataMin - 0.06", "dataMax + 0.06"]} tickFormatter={(v) => `$${v.toFixed(2)}`} />
+                domain={["dataMin - 0.03", "dataMax + 0.03"]} tickFormatter={(v) => `$${v.toFixed(2)}`} />
               <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }}
                 formatter={(v) => [`$${Number(v).toFixed(2)}`, "Option price"]} />
-              <ReferenceLine y={t.tpPrice} stroke="#10b981" strokeDasharray="4 3" strokeWidth={1.5}
-                label={{ value: `TP $${t.tpPrice.toFixed(2)} (+20%)`, fontSize: 9, fill: "#10b981", position: "insideTopRight" }} />
-              <ReferenceLine y={t.slPrice} stroke="#ef4444" strokeDasharray="4 3" strokeWidth={1.5}
-                label={{ value: `SL $${t.slPrice.toFixed(2)} (-12.5%)`, fontSize: 9, fill: "#ef4444", position: "insideBottomRight" }} />
+              {/* Vertical time markers survive any zoom level; the dots and
+                  price labels only get room in the zoomed view. */}
+              <ReferenceLine x={t.entryClock} stroke="#10b981" strokeWidth={1.5} strokeDasharray="3 3"
+                label={{ value: `▲ BOUGHT $${t.entryPrice.toFixed(2)} · ${t.entryClock.replace(" ET", "")}`, fontSize: 10, fontWeight: 700, fill: "#10b981", position: "insideTopLeft" }} />
+              <ReferenceLine x={t.exitClock} stroke="#ef4444" strokeWidth={1.5} strokeDasharray="3 3"
+                label={{ value: `▼ SOLD $${t.exitPrice.toFixed(2)} · ${t.exitClock.replace(" ET", "")}`, fontSize: 10, fontWeight: 700, fill: "#ef4444", position: "insideTopRight", dy: 16 }} />
+              {view === "zoom" && (
+                <>
+                  <ReferenceLine y={t.tpPrice} stroke="#10b981" strokeDasharray="4 3"
+                    label={{ value: `take profit $${t.tpPrice.toFixed(2)}`, fontSize: 9, fill: "#10b981", position: "insideBottomLeft" }} />
+                  <ReferenceLine y={t.slPrice} stroke="#ef4444" strokeDasharray="4 3"
+                    label={{ value: `stop loss $${t.slPrice.toFixed(2)}`, fontSize: 9, fill: "#ef4444", position: "insideBottomLeft" }} />
+                </>
+              )}
               <Line type="monotone" dataKey="price" stroke="#71717a" dot={false} strokeWidth={1.8} />
-              {/* Buy / sell marked with ReferenceDot + a big arrow label, which
-                  survives recharts' null-point handling better than a custom
-                  dot renderer on an all-null series. */}
-              <ReferenceDot x={t.entryClock} y={t.entryPrice} r={7} fill="#10b981" stroke="#fff" strokeWidth={2.5} isFront
-                label={{ value: `▲ BOUGHT $${t.entryPrice.toFixed(2)}`, fontSize: 11, fontWeight: 700, fill: "#10b981", position: "bottom" }} />
-              <ReferenceDot x={t.exitClock} y={t.exitPrice} r={7} fill="#ef4444" stroke="#fff" strokeWidth={2.5} isFront
-                label={{ value: `▼ SOLD $${t.exitPrice.toFixed(2)}`, fontSize: 11, fontWeight: 700, fill: "#ef4444", position: "top" }} />
+              <ReferenceDot x={t.entryClock} y={t.entryPrice} r={6} fill="#10b981" stroke="#fff" strokeWidth={2.5} isFront />
+              <ReferenceDot x={t.exitClock} y={t.exitPrice} r={6} fill="#ef4444" stroke="#fff" strokeWidth={2.5} isFront />
             </ComposedChart>
           </ResponsiveContainer>
           <div className={`flex gap-4 mt-1 text-[11px] ${faint}`}>
             <span className="flex items-center gap-1"><ArrowUp size={11} className="text-emerald-500" strokeWidth={3} /> bought here</span>
             <span className="flex items-center gap-1"><ArrowDown size={11} className="text-red-500" strokeWidth={3} /> sold here</span>
+            {view === "zoom" && <span>showing {Math.round(zoomTo - zoomFrom)} min around the trade</span>}
           </div>
         </div>
       </div>
@@ -298,16 +322,32 @@ export default function ZeroDTE() {
                 {data.levels.pdl && <ReferenceLine y={data.levels.pdl} stroke="#c084fc" strokeDasharray="5 4"
                   label={{ value: `PDL ${data.levels.pdl.toFixed(2)}`, fontSize: 10, fill: "#c084fc", position: "insideBottomRight" }} />}
                 {data.levels.pmh && <ReferenceLine y={data.levels.pmh} stroke="#fbbf24" strokeDasharray="2 3"
-                  label={{ value: `PMH ${data.levels.pmh.toFixed(2)}`, fontSize: 10, fill: "#fbbf24", position: "insideTopRight" }} />}
+                  label={{ value: `PMH ${data.levels.pmh.toFixed(2)}`, fontSize: 10, fill: "#fbbf24", position: "insideTopLeft" }} />}
                 {data.levels.pml && <ReferenceLine y={data.levels.pml} stroke="#fbbf24" strokeDasharray="2 3"
-                  label={{ value: `PML ${data.levels.pml.toFixed(2)}`, fontSize: 10, fill: "#fbbf24", position: "insideBottomRight" }} />}
+                  label={{ value: `PML ${data.levels.pml.toFixed(2)}`, fontSize: 10, fill: "#fbbf24", position: "insideBottomLeft" }} />}
 
                 {data.fires.map((f, i) => {
                   const s = TIER_STYLE[f.tier] || TIER_STYLE["RSI Extreme"];
                   const traded = f.level && f.trade?.ok;
                   return <ReferenceDot key={`f${i}`} x={f.clock} y={f.price} r={traded ? 7 : 4}
-                    fill={s.fill} stroke={traded ? "#18181b" : s.ring} strokeWidth={traded ? 2.5 : 1.5} isFront
-                    label={traded ? { value: `${f.direction === "CALL" ? "▲" : "▼"} BUY ${f.direction}`, fontSize: 10, fontWeight: 700, fill: s.fill, position: f.direction === "CALL" ? "bottom" : "top" } : undefined} />;
+                    fill={s.fill} stroke={traded ? "#18181b" : s.ring} strokeWidth={traded ? 2.5 : 1.5} isFront />;
+                })}
+                {/* Entry/exit for each executed trade, as vertical time lines
+                    + dots at SPY's price at those minutes — readable at any
+                    density, unlike point labels that pile up. NOTE: flat
+                    array, not <g>/<Fragment> wrappers — recharts only
+                    renders recognized chart children. */}
+                {trades.flatMap((f, i) => {
+                  const entryBar = chartData.find((b) => b.clock === f.trade.entryClock);
+                  const exitBar = chartData.find((b) => b.clock === f.trade.exitClock);
+                  return [
+                    <ReferenceLine key={`in${i}`} x={f.trade.entryClock} stroke="#10b981" strokeWidth={1.5} strokeDasharray="3 3"
+                      label={{ value: `▲ IN ${f.trade.entryClock.replace(" ET", "")}`, fontSize: 10, fontWeight: 700, fill: "#10b981", position: "insideTopLeft" }} />,
+                    <ReferenceLine key={`out${i}`} x={f.trade.exitClock} stroke="#ef4444" strokeWidth={1.5} strokeDasharray="3 3"
+                      label={{ value: `▼ OUT ${f.trade.exitClock.replace(" ET", "")}`, fontSize: 10, fontWeight: 700, fill: "#ef4444", position: "insideBottomRight" }} />,
+                    entryBar && <ReferenceDot key={`ind${i}`} x={f.trade.entryClock} y={entryBar.close} r={6} fill="#10b981" stroke="#fff" strokeWidth={2} isFront />,
+                    exitBar && <ReferenceDot key={`outd${i}`} x={f.trade.exitClock} y={exitBar.close} r={6} fill="#ef4444" stroke="#fff" strokeWidth={2} isFront />,
+                  ].filter(Boolean);
                 })}
               </ComposedChart>
             </ResponsiveContainer>
