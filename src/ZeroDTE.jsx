@@ -551,27 +551,44 @@ function CalendarView({ onBack }) {
 
   async function runLast24Months() {
     setErr(null);
-    const months = [];
-    for (let offset = 23; offset >= 0; offset--) {
-      const d = new Date(Date.UTC(now.getFullYear(), now.getMonth() - offset, 1));
-      months.push({ year: d.getUTCFullYear(), month: d.getUTCMonth() + 1 });
-    }
-
-    setBulkRun({ completed: 0, total: months.length, current: months[0] });
     try {
-      for (let i = 0; i < months.length; i++) {
-        const current = months[i];
-        setBulkRun({ completed: i, total: months.length, current });
-        await requestMonth(current.year, current.month);
-        setBulkRun({ completed: i + 1, total: months.length, current });
-      }
-      setData(await requestMonth(ym.year, ym.month));
+      const res = await fetch("/api/0dte/backtest-jobs", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ symbol: "SPY", months: 24 }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Could not start backtest");
+      setBulkRun(json);
     } catch (e) {
-      setErr(`24-month backtest stopped: ${e.message}. Click the button to safely resume.`);
-    } finally {
-      setBulkRun(null);
+      setErr(`24-month backtest could not start: ${e.message}`);
     }
   }
+
+  // Recover visible progress on page load, then poll PostgreSQL while Railway
+  // works. Closing this page stops only the polling — never the backtest.
+  useEffect(() => {
+    let active = true;
+    fetch("/api/0dte/backtest-jobs/latest?symbol=SPY")
+      .then((res) => res.ok ? res.json() : null)
+      .then((job) => { if (active && job) setBulkRun(job); })
+      .catch(() => {});
+    return () => { active = false; };
+  }, []);
+
+  useEffect(() => {
+    if (!bulkRun?.id || !["queued", "running"].includes(bulkRun.status)) return;
+    const timer = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/0dte/backtest-jobs/${bulkRun.id}`);
+        if (!res.ok) return;
+        const job = await res.json();
+        setBulkRun(job);
+        if (job.status === "complete") setData(await requestMonth(ym.year, ym.month));
+        if (job.status === "failed") setErr(`24-month backtest stopped: ${job.error}. Click retry to resume.`);
+      } catch { /* Railway continues even if this browser misses a poll. */ }
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [bulkRun?.id, bulkRun?.status, ym.year, ym.month]);
   // Load on first render and whenever the month changes.
   useEffect(() => { load(ym.year, ym.month); }, [ym.year, ym.month]);
 
@@ -613,12 +630,15 @@ function CalendarView({ onBack }) {
           ))}
         </div>
         <div className="w-56 flex justify-end">
-          <button onClick={runLast24Months} disabled={loading || !!bulkRun}
+          <button onClick={runLast24Months} disabled={loading || ["queued", "running"].includes(bulkRun?.status)}
             className="rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:bg-zinc-300 dark:disabled:bg-zinc-700 text-white px-3 py-2 text-xs font-semibold flex items-center gap-2">
-            {bulkRun ? <Loader2 size={14} className="animate-spin" /> : <CalendarDays size={14} />}
-            {bulkRun
-              ? `${bulkRun.completed}/${bulkRun.total} · ${MONTH_NAMES[bulkRun.current.month - 1]} ${bulkRun.current.year}`
-              : "Backtest last 24 months"}
+            {["queued", "running"].includes(bulkRun?.status) ? <Loader2 size={14} className="animate-spin" /> : <CalendarDays size={14} />}
+            {bulkRun?.status === "queued" ? "Queued on Railway"
+              : bulkRun?.status === "running" && bulkRun.current
+                ? `${bulkRun.completedMonths}/${bulkRun.totalMonths} · ${MONTH_NAMES[bulkRun.current.month - 1]} ${bulkRun.current.year}`
+                : bulkRun?.status === "complete" ? "24 months complete"
+                : bulkRun?.status === "failed" ? "Retry 24-month backtest"
+                : "Backtest last 24 months"}
           </button>
         </div>
       </div>
@@ -674,18 +694,18 @@ function CalendarView({ onBack }) {
         </div>
       )}
 
-      {bulkRun && (
+      {bulkRun && ["queued", "running"].includes(bulkRun.status) && (
         <div className={`${card} rounded-lg px-4 py-3 mb-4`}>
           <div className="flex items-center justify-between text-xs mb-2">
             <span className="font-semibold text-zinc-800 dark:text-zinc-200">Building the 24-month history</span>
-            <span className={faint}>{bulkRun.completed} of {bulkRun.total} months saved</span>
+            <span className={faint}>{bulkRun.completedMonths} of {bulkRun.totalMonths} months saved</span>
           </div>
           <div className="h-2 rounded-full bg-zinc-200 dark:bg-zinc-800 overflow-hidden">
             <div className="h-full bg-indigo-600 transition-all"
-              style={{ width: `${(bulkRun.completed / bulkRun.total) * 100}%` }} />
+              style={{ width: `${(bulkRun.completedMonths / bulkRun.totalMonths) * 100}%` }} />
           </div>
           <div className={`text-[11px] mt-2 ${faint}`}>
-            Keep this page open while it runs. Completed months remain saved, so rerunning is safe if the connection stops.
+            Railway is running this in the background. You may close the browser; progress and completed months are saved.
           </div>
         </div>
       )}

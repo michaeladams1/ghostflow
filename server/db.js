@@ -113,6 +113,32 @@ export function ensureSchema() {
       CREATE INDEX IF NOT EXISTS zerodte_by_session ON zerodte_trades (symbol, session_date);
       CREATE INDEX IF NOT EXISTS zerodte_by_lane ON zerodte_trades (lane, counted);
       CREATE INDEX IF NOT EXISTS zerodte_by_version ON zerodte_trades (code_version, counted);
+      -- DURABLE 0DTE BACKTEST JOBS. The browser starts a job and may disappear;
+      -- Railway advances this persisted checkpoint one month at a time.
+      CREATE TABLE IF NOT EXISTS zerodte_backtest_jobs (
+        id TEXT PRIMARY KEY,
+        symbol TEXT NOT NULL,
+        months INT NOT NULL,
+        start_year INT NOT NULL,
+        start_month INT NOT NULL,
+        end_year INT NOT NULL,
+        end_month INT NOT NULL,
+        status TEXT NOT NULL,       -- queued | running | complete | failed
+        total_months INT NOT NULL,
+        completed_months INT NOT NULL DEFAULT 0,
+        current_year INT,
+        current_month INT,
+        error TEXT,
+        code_version TEXT NOT NULL,
+        worker_id TEXT,
+        lease_until TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        started_at TIMESTAMPTZ,
+        completed_at TIMESTAMPTZ
+      );
+      CREATE INDEX IF NOT EXISTS zerodte_backtest_jobs_latest
+        ON zerodte_backtest_jobs (symbol, code_version, created_at DESC);
     `).catch((err) => {
       schemaReady = null; // allow retry on next call if this failed
       throw err;

@@ -30,6 +30,9 @@ import { simulateMonth } from "./server/zeroDTECalendar.js";
 import { analyzePerformance, compareVersions } from "./server/zeroDTEAnalysis.js";
 import { buildInfo } from "./server/buildInfo.js";
 import { coveredSessions } from "./server/zeroDTEStore.js";
+import {
+  createBacktestJob, getBacktestJob, getLatestBacktestJob, startBacktestJobWorker,
+} from "./server/zeroDTEBacktestJobs.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DIST_DIR = path.join(__dirname, "dist");
@@ -668,6 +671,39 @@ app.post("/api/0dte/month", async (req, res) => {
   }
 });
 
+// DURABLE MULTI-MONTH BACKTEST: returns immediately after persisting the job.
+// Railway owns execution from this point; the browser only polls status.
+app.post("/api/0dte/backtest-jobs", async (req, res) => {
+  try {
+    const { symbol = "SPY", months = 24 } = req.body || {};
+    if (Number(months) !== 24) return res.status(400).json({ error: "Only the bounded 24-month backtest is supported." });
+    const job = await createBacktestJob({ symbol: String(symbol).toUpperCase(), months: 24 });
+    res.status(job.status === "complete" ? 200 : 202).json(job);
+  } catch (err) {
+    console.error("[0dte:backfill] create failed:", err.message);
+    res.status(500).json({ error: err.message || String(err) });
+  }
+});
+
+app.get("/api/0dte/backtest-jobs/latest", async (req, res) => {
+  try {
+    const job = await getLatestBacktestJob({ symbol: String(req.query.symbol || "SPY").toUpperCase(), months: 24 });
+    res.json(job);
+  } catch (err) {
+    res.status(500).json({ error: err.message || String(err) });
+  }
+});
+
+app.get("/api/0dte/backtest-jobs/:id", async (req, res) => {
+  try {
+    const job = await getBacktestJob(req.params.id);
+    if (!job) return res.status(404).json({ error: "Backtest job not found" });
+    res.json(job);
+  } catch (err) {
+    res.status(500).json({ error: err.message || String(err) });
+  }
+});
+
 // PERFORMANCE ANALYSIS: slices every persisted 0DTE trade by feature so the
 // strategy can be judged on evidence. Read-only over the DB — no simulation,
 // so it's instant once months have been run.
@@ -721,6 +757,7 @@ app.listen(PORT, () => {
   console.log(`GHOSTFLOW on port ${PORT}${!USER || !PASS ? " (WARNING: no auth)" : " (auth enabled)"}`);
   runAIProviderHealthCheck();
   cleanupStaleJobs();
+  startBacktestJobWorker();
 });
 
 // STALE JOB CLEANUP. Background jobs are in-process — if the server restarts
