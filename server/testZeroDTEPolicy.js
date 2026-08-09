@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import {
-  classifyResearchCandidate, classifyShenConviction, isFrontierOfficialFire,
+  classifyResearchCandidate, classifyShenConviction, isFrontierFire,
   pickOtmStrike, playbookTouchPolicy,
 } from "./zeroDTE.js";
 import { walkBracketBars } from "./zeroDTEOptionSim.js";
@@ -37,17 +37,20 @@ assert.equal(classifyShenConviction({ minutes: 600, levelType: "PDL", touchNumbe
 
 const frontierBase = {
   direction: "PUT", levelType: "WHOLE_DOLLAR", tier: "A", points: 13,
-  etMinute: 610, entryPrice: 1.05, window: "in", counted: true,
+  etMinute: 610, entryPrice: 1.05,
 };
-assert.equal(isFrontierOfficialFire(frontierBase), true);
-assert.equal(isFrontierOfficialFire({ ...frontierBase, direction: "CALL", levelType: "PDL" }), false);
-assert.equal(isFrontierOfficialFire({ ...frontierBase, tier: "A+" }), false);
-assert.equal(isFrontierOfficialFire({ ...frontierBase, points: 11 }), false);
-assert.equal(isFrontierOfficialFire({ ...frontierBase, points: 15 }), false);
-assert.equal(isFrontierOfficialFire({ ...frontierBase, etMinute: 595 }), false);
-assert.equal(isFrontierOfficialFire({ ...frontierBase, entryPrice: 0.49 }), false);
-assert.equal(isFrontierOfficialFire({ ...frontierBase, window: "after" }), false);
-assert.equal(isFrontierOfficialFire({ ...frontierBase, counted: false }), false);
+assert.equal(isFrontierFire(frontierBase), true);
+assert.equal(isFrontierFire({ ...frontierBase, direction: "CALL", levelType: "PDL" }), false);
+assert.equal(isFrontierFire({ ...frontierBase, tier: "A+" }), false);
+assert.equal(isFrontierFire({ ...frontierBase, tier: "Extended A+" }), false);
+assert.equal(isFrontierFire({ ...frontierBase, points: 11 }), false);
+assert.equal(isFrontierFire({ ...frontierBase, points: 15 }), false);
+assert.equal(isFrontierFire({ ...frontierBase, etMinute: 595 }), false);
+assert.equal(isFrontierFire({ ...frontierBase, etMinute: 615 }), false);
+assert.equal(isFrontierFire({ ...frontierBase, entryPrice: 0.49 }), false);
+// All segments eligible — Shen / research / outside pass the same feature gates.
+assert.equal(isFrontierFire({ ...frontierBase, tier: "Shen FULL 3/3" }), true);
+assert.equal(isFrontierFire({ ...frontierBase, tier: "Research 13-14" }), true);
 
 const bars = [
   { ts: ts("11:13"), open: 1.00, high: 1.01, low: 0.99, close: 1.00 },

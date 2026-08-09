@@ -344,13 +344,15 @@ the experiment measures entry quality without inventing a dollar mapping for the
 "standard" versus "full" language. Results have their own fourth calendar box and are
 excluded from official and existing research totals.
 
-**Frontier model is a paper-only filter over official counted fires.** It does **not**
-create new signals. `isFrontierOfficialFire()` in `zeroDTE.js` keeps an official
-playbook-hours trade only when all of these hold: not CALL@PDL, not A+, Edge Lens
-points in 12–14, `et_minute >= 600` (10:00 ET), and `entry_price >= 0.50`. The calendar
-derives Frontier totals at read time from existing `zerodte_trades` rows (no resim
-required), and month simulation applies the same filter. Official / outside / research /
-Shen boxes are unchanged. QuantData is intentionally not part of Frontier v0.
+**Frontier model is a paper-only filter across ALL segments** (playbook hours, outside
+hours, research lanes, Shen). It does **not** create new signals. `isFrontierFire()` in
+`zeroDTE.js` keeps a simulated trade when all of these hold: not CALL@PDL, not A+ /
+Extended A+, Edge Lens points in 12–14, `et_minute` in `[600, 615)` (10:00–10:15 ET),
+and `entry_price >= 0.50`. When several lanes fire the same setup, Frontier dedupes by
+`(date, et_minute, direction, level_type, touch)` with priority playbook > research >
+outside > Shen. The calendar derives Frontier at read time from existing
+`zerodte_trades` rows (no resim required). Official / outside / research / Shen boxes
+are unchanged. QuantData is intentionally not part of Frontier v1.
 
 ---
 

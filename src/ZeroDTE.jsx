@@ -246,22 +246,30 @@ const TIER_STYLE = {
 
 export default function ZeroDTE() {
   const [showCalendar, setShowCalendar] = useState(false);
+  const [calendarReturn, setCalendarReturn] = useState(null);
   const [sessionDate, setSessionDate] = useState(lastWeekdayISO());
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState(null);
   const [data, setData] = useState(null);
 
-  async function run() {
+  async function run(date = sessionDate) {
     setLoading(true); setErr(null); setData(null);
     try {
       const res = await fetch("/api/0dte/analyze", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ symbol: "SPY", sessionDate }),
+        body: JSON.stringify({ symbol: "SPY", sessionDate: date }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Request failed");
       setData(json);
     } catch (e) { setErr(e.message); } finally { setLoading(false); }
+  }
+
+  async function openDayFromCalendar(isoDate, returnCtx) {
+    setCalendarReturn(returnCtx || null);
+    setSessionDate(isoDate);
+    setShowCalendar(false);
+    await run(isoDate);
   }
 
   const rth = data?.bars?.filter((b) => b.inSession) || [];
@@ -276,14 +284,33 @@ export default function ZeroDTE() {
   // Attach the story's steps back onto each trade for the expandable walkthrough.
   const stepsByClock = Object.fromEntries((data?.story?.lines || []).filter((s) => s.fire).map((s) => [s.fire.clock + s.fire.direction, s.steps]));
 
-  if (showCalendar) return <CalendarView onBack={() => setShowCalendar(false)} />;
+  if (showCalendar) {
+    return (
+      <CalendarView
+        onBack={() => setShowCalendar(false)}
+        onOpenDay={openDayFromCalendar}
+        initialReturn={calendarReturn}
+      />
+    );
+  }
 
   return (
     <div>
       <div className="flex flex-wrap items-end justify-between gap-3 mb-5">
-        <p className={`text-xs ${faint} max-w-lg`}>
-          Pick a session and get the full debrief — every signal, the exact contract, and what the bracket order would have done.
-        </p>
+        <div className="max-w-lg">
+          {calendarReturn && (
+            <button
+              type="button"
+              onClick={() => setShowCalendar(true)}
+              className={`text-sm mb-2 ${faint} hover:text-zinc-800 dark:hover:text-zinc-200`}
+            >
+              ← Back to calendar
+            </button>
+          )}
+          <p className={`text-xs ${faint}`}>
+            Pick a session and get the full debrief — every signal, the exact contract, and what the bracket order would have done.
+          </p>
+        </div>
         <div className="flex items-end gap-2">
           <div>
             <label className={`${heading} block mb-1`}>Session date</label>
@@ -525,7 +552,45 @@ function laneTotals(days, lane) {
   };
 }
 
-function DayBox({ dayNum, data, ghost, lane }) {
+function summarizeYearTotals(months) {
+  const sum = (key) => +(months.reduce((s, m) => s + Number(m?.totals?.[key] || 0), 0).toFixed(2));
+  const count = (key) => months.reduce((s, m) => s + Number(m?.totals?.[key] || 0), 0);
+  const wins = count("wins");
+  const totalTrades = count("totalTrades");
+  const excludedTrades = count("excludedTrades");
+  const excludedWins = count("excludedWins");
+  const experimentalTrades = count("experimentalTrades");
+  const experimentalWins = count("experimentalWins");
+  const shenTrades = count("shenTrades");
+  const shenWins = count("shenWins");
+  const frontierTrades = count("frontierTrades");
+  const frontierWins = count("frontierWins");
+  return {
+    pnl: sum("pnl"),
+    excludedPnl: sum("excludedPnl"),
+    totalTrades,
+    wins,
+    winRate: totalTrades ? +((wins / totalTrades) * 100).toFixed(1) : null,
+    excludedTrades,
+    excludedWins,
+    excludedWinRate: excludedTrades ? +((excludedWins / excludedTrades) * 100).toFixed(1) : null,
+    experimentalPnl: sum("experimentalPnl"),
+    experimentalTrades,
+    experimentalWins,
+    experimentalWinRate: experimentalTrades ? +((experimentalWins / experimentalTrades) * 100).toFixed(1) : null,
+    shenPnl: sum("shenPnl"),
+    shenTrades,
+    shenWins,
+    shenWinRate: shenTrades ? +((shenWins / shenTrades) * 100).toFixed(1) : null,
+    frontierPnl: sum("frontierPnl"),
+    frontierTrades,
+    frontierWins,
+    frontierWinRate: frontierTrades ? +((frontierWins / frontierTrades) * 100).toFixed(1) : null,
+    nearMissReasons: {},
+  };
+}
+
+function DayBox({ dayNum, data, ghost, lane, onOpen }) {
   if (ghost) return (
     <div className="rounded-lg bg-zinc-50 dark:bg-zinc-900/40 min-h-[86px] p-2">
       <div className={`text-sm ${faint} opacity-50`}>{dayNum}</div>
@@ -536,8 +601,14 @@ function DayBox({ dayNum, data, ghost, lane }) {
   const cls = pos ? "bg-emerald-100 dark:bg-emerald-950/50 border border-emerald-300 dark:border-emerald-800"
     : neg ? "bg-red-100 dark:bg-red-950/50 border border-red-300 dark:border-red-800"
     : "bg-white dark:bg-zinc-900 border border-zinc-100 dark:border-zinc-800";
+  const interactive = typeof onOpen === "function";
+  const Comp = interactive ? "button" : "div";
   return (
-    <div className={`rounded-lg min-h-[86px] p-2 text-center ${cls}`}>
+    <Comp
+      type={interactive ? "button" : undefined}
+      onClick={interactive ? onOpen : undefined}
+      className={`rounded-lg min-h-[86px] p-2 text-center w-full ${cls} ${interactive ? "hover:ring-2 hover:ring-emerald-400/60 transition" : ""}`}
+    >
       <div className="text-sm font-medium text-zinc-700 dark:text-zinc-300">{dayNum}</div>
       {traded && (
         <>
@@ -548,18 +619,53 @@ function DayBox({ dayNum, data, ghost, lane }) {
           <div className={`text-[9px] uppercase tracking-wide ${faint}`}>{CALENDAR_LANES[lane].label}</div>
         </>
       )}
-    </div>
+    </Comp>
   );
 }
 
-function CalendarView({ onBack }) {
+function MonthBox({ month, totals, lane, onOpen }) {
+  const config = CALENDAR_LANES[lane];
+  const pnl = Number(totals?.[config.pnlKey] ?? 0);
+  const tradeKey = config.tradesKey === "tradePnls" ? "totalTrades"
+    : config.tradesKey === "excludedTradePnls" ? "excludedTrades"
+    : config.tradesKey === "experimentalTradePnls" ? "experimentalTrades"
+    : config.tradesKey === "shenTradePnls" ? "shenTrades"
+    : "frontierTrades";
+  const trades = Number(totals?.[tradeKey] ?? 0);
+  const traded = trades > 0;
+  const pos = traded && pnl > 0, neg = traded && pnl < 0;
+  const cls = pos ? "bg-emerald-100 dark:bg-emerald-950/50 border border-emerald-300 dark:border-emerald-800"
+    : neg ? "bg-red-100 dark:bg-red-950/50 border border-red-300 dark:border-red-800"
+    : "bg-white dark:bg-zinc-900 border border-zinc-100 dark:border-zinc-800";
+  return (
+    <button type="button" onClick={onOpen}
+      className={`rounded-lg min-h-[110px] p-3 text-center w-full ${cls} hover:ring-2 hover:ring-emerald-400/60 transition`}>
+      <div className="text-sm font-semibold text-zinc-700 dark:text-zinc-300">{MONTH_NAMES[month - 1]}</div>
+      {traded ? (
+        <>
+          <div className={`text-lg font-bold mt-1 ${pos ? "text-emerald-600 dark:text-emerald-400" : neg ? "text-red-600 dark:text-red-400" : "text-zinc-600"}`}>
+            {pnl > 0 ? "+" : ""}{money(pnl)}
+          </div>
+          <div className={`text-[11px] mt-0.5 ${faint}`}>{trades} trade{trades === 1 ? "" : "s"}</div>
+          <div className={`text-[9px] uppercase tracking-wide ${faint}`}>{config.label}</div>
+        </>
+      ) : (
+        <div className={`text-[11px] mt-3 ${faint}`}>No trades</div>
+      )}
+    </button>
+  );
+}
+
+function CalendarView({ onBack, onOpenDay, initialReturn }) {
   const now = new Date();
-  const [ym, setYm] = useState({ year: now.getFullYear(), month: now.getMonth() + 1 });
+  const [ym, setYm] = useState(() => initialReturn?.ym || { year: now.getFullYear(), month: now.getMonth() + 1 });
+  const [timeframe, setTimeframe] = useState(() => initialReturn?.timeframe || "Month");
   const [loading, setLoading] = useState(false);
   const [bulkRun, setBulkRun] = useState(null);
-  const [calendarLane, setCalendarLane] = useState("official");
+  const [calendarLane, setCalendarLane] = useState(() => initialReturn?.lane || "official");
   const [err, setErr] = useState(null);
   const [data, setData] = useState(null);
+  const [yearMonths, setYearMonths] = useState([]);
 
   async function requestSavedMonth(year, month) {
     const res = await fetch(`/api/0dte/calendar?symbol=SPY&year=${year}&month=${month}`);
@@ -572,6 +678,20 @@ function CalendarView({ onBack }) {
     setLoading(true); setErr(null);
     try { setData(await requestSavedMonth(y, m)); }
     catch (e) { setErr(e.message); }
+    finally { setLoading(false); }
+  }
+
+  async function loadYear(y) {
+    setLoading(true); setErr(null);
+    try {
+      const months = [];
+      for (let m = 1; m <= 12; m++) {
+        if (y > now.getFullYear() || (y === now.getFullYear() && m > now.getMonth() + 1)) break;
+        months.push(await requestSavedMonth(y, m));
+      }
+      setYearMonths(months);
+      setData(months[months.length - 1] || null);
+    } catch (e) { setErr(e.message); }
     finally { setLoading(false); }
   }
 
@@ -609,16 +729,28 @@ function CalendarView({ onBack }) {
         if (!res.ok) return;
         const job = await res.json();
         setBulkRun(job);
-        if (job.status === "complete") setData(await requestSavedMonth(ym.year, ym.month));
+        if (job.status === "complete") {
+          if (timeframe === "Year") await loadYear(ym.year);
+          else setData(await requestSavedMonth(ym.year, ym.month));
+        }
         if (job.status === "failed") setErr(`24-month backtest stopped: ${job.error}. Click retry to resume.`);
       } catch { /* Railway continues even if this browser misses a poll. */ }
     }, 3000);
     return () => clearInterval(timer);
-  }, [bulkRun?.id, bulkRun?.status, ym.year, ym.month]);
-  // Load on first render and whenever the month changes.
-  useEffect(() => { load(ym.year, ym.month); }, [ym.year, ym.month]);
+  }, [bulkRun?.id, bulkRun?.status, ym.year, ym.month, timeframe]);
+  // Load on first render and whenever the month/year/timeframe changes.
+  useEffect(() => {
+    if (timeframe === "Year") loadYear(ym.year);
+    else load(ym.year, ym.month);
+  }, [ym.year, ym.month, timeframe]);
 
   const nav = (delta) => {
+    if (timeframe === "Year") {
+      const year = ym.year + delta;
+      if (year > now.getFullYear() || year < 2020) return;
+      setYm({ year, month: ym.month });
+      return;
+    }
     let { year, month } = ym;
     month += delta;
     if (month < 1) { month = 12; year--; }
@@ -626,6 +758,8 @@ function CalendarView({ onBack }) {
     if (year > now.getFullYear() || (year === now.getFullYear() && month > now.getMonth() + 1)) return;
     setYm({ year, month });
   };
+
+  const returnCtx = () => ({ ym, timeframe, lane: calendarLane });
 
   // Trading calendar scaffolding: Monday-Friday only. Weekend dates are omitted,
   // while weekday ghosts keep each session under its real weekday heading.
@@ -647,14 +781,31 @@ function CalendarView({ onBack }) {
     if (dow === 0 || dow === 6) continue;
     const isCurrentMonth = date.getUTCFullYear() === ym.year && date.getUTCMonth() === ym.month - 1;
     const dayNum = date.getUTCDate();
-    cells.push({ ghost: !isCurrentMonth, dayNum, data: isCurrentMonth ? byDate[dayNum] : undefined });
+    const iso = `${ym.year}-${String(ym.month).padStart(2, "0")}-${String(dayNum).padStart(2, "0")}`;
+    cells.push({
+      ghost: !isCurrentMonth,
+      dayNum,
+      iso,
+      data: isCurrentMonth ? byDate[dayNum] : undefined,
+    });
   }
 
-  const t = data ? laneTotals(data.days, calendarLane) : null;
-  const allTotals = data?.totals;
+  const yearLaneDays = yearMonths.flatMap((m) => m.days || []);
+  const t = timeframe === "Year"
+    ? laneTotals(yearLaneDays, calendarLane)
+    : (data ? laneTotals(data.days, calendarLane) : null);
+  const allTotals = timeframe === "Year"
+    ? summarizeYearTotals(yearMonths)
+    : data?.totals;
   const selectedLane = CALENDAR_LANES[calendarLane];
   const maxDay = t ? Math.max(Math.abs(t.bestDay ?? 0), Math.abs(t.worstDay ?? 0)) : 0;
   const maxTrade = t ? Math.max(Math.abs(t.bestTrade ?? 0), Math.abs(t.worstTrade ?? 0)) : 0;
+  const codeVersion = timeframe === "Year"
+    ? yearMonths.find((m) => m.codeVersion)?.codeVersion
+    : data?.codeVersion;
+  const sessionsCovered = timeframe === "Year"
+    ? yearMonths.find((m) => m.sessionsCovered)?.sessionsCovered
+    : data?.sessionsCovered;
 
   return (
     <div>
@@ -663,12 +814,17 @@ function CalendarView({ onBack }) {
           ← Back to daily debrief
         </button>
         <div className="flex rounded-full border border-zinc-200 dark:border-zinc-700 bg-zinc-50 dark:bg-zinc-900 p-1 text-sm">
-          {["Week", "Month", "Year", "All Time"].map((m) => (
-            <button key={m} disabled={m !== "Month"} title={m !== "Month" ? "Coming soon" : undefined}
-              className={`px-4 py-1.5 rounded-full font-medium ${m === "Month" ? "bg-emerald-600 text-white" : `${faint} cursor-not-allowed`}`}>
-              {m}
-            </button>
-          ))}
+          {["Week", "Month", "Year", "All Time"].map((m) => {
+            const enabled = m === "Month" || m === "Year";
+            return (
+              <button key={m} type="button" disabled={!enabled}
+                title={!enabled ? "Coming soon" : undefined}
+                onClick={() => enabled && setTimeframe(m)}
+                className={`px-4 py-1.5 rounded-full font-medium ${timeframe === m ? "bg-emerald-600 text-white" : enabled ? `${faint} hover:text-zinc-800 dark:hover:text-zinc-200` : `${faint} cursor-not-allowed`}`}>
+                {m}
+              </button>
+            );
+          })}
         </div>
         <div className="w-56 flex justify-end">
           <button onClick={runLast24Months} disabled={loading || ["queued", "running"].includes(bulkRun?.status)}
@@ -684,7 +840,7 @@ function CalendarView({ onBack }) {
         </div>
       </div>
 
-      <div className="grid sm:grid-cols-2 xl:grid-cols-5 gap-4 mb-4">
+      <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-4">
         <button type="button" onClick={() => setCalendarLane("official")} aria-pressed={calendarLane === "official"}
           className={`rounded-2xl bg-gradient-to-br from-emerald-600 to-emerald-700 text-white p-5 flex items-center gap-4 text-left transition ${calendarLane === "official" ? "ring-4 ring-emerald-300 ring-offset-2 dark:ring-offset-zinc-950" : "hover:scale-[1.01]"}`}>
           <div className="w-11 h-11 rounded-xl bg-white/15 flex items-center justify-center"><Zap size={20} /></div>
@@ -721,13 +877,15 @@ function CalendarView({ onBack }) {
             <div className="text-xs text-sky-100">{tradeSummary(allTotals?.shenTrades, allTotals?.shenWinRate)}</div>
           </div>
         </button>
+      </div>
+      <div className="mb-4">
         <button type="button" onClick={() => setCalendarLane("frontier")} aria-pressed={calendarLane === "frontier"}
-          className={`rounded-2xl bg-gradient-to-br from-teal-600 to-emerald-800 text-white p-5 flex items-center gap-4 text-left transition ${calendarLane === "frontier" ? "ring-4 ring-teal-300 ring-offset-2 dark:ring-offset-zinc-950" : "hover:scale-[1.01]"}`}>
+          className={`w-full rounded-2xl bg-gradient-to-br from-teal-600 to-emerald-800 text-white p-5 flex items-center gap-4 text-left transition ${calendarLane === "frontier" ? "ring-4 ring-teal-300 ring-offset-2 dark:ring-offset-zinc-950" : "hover:scale-[1.01]"}`}>
           <div className="w-11 h-11 rounded-xl bg-white/15 flex items-center justify-center"><Sparkles size={20} /></div>
-          <div>
-            <div className="text-[11px] uppercase tracking-wider font-semibold text-teal-100">Frontier model · paper only</div>
+          <div className="min-w-0">
+            <div className="text-[11px] uppercase tracking-wider font-semibold text-teal-100">Frontier model · paper only · all segments</div>
             <div className="text-3xl font-bold whitespace-nowrap">{allTotals ? (allTotals.frontierPnl >= 0 ? "+" : "") + wholeMoney(allTotals.frontierPnl) : "—"}</div>
-            <div className="text-xs text-teal-100">{tradeSummary(allTotals?.frontierTrades, allTotals?.frontierWinRate)}</div>
+            <div className="text-xs text-teal-100">{tradeSummary(allTotals?.frontierTrades, allTotals?.frontierWinRate)} · score 12–14 · 10:00–10:15 ET · no CALL@PDL · no A+</div>
           </div>
         </button>
       </div>
@@ -735,8 +893,10 @@ function CalendarView({ onBack }) {
       <div className={`${card} rounded-xl px-4 py-3 mb-4 flex items-center justify-center gap-6`}>
         <button onClick={() => nav(-1)} className="p-1.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800 text-lg">‹</button>
         <div className="text-center">
-          <div className="font-semibold text-zinc-900 dark:text-zinc-100">{MONTH_NAMES[ym.month - 1]} {ym.year}</div>
-          {data?.codeVersion && <div className={`text-[10px] ${faint}`}>Saved calendar · version {data.codeVersion} · {data.sessionsCovered} sessions</div>}
+          <div className="font-semibold text-zinc-900 dark:text-zinc-100">
+            {timeframe === "Year" ? ym.year : `${MONTH_NAMES[ym.month - 1]} ${ym.year}`}
+          </div>
+          {codeVersion && <div className={`text-[10px] ${faint}`}>Saved calendar · version {codeVersion} · {sessionsCovered} sessions</div>}
         </div>
         <button onClick={() => nav(1)} className="p-1.5 rounded hover:bg-zinc-100 dark:hover:bg-zinc-800 text-lg">›</button>
       </div>
@@ -749,7 +909,7 @@ function CalendarView({ onBack }) {
       {loading && (
         <div className={`flex items-center gap-2 text-sm px-4 py-10 justify-center ${faint}`}>
           <Loader2 size={16} className="animate-spin" />
-          Loading saved {MONTH_NAMES[ym.month - 1]} calendar…
+          Loading saved {timeframe === "Year" ? ym.year : MONTH_NAMES[ym.month - 1]} calendar…
         </div>
       )}
 
@@ -769,30 +929,61 @@ function CalendarView({ onBack }) {
         </div>
       )}
 
-      {!loading && data && (
+      {!loading && (timeframe === "Year" ? yearMonths.length > 0 : data) && (
         <div className="grid lg:grid-cols-[1fr_300px] gap-5">
           <div>
-            <div className="grid grid-cols-5 gap-1 mb-1">
-              {["MON", "TUE", "WED", "THU", "FRI"].map((d) => (
-                <div key={d} className={`text-center text-xs font-semibold py-2 rounded bg-zinc-100 dark:bg-zinc-800/60 ${faint}`}>{d}</div>
-              ))}
-            </div>
-            <div className="grid grid-cols-5 gap-1">
-              {cells.map((c, i) => <DayBox key={i} dayNum={c.dayNum} data={c.data} ghost={c.ghost} lane={calendarLane} />)}
-            </div>
-            <p className={`text-[11px] mt-3 ${faint}`}>
-              $1,000 base campaign per trade (playbook tiers ×4: half $500 · full $1,000 · size-up $1,500 · max $2,000).
-              The calendar follows the selected summary card; winning days are green and losing days are red.
-              Outside-hours signals are simulated but never counted in official P&L.
-              Purple research results are paper-only: strict 13–14 point first touches plus strict A+ setups from 11:15–12:30 ET.
-              Blue Shen results are paper-only and use the PDF's original 3-check conviction stack without an Edge Lens score gate.
-              Teal Frontier results are paper-only: official playbook-hours trades kept after dropping CALL@PDL and A+, requiring score 12–14, entries from 10:00 ET, and premium ≥ $0.50.
-            </p>
+            {timeframe === "Year" ? (
+              <>
+                <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 mb-1">
+                  {Array.from({ length: 12 }, (_, i) => i + 1).map((month) => {
+                    const monthData = yearMonths.find((m) => m.month === month);
+                    return (
+                      <MonthBox
+                        key={month}
+                        month={month}
+                        totals={monthData?.totals}
+                        lane={calendarLane}
+                        onOpen={() => { setYm({ year: ym.year, month }); setTimeframe("Month"); }}
+                      />
+                    );
+                  })}
+                </div>
+                <p className={`text-[11px] mt-3 ${faint}`}>
+                  Click a month to open its trading-day calendar. Summary cards still filter the selected lane across the year.
+                </p>
+              </>
+            ) : (
+              <>
+                <div className="grid grid-cols-5 gap-1 mb-1">
+                  {["MON", "TUE", "WED", "THU", "FRI"].map((d) => (
+                    <div key={d} className={`text-center text-xs font-semibold py-2 rounded bg-zinc-100 dark:bg-zinc-800/60 ${faint}`}>{d}</div>
+                  ))}
+                </div>
+                <div className="grid grid-cols-5 gap-1">
+                  {cells.map((c, i) => (
+                    <DayBox
+                      key={i}
+                      dayNum={c.dayNum}
+                      data={c.data}
+                      ghost={c.ghost}
+                      lane={calendarLane}
+                      onOpen={!c.ghost ? () => onOpenDay?.(c.iso, returnCtx()) : undefined}
+                    />
+                  ))}
+                </div>
+                <p className={`text-[11px] mt-3 ${faint}`}>
+                  Click a day to open the full debrief — option entry/exit chart plus the underlying SPY chart.
+                  $1,000 base campaign per trade (playbook tiers ×4: half $500 · full $1,000 · size-up $1,500 · max $2,000).
+                  Outside-hours / research / Shen / Frontier are paper comparison lanes and never change official P&L.
+                  Frontier selects across all segments: score 12–14, 10:00–10:15 ET, premium ≥ $0.50, no CALL@PDL, no A+.
+                </p>
+              </>
+            )}
           </div>
 
           <div>
             <div className="text-lg font-bold text-zinc-900 dark:text-zinc-100 mb-3">
-              {MONTH_NAMES[ym.month - 1]} {ym.year} · {selectedLane.label}
+              {timeframe === "Year" ? ym.year : `${MONTH_NAMES[ym.month - 1]} ${ym.year}`} · {selectedLane.label}
             </div>
             <div className={`${card} rounded-xl p-4 mb-3 flex items-center justify-between`}>
               <div>
@@ -805,7 +996,7 @@ function CalendarView({ onBack }) {
             <div className={`${card} rounded-xl p-4 mb-3 text-center`}>
               <div className={heading}>Total trades</div>
               <div className="text-3xl font-bold text-indigo-500 mt-1">{t.totalTrades}</div>
-              <div className={`text-xs mt-0.5 ${faint}`}>{MONTH_NAMES[ym.month - 1]} · {selectedLane.label}</div>
+              <div className={`text-xs mt-0.5 ${faint}`}>{timeframe === "Year" ? ym.year : MONTH_NAMES[ym.month - 1]} · {selectedLane.label}</div>
             </div>
             <div className={`${card} rounded-xl p-4 mb-3`}>
               <div className={`${heading} text-center mb-3`}>Daily performance</div>

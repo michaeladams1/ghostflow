@@ -4,7 +4,9 @@
 // first month costs ~20 sequential day-sims and every later view is free
 // until the server restarts.
 
-import { analyzeZeroDTESession, isFrontierOfficialFire } from "./zeroDTE.js";
+import {
+  analyzeZeroDTESession, frontierDedupeKey, frontierLanePriority, isFrontierFire,
+} from "./zeroDTE.js";
 import { simulateAllFires } from "./zeroDTEOptionSim.js";
 import { buildSessionStory } from "./zeroDTEStory.js";
 import { saveSessionTrades } from "./zeroDTEStore.js";
@@ -46,15 +48,35 @@ async function simulateDay(symbol, date) {
       const excluded = simmed.filter((f) => f.window !== "in");
       const experimental = experiments.filter((f) => f.level && f.trade?.ok);
       const shen = playbookExperiments.filter((f) => f.level && f.trade?.ok);
-      const frontier = counted.filter((f) => isFrontierOfficialFire({
-        direction: f.direction,
-        levelType: f.levelType,
-        tier: f.tier,
-        points: f.points,
-        etMinute: f.ts ? etMinuteOf(f.ts) : null,
-        entryPrice: f.trade?.entryPrice,
-        window: f.window,
-      }));
+      // Frontier draws from every segment, then keeps the highest-priority
+      // lane when several lanes fire the same setup clock.
+      const frontierByKey = new Map();
+      const considerFrontier = (f, lane, countedFlag) => {
+        const etMinute = f.ts ? etMinuteOf(f.ts) : null;
+        if (!isFrontierFire({
+          direction: f.direction,
+          levelType: f.levelType,
+          tier: f.tier,
+          points: f.points,
+          etMinute,
+          entryPrice: f.trade?.entryPrice,
+        })) return;
+        const key = frontierDedupeKey({
+          sessionDate: date,
+          etMinute,
+          direction: f.direction,
+          levelType: f.levelType,
+          touchNumber: f.touchNumber,
+        });
+        const rank = frontierLanePriority(lane, { counted: countedFlag });
+        const prev = frontierByKey.get(key);
+        if (!prev || rank < prev.rank) frontierByKey.set(key, { f, rank });
+      };
+      for (const f of counted) considerFrontier(f, "official", true);
+      for (const f of experimental) considerFrontier(f, f.lane || "HIGH_QUALITY_A", false);
+      for (const f of excluded) considerFrontier(f, "official", false);
+      for (const f of shen) considerFrontier(f, "SHEN_CONVICTION", false);
+      const frontier = [...frontierByKey.values()].map((x) => x.f);
       summary = {
         date,
         pnl: +story.totalPnl.toFixed(2),
