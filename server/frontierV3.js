@@ -1,28 +1,33 @@
-// FRONTIER v6 — $1,000 paper max with Frontier-only exit brackets.
+// FRONTIER v7 — $1,000 max per trade (concurrent capital allowed), blended
+// selection toward ≥$250 holdout avg $/day.
 //
-// Selection: first touch, from 9:45 ET, best Edge Lens score/day (all segments).
-// Exits (NOT the playbook +20%/-12.5%): runner target + −50% stop, hold toward
-// the close (no 11:15 hard stop). Official / research / Shen keep playbook
-// brackets; only Frontier P&L uses these exits.
+// Selection: PUT only, Edge Lens points ≥ 12, first touch, from 9:45 ET,
+// best score/day. Exits (NOT playbook +20%/-12.5%): runner / −50% stop, hold
+// toward the close. Official / research / Shen keep playbook brackets.
 //
-// Evidence: server/frontierExitSearch.js (balanced train/holdout sample)
-// Champion id: runner_sl50_nohard → holdout avg day ~$241 @ $1,000
-// (near the $250/day goal without $8k sizing).
+// Local evidence (full PUT bar walks on code_version 89d991cddb31):
+//   server/frontierPutValidate.js → top1_PUT_pts12
+//   holdout avg day ~$576 (25 days) · train ~$173 (56 days)
+// Multi-trade / Shen blends and CALL-inclusive books did not clear $250 on
+// full-period train+holdout at $1k/trade (see frontierBlendSearch.js /
+// frontierBlendExpand.js). Coverage is intentionally thinner than v6.
 //
-// Requires a new 24-month backtest so each fire is re-walked with Frontier
-// exits and frontier_* columns are populated.
+// Requires a new 24-month backtest so frontier_* columns match this filter.
 
 import { QD_ENDPOINTS } from "./quantDataRegistry.js";
 import { fetchEndpointCached } from "./quantDataClient.js";
 
 export const FRONTIER_V3_MIN_MINUTE = 585;
-export const FRONTIER_V3_MIN_POINTS = null;
+export const FRONTIER_V3_MIN_POINTS = 12;
 export const FRONTIER_V3_MAX_POINTS = null;
 export const FRONTIER_V3_MIN_ENTRY = 0;
+export const FRONTIER_V3_DIRECTION = "PUT";
 export const FRONTIER_V3_FLOW_VETO = null;
 export const FRONTIER_V3_FLOW_BUCKETS = 30;
 export const FRONTIER_V3_REQUIRE_FIRST_TOUCH = true;
-export const FRONTIER_V3_ONE_PER_DAY = true;
+/** Cap selected Frontier fires per session (concurrent $1k trades OK up to this). */
+export const FRONTIER_V3_MAX_PER_DAY = 1;
+export const FRONTIER_V3_ONE_PER_DAY = FRONTIER_V3_MAX_PER_DAY <= 1;
 
 /** Max dollars risked per Frontier paper trade. */
 export const FRONTIER_PAPER_DOLLARS = 1000;
@@ -32,16 +37,24 @@ export const FRONTIER_TP_MULT = 10.0;
 export const FRONTIER_SL_MULT = 0.50;
 /** 16:00 ET — no playbook 11:15 force-flat for Frontier. */
 export const FRONTIER_HARD_STOP_MIN = 960;
-export const FRONTIER_V3_VERSION = "touch1_from945_best__runner_sl50_1k";
+export const FRONTIER_V3_VERSION = "put_pts12_touch1_from945__runner_sl50_1k";
 
 export function isFrontierV3Fire({
   direction, levelType, tier, points, etMinute, entryPrice, touchNumber,
 } = {}) {
-  void direction; void levelType; void tier; void points;
+  void levelType; void tier;
+  if (FRONTIER_V3_DIRECTION && direction !== FRONTIER_V3_DIRECTION) return false;
   const minute = Number(etMinute);
   if (!Number.isFinite(minute) || minute < FRONTIER_V3_MIN_MINUTE) return false;
   const entry = Number(entryPrice);
   if (!Number.isFinite(entry) || entry <= FRONTIER_V3_MIN_ENTRY) return false;
+  const pts = Number(points);
+  if (FRONTIER_V3_MIN_POINTS != null && (!Number.isFinite(pts) || pts < FRONTIER_V3_MIN_POINTS)) {
+    return false;
+  }
+  if (FRONTIER_V3_MAX_POINTS != null && (!Number.isFinite(pts) || pts > FRONTIER_V3_MAX_POINTS)) {
+    return false;
+  }
   if (FRONTIER_V3_REQUIRE_FIRST_TOUCH) {
     const touch = Number(touchNumber);
     if (!Number.isFinite(touch) || touch !== 1) return false;
@@ -61,6 +74,86 @@ export function frontierContracts(entryPrice, dollars = FRONTIER_PAPER_DOLLARS) 
   const entry = Number(entryPrice);
   if (!(entry > 0)) return null;
   return Math.max(1, Math.floor(dollars / (entry * 100)));
+}
+
+/** Dollars tied up at entry for one Frontier paper trade (≤ dollars). */
+export function frontierDeployedNotional(entryPrice, dollars = FRONTIER_PAPER_DOLLARS) {
+  const entry = Number(entryPrice);
+  const contracts = frontierContracts(entry, dollars);
+  if (contracts == null) return null;
+  return +(contracts * entry * 100).toFixed(2);
+}
+
+function etMinuteFromFire(f) {
+  if (f?.etMinute != null && Number.isFinite(Number(f.etMinute))) return Number(f.etMinute);
+  if (f?.ts) {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York", hour12: false, hour: "2-digit", minute: "2-digit",
+    }).formatToParts(new Date(f.ts));
+    const m = {};
+    for (const p of parts) m[p.type] = p.value;
+    return Number(m.hour) * 60 + Number(m.minute);
+  }
+  const clock = String(f?.clock || "");
+  const match = clock.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+  if (!match) return null;
+  let h = Number(match[1]) % 12;
+  if (/PM/i.test(match[3])) h += 12;
+  return h * 60 + Number(match[2]);
+}
+
+/**
+ * Build Frontier day book from already-simulated fires (any lane).
+ * Returns selected trades with P&L + deployed notional.
+ */
+export function summarizeFrontierFires(fires, { sessionDate } = {}) {
+  const byKey = new Map();
+  for (const f of fires || []) {
+    if (!f?.trade?.ok) continue;
+    const etMinute = etMinuteFromFire(f);
+    const entryPrice = Number(f.trade.entryPrice);
+    if (!passesFrontierV3({
+      direction: f.direction,
+      levelType: f.levelType,
+      tier: f.tier,
+      points: f.points,
+      etMinute,
+      entryPrice,
+      touchNumber: f.touchNumber,
+    })) continue;
+    const pnl = f.trade.frontierPnl != null
+      ? Number(f.trade.frontierPnl)
+      : frontierPaperPnl(entryPrice, f.trade.frontierExitPrice ?? f.trade.exitPrice);
+    if (pnl == null || Number.isNaN(pnl)) continue;
+    const deployed = frontierDeployedNotional(entryPrice);
+    const date = sessionDate || f.sessionDate || "";
+    const key = [date, etMinute ?? "", f.direction || "", f.levelType || "", f.touchNumber ?? ""].join("|");
+    const points = Number(f.points);
+    const prev = byKey.get(key);
+    // Prefer higher Edge Lens score when the same setup appears in multiple lanes.
+    if (prev && Number(prev.points) >= points) continue;
+    byKey.set(key, {
+      ...f,
+      sessionDate: date,
+      etMinute,
+      points,
+      pnl,
+      deployed: deployed ?? 0,
+      contracts: frontierContracts(entryPrice),
+    });
+  }
+  const selected = selectFrontierBestPerDay([...byKey.values()]);
+  const pnl = +selected.reduce((s, t) => s + (t.pnl || 0), 0).toFixed(2);
+  const deployed = +selected.reduce((s, t) => s + (t.deployed || 0), 0).toFixed(2);
+  return {
+    trades: selected.length,
+    wins: selected.filter((t) => t.pnl > 0).length,
+    pnl,
+    deployed,
+    tradePnls: selected.map((t) => t.pnl),
+    tradeDeployeds: selected.map((t) => t.deployed),
+    selected,
+  };
 }
 
 export function netFlowEarlyImbalance(flowData, buckets = FRONTIER_V3_FLOW_BUCKETS) {
@@ -131,19 +224,24 @@ export function passesFrontierV3({
   return true;
 }
 
+/** Select up to FRONTIER_V3_MAX_PER_DAY fires/day by points (then earlier minute). */
 export function selectFrontierBestPerDay(candidates) {
-  if (!FRONTIER_V3_ONE_PER_DAY) return candidates;
+  const max = Math.max(1, Number(FRONTIER_V3_MAX_PER_DAY) || 1);
   const byDay = new Map();
   for (const c of candidates) {
     const date = c.sessionDate || c.session_date || c.date;
-    const points = Number(c.points);
-    const minute = Number(c.etMinute ?? c.et_minute);
-    const prev = byDay.get(date);
-    if (!prev
-      || points > prev._points
-      || (points === prev._points && minute < prev._minute)) {
-      byDay.set(date, { ...c, _points: points, _minute: minute });
-    }
+    if (!byDay.has(date)) byDay.set(date, []);
+    byDay.get(date).push(c);
   }
-  return [...byDay.values()].map(({ _points, _minute, ...rest }) => rest);
+  const out = [];
+  for (const [, list] of byDay) {
+    list.sort((a, b) => {
+      const pa = Number(a.points);
+      const pb = Number(b.points);
+      if (pb !== pa) return pb - pa;
+      return Number(a.etMinute ?? a.et_minute) - Number(b.etMinute ?? b.et_minute);
+    });
+    out.push(...list.slice(0, max));
+  }
+  return out;
 }

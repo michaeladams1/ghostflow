@@ -51,6 +51,9 @@ assert.deepEqual(day.shenTradePnls, [80, 75]);
 // Best points first-touch uses stored frontier_pnl ($800), not playbook $100.
 assert.deepEqual(day.frontierTradePnls, [800]);
 assert.equal(day.frontierPnl, 800);
+// Frontier deployed: floor(1000/(1.05*100))=9 contracts × $1.05 × 100 = $945
+assert.equal(day.frontierDeployed, 945);
+assert.ok(day.deployed > 0);
 
 // Fallback path: no frontier_pnl column → $1k paper on playbook exit.
 const fallback = calendarDaysFromRows([
@@ -62,9 +65,11 @@ const fallback = calendarDaysFromRows([
   },
 ])[0];
 assert.equal(fallback.frontierPnl, frontierPaperPnl(1.00, 1.20));
+assert.equal(fallback.frontierDeployed, 1000);
 
 const totals = summarizeMonth({ symbol: "SPY", year: 2026, month: 8, days: [day] }).totals;
 assert.equal(totals.frontierTrades, 1);
 assert.equal(totals.frontierPnl, 800);
+assert.equal(totals.frontierDeployed, 945);
 
 console.log("0DTE saved calendar tests passed");

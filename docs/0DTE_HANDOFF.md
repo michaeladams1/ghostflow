@@ -344,16 +344,26 @@ the experiment measures entry quality without inventing a dollar mapping for the
 "standard" versus "full" language. Results have their own fourth calendar box and are
 excluded from official and existing research totals.
 
-**Frontier v6 is the live paper lane** ($1,000 max per trade, Frontier-only exits).
-Eligibility: **first touch**, `et_minute >= 585`, `entry_price > 0` (A+/CALL@PDL
-allowed). Best Edge Lens score/day after setup dedupe. **Exits abandon the playbook
-+20%/−12.5% bracket**: runner target / **−50% stop**, hold toward the close (no
-11:15 hard stop). Official / research / Shen still use playbook brackets.
-Frontier P&L is stored in `frontier_*` columns at **$1,000 paper**. Evidence:
-`server/frontierExitSearch.js` champion `runner_sl50_nohard` → holdout avg day
-~**$241** @ $1k. **A new 24-month backtest is required** so each fire is re-walked
-with Frontier exits; until that finishes the calendar may fall back to $1k on
-playbook exit prices.
+**Frontier v7 is the live paper lane** ($1,000 max **per trade**; concurrent
+capital above $1k is allowed, but selection currently keeps **1 fire/day**).
+Eligibility: **PUT only**, Edge Lens **points ≥ 12**, **first touch**,
+`et_minute >= 585`, `entry_price > 0`. Best score/day after setup dedupe.
+**Exits abandon the playbook +20%/−12.5% bracket**: runner target / **−50% stop**,
+hold toward the close (no 11:15 hard stop). Official / research / Shen still use
+playbook brackets. Frontier P&L is stored in `frontier_*` columns at **$1,000
+paper**. Local evidence (`server/frontierPutValidate.js` `top1_PUT_pts12`):
+holdout avg day ~**$576** (25 days) · full-period train ~**$173** (56 days) —
+holdout clears the $250/day goal; train does not yet. Multi-trade and CALL-
+inclusive blends missed the target on full-period samples
+(`frontierBlendSearch.js`, `frontierBlendExpand.js`). **A new 24-month backtest
+is required** after v7 deploy; the in-flight v6 job remains useful as a runner-
+exit baseline but will not match v7 PUT/pts filters. Until a v7 re-sim finishes,
+the calendar may fall back to $1k on playbook exit prices.
+
+**Calendar capital + P&L chart:** each lane day includes `*Deployed` notionals
+(contracts × entry × 100; Frontier uses $1k paper sizing). Month/Year views
+draw a cumulative P&L line with deployed-capital bars above the grid; the
+daily debrief shows Frontier deployed capital for that session.
 
 ---
 
