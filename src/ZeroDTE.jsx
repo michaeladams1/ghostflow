@@ -11,8 +11,8 @@ import {
   Zap, Loader2, AlertTriangle, ArrowUp, ArrowDown, Target, ShieldAlert, Clock, Hash, CalendarDays, FlaskConical, BookOpenCheck, Sparkles,
 } from "lucide-react";
 import {
-  ResponsiveContainer, ComposedChart, Line, XAxis, YAxis, Tooltip,
-  CartesianGrid, ReferenceDot, ReferenceLine, ReferenceArea,
+  ResponsiveContainer, ComposedChart, Line, Bar, XAxis, YAxis, Tooltip,
+  CartesianGrid, ReferenceDot, ReferenceLine, ReferenceArea, Legend,
 } from "recharts";
 
 const card = "bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800";
@@ -354,6 +354,43 @@ export default function ZeroDTE() {
               sub={data.story.excludedCount ? `playbook hours only · ${data.story.excludedCount} trade${data.story.excludedCount === 1 ? "" : "s"} outside hours excluded (${money(data.story.excludedPnl)})` : "playbook hours (9:45–11:15 ET) only"} />
           </div>
 
+          {data.frontier && (
+            <div className={`${card} rounded-xl p-4 mb-5 border-teal-200 dark:border-teal-900`}>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <div className={`${heading} text-teal-700 dark:text-teal-300`}>Frontier v7 · this session</div>
+                  <div className="text-sm text-zinc-800 dark:text-zinc-200 mt-1">
+                    {data.frontier.trades || 0} selected trade{(data.frontier.trades || 0) === 1 ? "" : "s"}
+                    {data.frontier.trades
+                      ? ` · P&L ${money(data.frontier.pnl)} · capital deployed ${wholeMoney(data.frontier.deployed)}`
+                      : " · no PUT pts≥12 first-touch fire today"}
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="text-2xl font-bold text-teal-600 dark:text-teal-400">
+                    {wholeMoney(data.frontier.deployed || 0)}
+                  </div>
+                  <div className={`text-[11px] ${faint}`}>deployed at entry (≤$1k / trade)</div>
+                </div>
+              </div>
+              {(data.frontier.selected || []).length > 0 && (
+                <div className="mt-3 grid sm:grid-cols-2 gap-2">
+                  {data.frontier.selected.map((t, i) => (
+                    <div key={i} className="rounded-lg bg-teal-50/80 dark:bg-teal-950/30 px-3 py-2 text-xs">
+                      <div className="font-semibold text-zinc-800 dark:text-zinc-100">
+                        {t.direction} · {t.clock || t.trade?.entryClock || "—"} · {Number(t.points)} pts
+                      </div>
+                      <div className={faint}>
+                        {t.contracts} ct @ {money(t.trade?.entryPrice)} = {wholeMoney(t.deployed)} deployed
+                        {" · "}P&L {money(t.pnl)}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* ---- The trades, front and center ---- */}
           {trades.length > 0 && (
             <div className="space-y-4 mb-5">
@@ -518,18 +555,44 @@ function PerfBar({ label, value, maxAbs, tone }) {
 }
 
 const CALENDAR_LANES = {
-  official: { label: "Playbook hours", pnlKey: "pnl", tradesKey: "tradePnls" },
-  outside: { label: "Outside hours", pnlKey: "excludedPnl", tradesKey: "excludedTradePnls" },
-  research: { label: "Research lanes", pnlKey: "experimentalPnl", tradesKey: "experimentalTradePnls" },
-  shen: { label: "Shen conviction", pnlKey: "shenPnl", tradesKey: "shenTradePnls" },
-  frontier: { label: "Frontier v7", pnlKey: "frontierPnl", tradesKey: "frontierTradePnls" },
+  official: {
+    label: "Playbook hours", pnlKey: "pnl", tradesKey: "tradePnls",
+    deployedKey: "deployed", tradeDeployedsKey: "tradeDeployeds",
+  },
+  outside: {
+    label: "Outside hours", pnlKey: "excludedPnl", tradesKey: "excludedTradePnls",
+    deployedKey: "excludedDeployed", tradeDeployedsKey: "excludedTradeDeployeds",
+  },
+  research: {
+    label: "Research lanes", pnlKey: "experimentalPnl", tradesKey: "experimentalTradePnls",
+    deployedKey: "experimentalDeployed", tradeDeployedsKey: "experimentalTradeDeployeds",
+  },
+  shen: {
+    label: "Shen conviction", pnlKey: "shenPnl", tradesKey: "shenTradePnls",
+    deployedKey: "shenDeployed", tradeDeployedsKey: "shenTradeDeployeds",
+  },
+  frontier: {
+    label: "Frontier v7", pnlKey: "frontierPnl", tradesKey: "frontierTradePnls",
+    deployedKey: "frontierDeployed", tradeDeployedsKey: "frontierTradeDeployeds",
+  },
 };
 
 function laneDay(day, lane) {
   if (!day) return null;
   const config = CALENDAR_LANES[lane];
   const tradePnls = day[config.tradesKey] || [];
-  return { ...day, pnl: Number(day[config.pnlKey] || 0), trades: tradePnls.length, tradePnls };
+  const tradeDeployeds = day[config.tradeDeployedsKey] || [];
+  const deployed = Number(day[config.deployedKey] != null
+    ? day[config.deployedKey]
+    : tradeDeployeds.reduce((s, d) => s + Number(d || 0), 0));
+  return {
+    ...day,
+    pnl: Number(day[config.pnlKey] || 0),
+    trades: tradePnls.length,
+    tradePnls,
+    tradeDeployeds,
+    deployed,
+  };
 }
 
 function laneTotals(days, lane) {
@@ -539,6 +602,10 @@ function laneTotals(days, lane) {
   const dayPnls = tradedDays.map((day) => day.pnl);
   const wins = tradePnls.filter((pnl) => pnl > 0).length;
   const totalTrades = tradePnls.length;
+  const deployed = +tradedDays.reduce((sum, day) => sum + Number(day.deployed || 0), 0).toFixed(2);
+  const peakDayDeployed = tradedDays.length
+    ? Math.max(...tradedDays.map((day) => Number(day.deployed || 0)))
+    : null;
   return {
     pnl: +laneDays.reduce((sum, day) => sum + day.pnl, 0).toFixed(2),
     totalTrades,
@@ -549,7 +616,103 @@ function laneTotals(days, lane) {
     worstDay: dayPnls.length ? Math.min(...dayPnls) : null,
     bestTrade: tradePnls.length ? Math.max(...tradePnls) : null,
     worstTrade: tradePnls.length ? Math.min(...tradePnls) : null,
+    deployed,
+    peakDayDeployed,
   };
+}
+
+function buildLaneChartSeries(days, lane, { mode = "month" } = {}) {
+  const laneDays = (days || [])
+    .map((day) => laneDay(day, lane))
+    .filter((day) => day && (day.trades > 0 || Number(day.pnl) !== 0 || Number(day.deployed) > 0))
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  let cumulative = 0;
+  if (mode === "year") {
+    const byMonth = new Map();
+    for (const day of laneDays) {
+      const month = Number(String(day.date).slice(5, 7));
+      if (!byMonth.has(month)) byMonth.set(month, { pnl: 0, deployed: 0, trades: 0 });
+      const row = byMonth.get(month);
+      row.pnl += Number(day.pnl || 0);
+      row.deployed += Number(day.deployed || 0);
+      row.trades += day.trades || 0;
+    }
+    return Array.from({ length: 12 }, (_, i) => i + 1).map((month) => {
+      const row = byMonth.get(month) || { pnl: 0, deployed: 0, trades: 0 };
+      cumulative += row.pnl;
+      return {
+        label: MONTH_NAMES[month - 1].slice(0, 3),
+        date: month,
+        dayPnl: +row.pnl.toFixed(2),
+        cumulative: +cumulative.toFixed(2),
+        deployed: +row.deployed.toFixed(2),
+        trades: row.trades,
+      };
+    });
+  }
+  return laneDays.map((day) => {
+    cumulative += Number(day.pnl || 0);
+    return {
+      label: String(day.date).slice(8, 10),
+      date: day.date,
+      dayPnl: Number(day.pnl || 0),
+      cumulative: +cumulative.toFixed(2),
+      deployed: Number(day.deployed || 0),
+      trades: day.trades || 0,
+    };
+  });
+}
+
+function CalendarPerformanceChart({ series, laneLabel, timeframe }) {
+  if (!series?.length) return null;
+  const hasActivity = series.some((p) => p.trades > 0 || p.dayPnl !== 0 || p.deployed > 0);
+  if (!hasActivity) {
+    return (
+      <div className={`${card} rounded-xl px-4 py-6 mb-4 text-center text-sm ${faint}`}>
+        No {laneLabel} activity in this {timeframe === "Year" ? "year" : "month"} yet.
+      </div>
+    );
+  }
+  return (
+    <div className={`${card} rounded-xl p-4 mb-4`}>
+      <div className="flex flex-wrap items-end justify-between gap-2 mb-2">
+        <div>
+          <div className={heading}>P&L + deployed capital</div>
+          <div className="text-sm text-zinc-800 dark:text-zinc-200 mt-0.5">
+            {laneLabel} · {timeframe === "Year" ? "monthly" : "daily"} cumulative P&L with capital outlay
+          </div>
+        </div>
+        <div className={`text-[11px] ${faint}`}>Left: cumulative P&L · Right: capital deployed</div>
+      </div>
+      <ResponsiveContainer width="100%" height={220}>
+        <ComposedChart data={series} margin={{ top: 8, right: 12, bottom: 0, left: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#3f3f46" opacity={0.25} />
+          <XAxis dataKey="label" tick={{ fontSize: 10 }} stroke="#71717a" />
+          <YAxis yAxisId="pnl" tick={{ fontSize: 10 }} stroke="#71717a" width={52}
+            tickFormatter={(v) => wholeMoney(v)} />
+          <YAxis yAxisId="cap" orientation="right" tick={{ fontSize: 10 }} stroke="#71717a" width={52}
+            tickFormatter={(v) => wholeMoney(v)} />
+          <Tooltip
+            contentStyle={{ fontSize: 12, borderRadius: 8 }}
+            formatter={(value, name) => [wholeMoney(Number(value) || 0), name]}
+            labelFormatter={(_, payload) => {
+              const row = payload?.[0]?.payload;
+              if (!row) return "";
+              return timeframe === "Year"
+                ? `${row.label} · ${row.trades} trade${row.trades === 1 ? "" : "s"}`
+                : `${row.date} · ${row.trades} trade${row.trades === 1 ? "" : "s"}`;
+            }}
+          />
+          <Legend wrapperStyle={{ fontSize: 11 }} />
+          <Bar yAxisId="cap" dataKey="deployed" name="Deployed" fill="#2dd4bf" fillOpacity={0.35} maxBarSize={28} />
+          <Line yAxisId="pnl" type="monotone" dataKey="cumulative" name="Cumulative P&L"
+            stroke="#10b981" strokeWidth={2} dot={false} />
+          <Line yAxisId="pnl" type="monotone" dataKey="dayPnl" name={timeframe === "Year" ? "Month P&L" : "Day P&L"}
+            stroke="#6366f1" strokeWidth={1.5} strokeDasharray="4 3" dot={false} />
+        </ComposedChart>
+      </ResponsiveContainer>
+    </div>
+  );
 }
 
 function summarizeYearTotals(months) {
@@ -574,18 +737,23 @@ function summarizeYearTotals(months) {
     excludedTrades,
     excludedWins,
     excludedWinRate: excludedTrades ? +((excludedWins / excludedTrades) * 100).toFixed(1) : null,
+    deployed: sum("deployed"),
+    excludedDeployed: sum("excludedDeployed"),
     experimentalPnl: sum("experimentalPnl"),
     experimentalTrades,
     experimentalWins,
     experimentalWinRate: experimentalTrades ? +((experimentalWins / experimentalTrades) * 100).toFixed(1) : null,
+    experimentalDeployed: sum("experimentalDeployed"),
     shenPnl: sum("shenPnl"),
     shenTrades,
     shenWins,
     shenWinRate: shenTrades ? +((shenWins / shenTrades) * 100).toFixed(1) : null,
+    shenDeployed: sum("shenDeployed"),
     frontierPnl: sum("frontierPnl"),
     frontierTrades,
     frontierWins,
     frontierWinRate: frontierTrades ? +((frontierWins / frontierTrades) * 100).toFixed(1) : null,
+    frontierDeployed: sum("frontierDeployed"),
     nearMissReasons: {},
   };
 }
@@ -616,6 +784,9 @@ function DayBox({ dayNum, data, ghost, lane, onOpen }) {
             {data.pnl > 0 ? "+" : ""}{money(data.pnl)}
           </div>
           <div className={`text-[11px] ${faint}`}>{data.trades} trade{data.trades === 1 ? "" : "s"}</div>
+          {Number(data.deployed) > 0 && (
+            <div className={`text-[10px] ${faint}`}>cap {wholeMoney(data.deployed)}</div>
+          )}
           <div className={`text-[9px] uppercase tracking-wide ${faint}`}>{CALENDAR_LANES[lane].label}</div>
         </>
       )}
@@ -647,6 +818,9 @@ function MonthBox({ month, totals, lane, onOpen }) {
             {pnl > 0 ? "+" : ""}{money(pnl)}
           </div>
           <div className={`text-[11px] mt-0.5 ${faint}`}>{trades} trade{trades === 1 ? "" : "s"}</div>
+          {Number(totals?.[config.deployedKey]) > 0 && (
+            <div className={`text-[10px] ${faint}`}>cap {wholeMoney(totals[config.deployedKey])}</div>
+          )}
           <div className={`text-[9px] uppercase tracking-wide ${faint}`}>{config.label}</div>
         </>
       ) : (
@@ -806,6 +980,9 @@ function CalendarView({ onBack, onOpenDay, initialReturn }) {
   const sessionsCovered = timeframe === "Year"
     ? yearMonths.find((m) => m.sessionsCovered)?.sessionsCovered
     : data?.sessionsCovered;
+  const chartSeries = timeframe === "Year"
+    ? buildLaneChartSeries(yearLaneDays, calendarLane, { mode: "year" })
+    : buildLaneChartSeries(data?.days || [], calendarLane, { mode: "month" });
 
   return (
     <div>
@@ -932,6 +1109,11 @@ function CalendarView({ onBack, onOpenDay, initialReturn }) {
       {!loading && (timeframe === "Year" ? yearMonths.length > 0 : data) && (
         <div className="grid lg:grid-cols-[1fr_300px] gap-5">
           <div>
+            <CalendarPerformanceChart
+              series={chartSeries}
+              laneLabel={selectedLane.label}
+              timeframe={timeframe}
+            />
             {timeframe === "Year" ? (
               <>
                 <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 mb-1">
@@ -998,6 +1180,14 @@ function CalendarView({ onBack, onOpenDay, initialReturn }) {
               <div className={heading}>Total trades</div>
               <div className="text-3xl font-bold text-indigo-500 mt-1">{t.totalTrades}</div>
               <div className={`text-xs mt-0.5 ${faint}`}>{timeframe === "Year" ? ym.year : MONTH_NAMES[ym.month - 1]} · {selectedLane.label}</div>
+            </div>
+            <div className={`${card} rounded-xl p-4 mb-3 text-center`}>
+              <div className={heading}>Capital deployed</div>
+              <div className="text-3xl font-bold text-teal-500 mt-1">{t.deployed != null ? wholeMoney(t.deployed) : "—"}</div>
+              <div className={`text-xs mt-0.5 ${faint}`}>
+                sum of entry notionals
+                {t.peakDayDeployed != null ? ` · peak day ${wholeMoney(t.peakDayDeployed)}` : ""}
+              </div>
             </div>
             <div className={`${card} rounded-xl p-4 mb-3`}>
               <div className={`${heading} text-center mb-3`}>Daily performance</div>

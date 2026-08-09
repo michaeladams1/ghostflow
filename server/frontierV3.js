@@ -76,6 +76,86 @@ export function frontierContracts(entryPrice, dollars = FRONTIER_PAPER_DOLLARS) 
   return Math.max(1, Math.floor(dollars / (entry * 100)));
 }
 
+/** Dollars tied up at entry for one Frontier paper trade (≤ dollars). */
+export function frontierDeployedNotional(entryPrice, dollars = FRONTIER_PAPER_DOLLARS) {
+  const entry = Number(entryPrice);
+  const contracts = frontierContracts(entry, dollars);
+  if (contracts == null) return null;
+  return +(contracts * entry * 100).toFixed(2);
+}
+
+function etMinuteFromFire(f) {
+  if (f?.etMinute != null && Number.isFinite(Number(f.etMinute))) return Number(f.etMinute);
+  if (f?.ts) {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York", hour12: false, hour: "2-digit", minute: "2-digit",
+    }).formatToParts(new Date(f.ts));
+    const m = {};
+    for (const p of parts) m[p.type] = p.value;
+    return Number(m.hour) * 60 + Number(m.minute);
+  }
+  const clock = String(f?.clock || "");
+  const match = clock.match(/(\d{1,2}):(\d{2})\s*(AM|PM)/i);
+  if (!match) return null;
+  let h = Number(match[1]) % 12;
+  if (/PM/i.test(match[3])) h += 12;
+  return h * 60 + Number(match[2]);
+}
+
+/**
+ * Build Frontier day book from already-simulated fires (any lane).
+ * Returns selected trades with P&L + deployed notional.
+ */
+export function summarizeFrontierFires(fires, { sessionDate } = {}) {
+  const byKey = new Map();
+  for (const f of fires || []) {
+    if (!f?.trade?.ok) continue;
+    const etMinute = etMinuteFromFire(f);
+    const entryPrice = Number(f.trade.entryPrice);
+    if (!passesFrontierV3({
+      direction: f.direction,
+      levelType: f.levelType,
+      tier: f.tier,
+      points: f.points,
+      etMinute,
+      entryPrice,
+      touchNumber: f.touchNumber,
+    })) continue;
+    const pnl = f.trade.frontierPnl != null
+      ? Number(f.trade.frontierPnl)
+      : frontierPaperPnl(entryPrice, f.trade.frontierExitPrice ?? f.trade.exitPrice);
+    if (pnl == null || Number.isNaN(pnl)) continue;
+    const deployed = frontierDeployedNotional(entryPrice);
+    const date = sessionDate || f.sessionDate || "";
+    const key = [date, etMinute ?? "", f.direction || "", f.levelType || "", f.touchNumber ?? ""].join("|");
+    const points = Number(f.points);
+    const prev = byKey.get(key);
+    // Prefer higher Edge Lens score when the same setup appears in multiple lanes.
+    if (prev && Number(prev.points) >= points) continue;
+    byKey.set(key, {
+      ...f,
+      sessionDate: date,
+      etMinute,
+      points,
+      pnl,
+      deployed: deployed ?? 0,
+      contracts: frontierContracts(entryPrice),
+    });
+  }
+  const selected = selectFrontierBestPerDay([...byKey.values()]);
+  const pnl = +selected.reduce((s, t) => s + (t.pnl || 0), 0).toFixed(2);
+  const deployed = +selected.reduce((s, t) => s + (t.deployed || 0), 0).toFixed(2);
+  return {
+    trades: selected.length,
+    wins: selected.filter((t) => t.pnl > 0).length,
+    pnl,
+    deployed,
+    tradePnls: selected.map((t) => t.pnl),
+    tradeDeployeds: selected.map((t) => t.deployed),
+    selected,
+  };
+}
+
 export function netFlowEarlyImbalance(flowData, buckets = FRONTIER_V3_FLOW_BUCKETS) {
   const entries = Object.entries(flowData || {}).sort((a, b) => Number(a[0]) - Number(b[0])).slice(0, buckets);
   let call = 0, put = 0;

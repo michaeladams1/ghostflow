@@ -6,7 +6,8 @@ import {
 import {
   FRONTIER_PAPER_DOLLARS, FRONTIER_SL_MULT, FRONTIER_TP_MULT,
   FRONTIER_V3_DIRECTION, FRONTIER_V3_MIN_POINTS,
-  frontierPaperPnl, frontierV3FlowVeto, passesFrontierV3, selectFrontierBestPerDay,
+  frontierDeployedNotional, frontierPaperPnl, frontierV3FlowVeto,
+  passesFrontierV3, selectFrontierBestPerDay, summarizeFrontierFires,
 } from "./frontierV3.js";
 import { walkBracketBars } from "./zeroDTEOptionSim.js";
 
@@ -58,8 +59,24 @@ assert.equal(FRONTIER_PAPER_DOLLARS, 1000);
 assert.equal(FRONTIER_TP_MULT, 10);
 assert.equal(FRONTIER_SL_MULT, 0.5);
 assert.equal(frontierPaperPnl(1.00, 1.20, 1000), 200);
+assert.equal(frontierDeployedNotional(1.00), 1000);
+assert.equal(frontierDeployedNotional(1.05), 945);
 assert.equal(frontierV3FlowVeto("CALL", -0.50), false);
 assert.equal(passesFrontierV3({ ...frontierBase, flowImbalance: 0.90 }), true);
+
+const frontierDay = summarizeFrontierFires([
+  {
+    direction: "PUT", levelType: "WHOLE_DOLLAR", points: 13, touchNumber: 1, clock: "10:10 AM ET",
+    trade: { ok: true, entryPrice: 1.00, exitPrice: 1.20, frontierPnl: 400 },
+  },
+  {
+    direction: "CALL", levelType: "PDL", points: 14, touchNumber: 1, clock: "10:20 AM ET",
+    trade: { ok: true, entryPrice: 1.00, exitPrice: 1.20, frontierPnl: 999 },
+  },
+], { sessionDate: "2026-08-04" });
+assert.equal(frontierDay.trades, 1);
+assert.equal(frontierDay.pnl, 400);
+assert.equal(frontierDay.deployed, 1000);
 
 const best = selectFrontierBestPerDay([
   { sessionDate: "2026-08-04", points: 11, etMinute: 600, pnl: 10 },

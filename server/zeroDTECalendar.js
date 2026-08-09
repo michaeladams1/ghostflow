@@ -7,7 +7,9 @@
 import {
   analyzeZeroDTESession, frontierDedupeKey, frontierLanePriority, isFrontierFire,
 } from "./zeroDTE.js";
-import { frontierPaperPnl, selectFrontierBestPerDay } from "./frontierV3.js";
+import {
+  frontierDeployedNotional, frontierPaperPnl, selectFrontierBestPerDay,
+} from "./frontierV3.js";
 import { simulateAllFires } from "./zeroDTEOptionSim.js";
 import { buildSessionStory } from "./zeroDTEStory.js";
 import { saveSessionTrades } from "./zeroDTEStore.js";
@@ -28,6 +30,19 @@ function pnlOf(f) {
   const dollars = sizeToDollars(f.size);
   const contracts = Math.max(1, Math.floor(dollars / (f.trade.entryPrice * 100)));
   return +(contracts * (f.trade.exitPrice - f.trade.entryPrice) * 100).toFixed(2);
+}
+function deployedOf(f) {
+  if (!f?.trade?.ok) return 0;
+  const contracts = contractsFor(f);
+  return +(contracts * f.trade.entryPrice * 100).toFixed(2);
+}
+function frontierPnlOf(f) {
+  return f.trade?.frontierPnl ?? frontierPaperPnl(
+    f.trade?.entryPrice, f.trade?.frontierExitPrice ?? f.trade?.exitPrice,
+  ) ?? 0;
+}
+function frontierDeployedOf(f) {
+  return frontierDeployedNotional(f.trade?.entryPrice) ?? 0;
 }
 
 async function simulateDay(symbol, date) {
@@ -94,27 +109,29 @@ async function simulateDay(symbol, date) {
         wins: story.winCount,
         signals: fires.length,
         tradePnls: counted.map(pnlOf),
+        tradeDeployeds: counted.map(deployedOf),
+        deployed: +counted.reduce((sum, f) => sum + deployedOf(f), 0).toFixed(2),
         excludedTradePnls: excluded.map(pnlOf),
+        excludedTradeDeployeds: excluded.map(deployedOf),
+        excludedDeployed: +excluded.reduce((sum, f) => sum + deployedOf(f), 0).toFixed(2),
         experimentalPnl: +experimental.reduce((sum, f) => sum + pnlOf(f), 0).toFixed(2),
         experimentalTrades: experimental.length,
         experimentalWins: experimental.filter((f) => f.trade.pctReturn > 0).length,
         experimentalTradePnls: experimental.map(pnlOf),
+        experimentalTradeDeployeds: experimental.map(deployedOf),
+        experimentalDeployed: +experimental.reduce((sum, f) => sum + deployedOf(f), 0).toFixed(2),
         shenPnl: +shen.reduce((sum, f) => sum + pnlOf(f), 0).toFixed(2),
         shenTrades: shen.length,
         shenWins: shen.filter((f) => f.trade.pctReturn > 0).length,
         shenTradePnls: shen.map(pnlOf),
-        frontierPnl: +frontier.reduce((sum, f) => {
-          const p = f.trade?.frontierPnl ?? frontierPaperPnl(f.trade?.entryPrice, f.trade?.frontierExitPrice ?? f.trade?.exitPrice);
-          return sum + (p ?? 0);
-        }, 0).toFixed(2),
+        shenTradeDeployeds: shen.map(deployedOf),
+        shenDeployed: +shen.reduce((sum, f) => sum + deployedOf(f), 0).toFixed(2),
+        frontierPnl: +frontier.reduce((sum, f) => sum + frontierPnlOf(f), 0).toFixed(2),
         frontierTrades: frontier.length,
-        frontierWins: frontier.filter((f) => {
-          const p = f.trade?.frontierPnl ?? frontierPaperPnl(f.trade?.entryPrice, f.trade?.frontierExitPrice ?? f.trade?.exitPrice);
-          return p != null && p > 0;
-        }).length,
-        frontierTradePnls: frontier.map((f) => (
-          f.trade?.frontierPnl ?? frontierPaperPnl(f.trade?.entryPrice, f.trade?.frontierExitPrice ?? f.trade?.exitPrice) ?? 0
-        )),
+        frontierWins: frontier.filter((f) => frontierPnlOf(f) > 0).length,
+        frontierTradePnls: frontier.map(frontierPnlOf),
+        frontierTradeDeployeds: frontier.map(frontierDeployedOf),
+        frontierDeployed: +frontier.reduce((sum, f) => sum + frontierDeployedOf(f), 0).toFixed(2),
         nearMissReasons: (s.nearMisses || []).flatMap((x) => x.reasons),
       };
 
@@ -165,6 +182,7 @@ export function summarizeMonth({ symbol = "SPY", year, month, days, saved = fals
   const frontierTradePnls = days.flatMap((x) => x.frontierTradePnls || []);
   const frontierTrades = frontierTradePnls.length;
   const frontierWins = frontierTradePnls.filter((p) => p > 0).length;
+  const sumDeployed = (key) => +days.reduce((s, x) => s + Number(x?.[key] || 0), 0).toFixed(2);
   const nearMissReasons = {};
   for (const reason of days.flatMap((x) => x.nearMissReasons || [])) nearMissReasons[reason] = (nearMissReasons[reason] || 0) + 1;
 
@@ -182,21 +200,26 @@ export function summarizeMonth({ symbol = "SPY", year, month, days, saved = fals
       bestTrade: allTradePnls.length ? Math.max(...allTradePnls) : null,
       worstTrade: allTradePnls.length ? Math.min(...allTradePnls) : null,
       tradingDays: days.filter((x) => !x.noData).length,
+      deployed: sumDeployed("deployed"),
+      excludedDeployed: sumDeployed("excludedDeployed"),
       experimentalPnl: +experimentalTradePnls.reduce((sum, x) => sum + x, 0).toFixed(2),
       experimentalTrades,
       experimentalWins,
       experimentalLosses: experimentalTrades - experimentalWins,
       experimentalWinRate: experimentalTrades ? +((experimentalWins / experimentalTrades) * 100).toFixed(1) : null,
+      experimentalDeployed: sumDeployed("experimentalDeployed"),
       shenPnl: +shenTradePnls.reduce((sum, x) => sum + x, 0).toFixed(2),
       shenTrades,
       shenWins,
       shenLosses: shenTrades - shenWins,
       shenWinRate: shenTrades ? +((shenWins / shenTrades) * 100).toFixed(1) : null,
+      shenDeployed: sumDeployed("shenDeployed"),
       frontierPnl: +frontierTradePnls.reduce((sum, x) => sum + x, 0).toFixed(2),
       frontierTrades,
       frontierWins,
       frontierLosses: frontierTrades - frontierWins,
       frontierWinRate: frontierTrades ? +((frontierWins / frontierTrades) * 100).toFixed(1) : null,
+      frontierDeployed: sumDeployed("frontierDeployed"),
       nearMissReasons,
     },
   };

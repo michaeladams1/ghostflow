@@ -360,6 +360,11 @@ is required** after v7 deploy; the in-flight v6 job remains useful as a runner-
 exit baseline but will not match v7 PUT/pts filters. Until a v7 re-sim finishes,
 the calendar may fall back to $1k on playbook exit prices.
 
+**Calendar capital + P&L chart:** each lane day includes `*Deployed` notionals
+(contracts × entry × 100; Frontier uses $1k paper sizing). Month/Year views
+draw a cumulative P&L line with deployed-capital bars above the grid; the
+daily debrief shows Frontier deployed capital for that session.
+
 ---
 
 ## 6. Bugs already found and fixed — do not reintroduce
