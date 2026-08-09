@@ -12,6 +12,10 @@
 // copied faithfully from the v4 script the user provided.
 
 import { fetchAlpacaBars } from "./alpacaClient.js";
+import {
+  FRONTIER_V3_MIN_ENTRY, FRONTIER_V3_MIN_MINUTE, FRONTIER_V3_MAX_POINTS, FRONTIER_V3_MIN_POINTS,
+  isFrontierV3Fire,
+} from "./frontierV3.js";
 
 // RSI thresholds: 73 puts / 29 calls — matching the DEPLOYED Pine script's
 // defaults (i_rsi_put=73, i_rsi_call=29). The v4 guide text says "73 / 26";
@@ -64,30 +68,16 @@ export function classifyShenConviction({ minutes, levelType, touchNumber, exhaus
   return { checks, convictionCount, grade: convictionCount === 3 ? "FULL" : "STANDARD" };
 }
 
-// FRONTIER MODEL v2 (Option B) — paper-only sparse reference filter across
-// ALL 24-month segments (playbook, outside, research, Shen). Does not invent
-// signals; keeps a quality subset for comparison. Official P&L is unchanged.
-// Rules: drop CALL@PDL, drop A+/Extended A+, score 12–14, from 10:00 ET
-// (no 10:15 hard stop — that starved months), premium ≥ $0.50.
-// Frontier v3 (wide-net + QuantData day gate toward ~75% day coverage) is a
-// separate research track — see server/frontierV3Research.js.
-export const FRONTIER_MIN_MINUTE = 600; // 10:00 ET
-export const FRONTIER_MIN_POINTS = 12;
-export const FRONTIER_MAX_POINTS = 14;
-export const FRONTIER_MIN_ENTRY = 0.5;
+// FRONTIER MODEL — paper-only selection across ALL segments. Live rules are
+// Frontier v3 (soft score 11–15 + QuantData early-flow veto). See frontierV3.js.
+// Search/promotion evidence: server/frontierV3Search.js.
+export const FRONTIER_MIN_MINUTE = FRONTIER_V3_MIN_MINUTE;
+export const FRONTIER_MIN_POINTS = FRONTIER_V3_MIN_POINTS;
+export const FRONTIER_MAX_POINTS = FRONTIER_V3_MAX_POINTS;
+export const FRONTIER_MIN_ENTRY = FRONTIER_V3_MIN_ENTRY;
 
-export function isFrontierFire({
-  direction, levelType, tier, points, etMinute, entryPrice,
-} = {}) {
-  if (direction === "CALL" && levelType === "PDL") return false;
-  if (tier === "A+" || tier === "Extended A+") return false;
-  const pts = Number(points);
-  if (!Number.isFinite(pts) || pts < FRONTIER_MIN_POINTS || pts > FRONTIER_MAX_POINTS) return false;
-  const minute = Number(etMinute);
-  if (!Number.isFinite(minute) || minute < FRONTIER_MIN_MINUTE) return false;
-  const entry = Number(entryPrice);
-  if (!Number.isFinite(entry) || entry < FRONTIER_MIN_ENTRY) return false;
-  return true;
+export function isFrontierFire(args = {}) {
+  return isFrontierV3Fire(args);
 }
 
 // Backward-compatible alias used by earlier Frontier v0 call sites/tests.

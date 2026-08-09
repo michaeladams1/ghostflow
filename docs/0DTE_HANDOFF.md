@@ -344,19 +344,17 @@ the experiment measures entry quality without inventing a dollar mapping for the
 "standard" versus "full" language. Results have their own fourth calendar box and are
 excluded from official and existing research totals.
 
-**Frontier v2 (Option B) is a sparse paper-only quality reference across ALL segments**
-(playbook, outside, research, Shen). It does **not** create new signals.
-`isFrontierFire()` keeps a simulated trade when: not CALL@PDL, not A+/Extended A+,
-points in 12–14, `et_minute >= 600` (from 10:00 ET; the old 10:15 hard stop was removed
-because it starved months), and `entry_price >= 0.50`. Same-setup dedupe across lanes
-(priority playbook > research > outside > Shen). Calendar derives it at read time from
-`zerodte_trades` (no resim). ~168 trades / +$1.8k on `89d991cddb31` — selective, not
-high-frequency.
-
-**Frontier v3 research** targets ~75% of sessions traded via a wide net + QuantData day
-gate (not by cherry-picking Shen greens). Harness: `node --env-file=.env server/frontierV3Research.js`.
-Uses Railway/`QUANTDATA_API_KEY`. Does not change the live Frontier box until a rule set
-clears holdout. Official / outside / research / Shen boxes are unchanged.
+**Frontier v3 is the live paper lane** (promoted after beating v2 on 2026 holdout).
+`passesFrontierV3()` / `isFrontierFire()` keep a simulated trade when: not CALL@PDL,
+not A+/Extended A+, points in **11–15**, `et_minute >= 600`, `entry_price >= 0.50`,
+and QuantData early net-flow (first ~30 buckets) does **not** oppose the trade direction
+by more than 0.15. Missing QD data does not veto. Same-setup dedupe across lanes
+(priority playbook > research > outside > Shen). Calendar applies the flow veto at read
+time via cached QuantData fetches. Evidence search: `node server/frontierV3Search.js`
+(champion `v3_soft_score_11_15_from10__veto_flow_oppose_first30`: holdout +$1634 vs v2
++$991; full +$2362 vs +$1776). ~75% day coverage is still an open research goal — wider
+nets without a stronger veto remain negative EV. Official / outside / research / Shen
+boxes are unchanged.
 
 ---
 

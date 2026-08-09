@@ -9,8 +9,11 @@
 import { pool, ensureSchema } from "./db.js";
 import { buildInfo } from "./buildInfo.js";
 import {
-  frontierDedupeKey, frontierLanePriority, isFrontierFire,
+  frontierDedupeKey, frontierLanePriority,
 } from "./zeroDTE.js";
+import {
+  loadFrontierV3FlowByDate, passesFrontierV3,
+} from "./frontierV3.js";
 
 const num = (v) => (v == null || Number.isNaN(Number(v)) ? null : Number(v));
 
@@ -129,10 +132,15 @@ export async function loadSavedCalendarDays({ symbol = "SPY", year, month }) {
      ORDER BY session_date, et_minute`,
     [symbol, version.code_version, from, to]);
 
-  return { codeVersion: version.code_version, sessionsCovered: version.sessions, days: calendarDaysFromRows(rows) };
+  const flowByDate = await loadFrontierV3FlowByDate(rows.map((r) => r.session_date));
+  return {
+    codeVersion: version.code_version,
+    sessionsCovered: version.sessions,
+    days: calendarDaysFromRows(rows, { flowByDate }),
+  };
 }
 
-export function calendarDaysFromRows(rows) {
+export function calendarDaysFromRows(rows, { flowByDate = null } = {}) {
   const byDate = new Map();
   const dayFor = (date) => {
     if (!byDate.has(date)) byDate.set(date, {
@@ -164,13 +172,15 @@ export function calendarDaysFromRows(rows) {
       if (pnl > 0) day.experimentalWins++;
     }
 
-    if (isFrontierFire({
+    const flowImbalance = flowByDate?.get?.(row.session_date) ?? null;
+    if (passesFrontierV3({
       direction: row.direction,
       levelType: row.level_type,
       tier: row.tier,
       points: row.points != null ? Number(row.points) : null,
       etMinute: row.et_minute != null ? Number(row.et_minute) : null,
       entryPrice: row.entry_price != null ? Number(row.entry_price) : null,
+      flowImbalance,
     })) {
       const key = frontierDedupeKey({
         sessionDate: row.session_date,

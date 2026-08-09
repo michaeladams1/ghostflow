@@ -20,13 +20,13 @@ const day = calendarDaysFromRows([
     tier: "A", points: 13, et_minute: 610, touch_number: 1,
   },
   {
-    // v2 Option B: after 10:15 is still eligible (research lane).
+    // After 10:15 is still eligible (research lane; v3 dropped the old cutoff).
     session_date: "2026-08-03", lane: "HIGH_QUALITY_A", counted: false, pb_window: "in",
     entry_price: 1, pnl: "50", direction: "PUT", level_type: "WHOLE_DOLLAR",
     tier: "Research 13-14", points: 13, et_minute: 640, touch_number: 1,
   },
   {
-    // Before 10:00 — still excluded from Frontier v2.
+    // Before 10:00 — still excluded from Frontier.
     session_date: "2026-08-03", lane: "official", counted: false, pb_window: "after",
     entry_price: 1.1, pnl: "40", direction: "PUT", level_type: "WHOLE_DOLLAR",
     tier: "A", points: 13, et_minute: 590, touch_number: 2,
@@ -58,5 +58,21 @@ assert.equal(totals.shenWinRate, 100);
 assert.equal(totals.frontierTrades, 2);
 assert.equal(totals.frontierWinRate, 100);
 assert.equal(totals.frontierPnl, 150);
+
+// Frontier v3 QuantData early-flow veto: opposing PUT day flow drops the PUT fires.
+const vetoed = calendarDaysFromRows([
+  {
+    session_date: "2026-08-04", lane: "official", counted: true, pb_window: "in",
+    entry_price: 1.05, pnl: "100", direction: "PUT", level_type: "WHOLE_DOLLAR",
+    tier: "A", points: 13, et_minute: 610, touch_number: 1,
+  },
+  {
+    session_date: "2026-08-04", lane: "HIGH_QUALITY_A", counted: false, pb_window: "in",
+    entry_price: 1, pnl: "50", direction: "CALL", level_type: "WHOLE_DOLLAR",
+    tier: "Research 13-14", points: 13, et_minute: 640, touch_number: 1,
+  },
+], { flowByDate: new Map([["2026-08-04", 0.25]]) })[0];
+assert.deepEqual(vetoed.frontierTradePnls, [50]);
+assert.equal(vetoed.frontierPnl, 50);
 
 console.log("0DTE saved calendar tests passed");
