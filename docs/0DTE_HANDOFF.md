@@ -377,8 +377,14 @@ onto the widest calendar `code_version`).
 Fire-time Quant Data is stored in `features` JSONB: `flowEarly`, `flowAtEntry`,
 `flowSupportEarly` / `flowSupportAtEntry`, `gexNetAtLevel`, `gexSignAtLevel`,
 `gexNetAtSpot`. Enrichment is best-effort (missing QD key → `qdOk:false`).
-Re-backfill with `node server/frontierVolumeBackfill.js` after schema/version
-changes. Exit asymmetry research: `node server/frontierVolumeExitSearch.js`.
+`etEpoch` for flow windows is DST-correct (`America/New_York`) — do not hard-code
+`-04:00` or winter `flowAtEntry` goes null. Re-backfill with
+`node server/frontierVolumeBackfill.js` after schema/version changes.
+
+Exit asymmetry research (`node server/frontierVolumeExitSearch.js`): on the
+stored ORB_HOLD+VWAP book, **wider TP helps** (`tp50_sl15` 2026 ~$5.6k vs
+baseline ~$3.6k) but WR falls (~28% vs ~37%). **Tighter SL alone hurts**
+(more stop-outs before TP). Live exits stay +30%/−15% until explicitly promoted.
 
 **Audit layers (do not mix):** Official Day P&L = playbook +20%/−12.5% on
 counted in-hours fires. Frontier Day P&L = PUT pts≥12 first-touch selection
