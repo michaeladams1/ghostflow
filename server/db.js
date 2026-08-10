@@ -144,6 +144,28 @@ export function ensureSchema() {
       );
       CREATE INDEX IF NOT EXISTS zerodte_backtest_jobs_latest
         ON zerodte_backtest_jobs (symbol, code_version, created_at DESC);
+      -- GAMMA research feature warehouse. Cached Quant Data / derived strike
+      -- signals for the paper-only GAMMA sleeve. Never used by live-paper exec.
+      CREATE TABLE IF NOT EXISTS zerodte_gamma_features (
+        id TEXT PRIMARY KEY,
+        symbol TEXT NOT NULL,
+        session_date TEXT NOT NULL,
+        et_minute INT,
+        strike NUMERIC,
+        direction TEXT,
+        ask_proxy NUMERIC,
+        volume NUMERIC,
+        volume_z NUMERIC,
+        gex NUMERIC,
+        net_gex NUMERIC,
+        features JSONB NOT NULL DEFAULT '{}'::jsonb,
+        code_version TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS zerodte_gamma_features_session
+        ON zerodte_gamma_features (symbol, session_date);
+      CREATE INDEX IF NOT EXISTS zerodte_gamma_features_version
+        ON zerodte_gamma_features (code_version, session_date);
     `).catch((err) => {
       schemaReady = null; // allow retry on next call if this failed
       throw err;

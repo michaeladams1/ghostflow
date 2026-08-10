@@ -15,6 +15,7 @@ import {
   frontierDeployedNotional, frontierPaperPnl, passesFrontierV3, selectFrontierBestPerDay,
 } from "./frontierV3.js";
 import { VOLUME_LANE } from "./frontierVolume.js";
+import { GAMMA_LANE } from "./frontierGamma.js";
 
 const num = (v) => (v == null || Number.isNaN(Number(v)) ? null : Number(v));
 
@@ -52,9 +53,12 @@ export async function saveSessionTrades({ symbol = "SPY", sessionDate, rows }) {
     // Replace-on-rerun, SCOPED TO THIS CODE VERSION: re-running a day on the
     // same commit is idempotent, but running it on new code leaves the old
     // version's rows intact so the two can be compared.
+    // GAMMA is lane-scoped via saveGammaTrades and must survive day re-sims
+    // so Frontier/Volume calendar rebuilds never wipe gamma research rows.
     await client.query(
-      "DELETE FROM zerodte_trades WHERE symbol = $1 AND session_date = $2 AND code_version = $3",
-      [symbol, sessionDate, build.codeVersion]);
+      `DELETE FROM zerodte_trades
+       WHERE symbol = $1 AND session_date = $2 AND code_version = $3 AND lane <> $4`,
+      [symbol, sessionDate, build.codeVersion, GAMMA_LANE]);
     for (const r of rows) {
       const t = r.trade || {};
       await client.query(
@@ -180,13 +184,15 @@ export function calendarDaysFromRows(rows, { flowByDate = null } = {}) {
       experimentalTradePnls: [], experimentalTradeDeployeds: [], experimentalTradeIntervals: [],
       shenTradePnls: [], shenTradeDeployeds: [], shenTradeIntervals: [],
       volumeTradePnls: [], volumeTradeDeployeds: [], volumeTradeIntervals: [],
+      gammaTradePnls: [], gammaTradeDeployeds: [], gammaTradeIntervals: [],
       frontierTradePnls: [], frontierTradeDeployeds: [], frontierTradeIntervals: [],
       experimentalPnl: 0, experimentalTrades: 0, experimentalWins: 0,
       shenPnl: 0, shenTrades: 0, shenWins: 0,
       volumePnl: 0, volumeTrades: 0, volumeWins: 0,
+      gammaPnl: 0, gammaTrades: 0, gammaWins: 0,
       frontierPnl: 0, frontierTrades: 0, frontierWins: 0,
       deployed: 0, excludedDeployed: 0, experimentalDeployed: 0, shenDeployed: 0,
-      volumeDeployed: 0, frontierDeployed: 0,
+      volumeDeployed: 0, gammaDeployed: 0, frontierDeployed: 0,
       nearMissReasons: [],
       _frontierKeys: new Map(),
     });
@@ -218,6 +224,11 @@ export function calendarDaysFromRows(rows, { flowByDate = null } = {}) {
       if (interval) day.volumeTradeIntervals.push(interval);
       day.volumePnl += pnl; day.volumeDeployed += deployed; day.volumeTrades++;
       if (pnl > 0) day.volumeWins++;
+    } else if (row.lane === GAMMA_LANE) {
+      day.gammaTradePnls.push(pnl); day.gammaTradeDeployeds.push(deployed);
+      if (interval) day.gammaTradeIntervals.push(interval);
+      day.gammaPnl += pnl; day.gammaDeployed += deployed; day.gammaTrades++;
+      if (pnl > 0) day.gammaWins++;
     } else if (row.lane !== "official") {
       day.experimentalTradePnls.push(pnl); day.experimentalTradeDeployeds.push(deployed);
       if (interval) day.experimentalTradeIntervals.push(interval);
@@ -288,11 +299,13 @@ export function calendarDaysFromRows(rows, { flowByDate = null } = {}) {
       pnl: +day.pnl.toFixed(2), excludedPnl: +day.excludedPnl.toFixed(2),
       experimentalPnl: +day.experimentalPnl.toFixed(2), shenPnl: +day.shenPnl.toFixed(2),
       volumePnl: +day.volumePnl.toFixed(2),
+      gammaPnl: +day.gammaPnl.toFixed(2),
       deployed: +day.deployed.toFixed(2),
       excludedDeployed: +day.excludedDeployed.toFixed(2),
       experimentalDeployed: +day.experimentalDeployed.toFixed(2),
       shenDeployed: +day.shenDeployed.toFixed(2),
       volumeDeployed: +day.volumeDeployed.toFixed(2),
+      gammaDeployed: +day.gammaDeployed.toFixed(2),
       wins: day.tradePnls.filter((pnl) => pnl > 0).length,
     };
   });

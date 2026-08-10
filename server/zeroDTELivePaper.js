@@ -5,7 +5,9 @@
 //   shadow  — detect fires, persist would-be orders, do NOT call Alpaca Trading API
 //   submit  — same + submit paper brackets; client_order_id tags FRONTIER vs VOLUME
 //
-// Official playbook / Shen / research lanes are never executed here.
+// LIVE EXEC ALLOWLIST: LIVE_EXEC_SLEEVES = {FRONTIER, VOLUME} only.
+// GAMMA (and Shen / official / research) are never collected, shadowed, or submitted.
+// Do not import frontierGamma into the submit path.
 
 import { randomUUID } from "node:crypto";
 import { occSymbol } from "./alpacaClient.js";
@@ -22,8 +24,9 @@ import {
   VOLUME_SL_MULT, VOLUME_TP_MULT, VOLUME_VERSION, buildVolumeFires, volumeEntryAllowed,
 } from "./frontierVolume.js";
 import {
-  LIVE_SLEEVE_FRONTIER, LIVE_SLEEVE_VOLUME, buildClientOrderId, isRthEtMinute,
-  lastClosedEtMinute, liveFireKey, parseLivePaperMode, sleeveNote,
+  LIVE_EXEC_SLEEVES, LIVE_SLEEVE_FRONTIER, LIVE_SLEEVE_VOLUME, buildClientOrderId,
+  isLiveExecSleeve, isRthEtMinute, lastClosedEtMinute, liveFireKey,
+  parseLivePaperMode, sleeveNote,
 } from "./livePaperIds.js";
 import {
   findLiveOrderByFireKey, insertLiveOrder, listOpenVolumeLiveOrders, updateLiveOrder,
@@ -174,12 +177,22 @@ export async function collectLiveSignals({ sessionDate, closedMinute }) {
     });
   }
 
+  // Hard allowlist — research sleeves (incl. GAMMA) can never leak into ticks.
+  const liveSignals = signals.filter((s) => isLiveExecSleeve(s.sleeve));
+  const liveFrontier = frontierCandidates.filter((s) => isLiveExecSleeve(s.sleeve));
+  if (liveSignals.length !== signals.length || liveFrontier.length !== frontierCandidates.length) {
+    console.warn(
+      `[live-paper] stripped non-exec sleeves: signals ${signals.length}->${liveSignals.length} `
+      + `frontier ${frontierCandidates.length}->${liveFrontier.length} allowlist=${LIVE_EXEC_SLEEVES.join(",")}`,
+    );
+  }
+
   // Frontier candidates are returned un-capped; tickLivePaper applies
   // selectFrontierBestPerDay after quotes so a dead quote doesn't eat the day slot.
   return {
     ok: true,
-    signals,
-    frontierCandidates,
+    signals: liveSignals,
+    frontierCandidates: liveFrontier,
     sessionDate,
     levels: session.levels,
   };
@@ -217,6 +230,10 @@ async function enrichWithQuote(signal) {
 
 async function persistAndMaybeSubmit({ signal, mode, sessionDate }) {
   const note = sleeveNote(signal.sleeve);
+  if (!note || !isLiveExecSleeve(signal.sleeve)) {
+    console.log(`[live-paper] skipped: sleeve-not-in-live-allowlist sleeve=${signal.sleeve}`);
+    return { action: "rejected_sleeve", row: null };
+  }
   const fireKey = liveFireKey({
     symbol: SYMBOL,
     sessionDate,
