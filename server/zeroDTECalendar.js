@@ -10,6 +10,9 @@ import {
 import {
   frontierDeployedNotional, frontierPaperPnl, selectFrontierBestPerDay,
 } from "./frontierV3.js";
+import {
+  VOLUME_LANE, buildVolumeFires, summarizeVolumeFires, volumeDeployed, volumePaperPnl,
+} from "./frontierVolume.js";
 import { simulateAllFires } from "./zeroDTEOptionSim.js";
 import { buildSessionStory } from "./zeroDTEStory.js";
 import { saveSessionTrades } from "./zeroDTEStore.js";
@@ -58,6 +61,11 @@ async function simulateDay(symbol, date) {
       const fires = await simulateAllFires({ ticker: symbol, sessionDate: date, fires: s.fires });
       const experiments = await simulateAllFires({ ticker: symbol, sessionDate: date, fires: s.experiments || [] });
       const playbookExperiments = await simulateAllFires({ ticker: symbol, sessionDate: date, fires: s.playbookExperiments || [] });
+      const volumeFiresRaw = buildVolumeFires({
+        bars: s.bars, sessionDate: date, pdh: s.levels?.pdh, pdl: s.levels?.pdl,
+      });
+      const volumeFires = await simulateAllFires({ ticker: symbol, sessionDate: date, fires: volumeFiresRaw });
+      const volume = summarizeVolumeFires(volumeFires);
       const story = buildSessionStory({ symbol, sessionDate: date, levels: s.levels, gap: s.gap, fires, bars: s.bars });
       const simmed = fires.filter((f) => f.level && f.trade?.ok);
       const counted = simmed.filter((f) => f.window === "in");
@@ -132,24 +140,44 @@ async function simulateDay(symbol, date) {
         frontierTradePnls: frontier.map(frontierPnlOf),
         frontierTradeDeployeds: frontier.map(frontierDeployedOf),
         frontierDeployed: +frontier.reduce((sum, f) => sum + frontierDeployedOf(f), 0).toFixed(2),
+        volumePnl: volume.pnl,
+        volumeTrades: volume.trades,
+        volumeWins: volume.wins,
+        volumeTradePnls: volume.tradePnls,
+        volumeTradeDeployeds: volume.tradeDeployeds,
+        volumeDeployed: volume.deployed,
         nearMissReasons: (s.nearMisses || []).flatMap((x) => x.reasons),
       };
 
       // PERSIST. Every fire — official and research, traded or not — is
       // written with the features that produced it. This is what makes the
       // strategy analyzable later instead of recomputed and forgotten.
-      const toRow = (f, lane) => ({
-        ...f, lane,
-        etMinute: f.ts ? etMinuteOf(f.ts) : null,
-        contracts: f.trade?.ok ? contractsFor(f) : null,
-        pnl: f.trade?.ok ? pnlOf(f) : null,
-        counted: lane === "official" && f.window === "in" && !!f.trade?.ok,
-      });
+      const toRow = (f, lane) => {
+        const isVolume = lane === VOLUME_LANE;
+        const contracts = f.trade?.ok ? contractsFor(f) : null;
+        const pnl = f.trade?.ok
+          ? (isVolume
+            ? (volumePaperPnl(f.trade.entryPrice, f.trade.exitPrice) ?? pnlOf(f))
+            : pnlOf(f))
+          : null;
+        return {
+          ...f, lane,
+          etMinute: f.ts ? etMinuteOf(f.ts) : (f.etMinute ?? null),
+          contracts,
+          pnl,
+          counted: lane === "official" && f.window === "in" && !!f.trade?.ok,
+          featuresExtra: isVolume ? {
+            scan: f.scan, expirationMode: f.expirationMode, expiration: f.expiration,
+            dte: f.dte, method: f.method, volumeDeployed: volumeDeployed(f.trade?.entryPrice),
+          } : undefined,
+        };
+      };
       try {
         await saveSessionTrades({ symbol, sessionDate: date, rows: [
           ...fires.map((f) => toRow(f, "official")),
           ...experiments.map((f) => toRow(f, f.lane || "research")),
           ...playbookExperiments.map((f) => toRow(f, "SHEN_CONVICTION")),
+          ...volumeFires.map((f) => toRow(f, VOLUME_LANE)),
         ] });
       } catch (err) {
         console.error(`[0dte:store] ${date} persist failed:`, err.message);
@@ -182,6 +210,9 @@ export function summarizeMonth({ symbol = "SPY", year, month, days, saved = fals
   const frontierTradePnls = days.flatMap((x) => x.frontierTradePnls || []);
   const frontierTrades = frontierTradePnls.length;
   const frontierWins = frontierTradePnls.filter((p) => p > 0).length;
+  const volumeTradePnls = days.flatMap((x) => x.volumeTradePnls || []);
+  const volumeTrades = volumeTradePnls.length;
+  const volumeWins = volumeTradePnls.filter((p) => p > 0).length;
   const sumDeployed = (key) => +days.reduce((s, x) => s + Number(x?.[key] || 0), 0).toFixed(2);
   const nearMissReasons = {};
   for (const reason of days.flatMap((x) => x.nearMissReasons || [])) nearMissReasons[reason] = (nearMissReasons[reason] || 0) + 1;
@@ -220,6 +251,12 @@ export function summarizeMonth({ symbol = "SPY", year, month, days, saved = fals
       frontierLosses: frontierTrades - frontierWins,
       frontierWinRate: frontierTrades ? +((frontierWins / frontierTrades) * 100).toFixed(1) : null,
       frontierDeployed: sumDeployed("frontierDeployed"),
+      volumePnl: +volumeTradePnls.reduce((sum, x) => sum + x, 0).toFixed(2),
+      volumeTrades,
+      volumeWins,
+      volumeLosses: volumeTrades - volumeWins,
+      volumeWinRate: volumeTrades ? +((volumeWins / volumeTrades) * 100).toFixed(1) : null,
+      volumeDeployed: sumDeployed("volumeDeployed"),
       nearMissReasons,
     },
   };
