@@ -4,7 +4,7 @@ import {
   attachVwap, detectVolumeScanFires, paperDeployed, paperPnl, pickWeeklyExpiration,
 } from "./scanLib.js";
 import {
-  VOLUME_PAPER_DOLLARS, VOLUME_SL_MULT, VOLUME_TP_MULT, volumeEntryAllowed,
+  VOLUME_PAPER_DOLLARS, VOLUME_SCANS, VOLUME_SL_MULT, VOLUME_TP_MULT, volumeEntryAllowed,
 } from "./frontierVolume.js";
 
 function bar(sessionDate, hour, minute, { o, h, l, c, v = 1000 } = {}) {
@@ -112,6 +112,7 @@ function makeVwapReclaimSession() {
   assert.equal(VOLUME_TP_MULT, 1.30);
   assert.equal(VOLUME_SL_MULT, 0.85);
   assert.equal(VOLUME_PAPER_DOLLARS, 1000);
+  assert.deepEqual(VOLUME_SCANS, ["ORB_HOLD", "VWAP_RECLAIM"]);
   assert.equal(volumeEntryAllowed(9.99), true);
   assert.equal(volumeEntryAllowed(10.01), false);
 }
