@@ -213,7 +213,13 @@ export function summarizeMonth({ symbol = "SPY", year, month, days, saved = fals
   const volumeTradePnls = days.flatMap((x) => x.volumeTradePnls || []);
   const volumeTrades = volumeTradePnls.length;
   const volumeWins = volumeTradePnls.filter((p) => p > 0).length;
-  const sumDeployed = (key) => +days.reduce((s, x) => s + Number(x?.[key] || 0), 0).toFixed(2);
+  // Aggregate capital = average of each trading day's deployed total (not the
+  // sum of every entry). Mon $3k + Tue $1k → $2k.
+  const avgDeployed = (deployedKey, tradesKey) => {
+    const active = days.filter((x) => Number(x?.[tradesKey] || 0) > 0);
+    if (!active.length) return 0;
+    return +(active.reduce((s, x) => s + Number(x?.[deployedKey] || 0), 0) / active.length).toFixed(2);
+  };
   const nearMissReasons = {};
   for (const reason of days.flatMap((x) => x.nearMissReasons || [])) nearMissReasons[reason] = (nearMissReasons[reason] || 0) + 1;
 
@@ -231,32 +237,32 @@ export function summarizeMonth({ symbol = "SPY", year, month, days, saved = fals
       bestTrade: allTradePnls.length ? Math.max(...allTradePnls) : null,
       worstTrade: allTradePnls.length ? Math.min(...allTradePnls) : null,
       tradingDays: days.filter((x) => !x.noData).length,
-      deployed: sumDeployed("deployed"),
-      excludedDeployed: sumDeployed("excludedDeployed"),
+      deployed: avgDeployed("deployed", "trades"),
+      excludedDeployed: avgDeployed("excludedDeployed", "excludedTrades"),
       experimentalPnl: +experimentalTradePnls.reduce((sum, x) => sum + x, 0).toFixed(2),
       experimentalTrades,
       experimentalWins,
       experimentalLosses: experimentalTrades - experimentalWins,
       experimentalWinRate: experimentalTrades ? +((experimentalWins / experimentalTrades) * 100).toFixed(1) : null,
-      experimentalDeployed: sumDeployed("experimentalDeployed"),
+      experimentalDeployed: avgDeployed("experimentalDeployed", "experimentalTrades"),
       shenPnl: +shenTradePnls.reduce((sum, x) => sum + x, 0).toFixed(2),
       shenTrades,
       shenWins,
       shenLosses: shenTrades - shenWins,
       shenWinRate: shenTrades ? +((shenWins / shenTrades) * 100).toFixed(1) : null,
-      shenDeployed: sumDeployed("shenDeployed"),
+      shenDeployed: avgDeployed("shenDeployed", "shenTrades"),
       frontierPnl: +frontierTradePnls.reduce((sum, x) => sum + x, 0).toFixed(2),
       frontierTrades,
       frontierWins,
       frontierLosses: frontierTrades - frontierWins,
       frontierWinRate: frontierTrades ? +((frontierWins / frontierTrades) * 100).toFixed(1) : null,
-      frontierDeployed: sumDeployed("frontierDeployed"),
+      frontierDeployed: avgDeployed("frontierDeployed", "frontierTrades"),
       volumePnl: +volumeTradePnls.reduce((sum, x) => sum + x, 0).toFixed(2),
       volumeTrades,
       volumeWins,
       volumeLosses: volumeTrades - volumeWins,
       volumeWinRate: volumeTrades ? +((volumeWins / volumeTrades) * 100).toFixed(1) : null,
-      volumeDeployed: sumDeployed("volumeDeployed"),
+      volumeDeployed: avgDeployed("volumeDeployed", "volumeTrades"),
       nearMissReasons,
     },
   };

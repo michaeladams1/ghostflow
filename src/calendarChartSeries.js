@@ -1,5 +1,6 @@
 // Calendar performance chart series — cumulative P&L from $0 at month/year
 // start, with per-period deployed capital (never cumulative).
+// Aggregate "Capital deployed" widgets use avgDailyDeployed over trading days.
 
 export const CALENDAR_LANES = {
   official: {
@@ -50,9 +51,27 @@ export function laneDay(day, lane) {
 }
 
 /**
+ * Average capital in the book across trading days.
+ * Mon $3k + Tue $1k → $2k. Empty input → 0.
+ */
+export function avgDailyDeployed(dayDeployeds) {
+  const vals = (dayDeployeds || [])
+    .map((v) => Number(v))
+    .filter((v) => Number.isFinite(v));
+  if (!vals.length) return 0;
+  return +(vals.reduce((sum, v) => sum + v, 0) / vals.length).toFixed(2);
+}
+
+/** Average a lane's daily deployed totals over days that actually traded. */
+export function avgLaneDeployed(days, { deployedKey, tradesKey } = {}) {
+  const active = (days || []).filter((d) => Number(d?.[tradesKey] || 0) > 0);
+  return avgDailyDeployed(active.map((d) => d?.[deployedKey]));
+}
+
+/**
  * Build chart points for a lane.
  * - cumulative: running sum of period P&L from $0 (month days or year months)
- * - deployed: that period's capital only (day total / month total) — never cumulative
+ * - deployed: that day's capital (month view), or avg daily capital that month (year view)
  * - dayPnl: the period's own P&L (kept for tooltips; not plotted as the gains line)
  */
 export function buildLaneChartSeries(days, lane, { mode = "month" } = {}) {
@@ -65,21 +84,21 @@ export function buildLaneChartSeries(days, lane, { mode = "month" } = {}) {
     const byMonth = new Map();
     for (const day of laneDays) {
       const month = Number(String(day.date).slice(5, 7));
-      if (!byMonth.has(month)) byMonth.set(month, { pnl: 0, deployed: 0, trades: 0 });
+      if (!byMonth.has(month)) byMonth.set(month, { pnl: 0, dayDeployeds: [], trades: 0 });
       const row = byMonth.get(month);
       row.pnl += Number(day.pnl || 0);
-      row.deployed += Number(day.deployed || 0);
+      if ((day.trades || 0) > 0) row.dayDeployeds.push(Number(day.deployed || 0));
       row.trades += day.trades || 0;
     }
     return Array.from({ length: 12 }, (_, i) => i + 1).map((month) => {
-      const row = byMonth.get(month) || { pnl: 0, deployed: 0, trades: 0 };
+      const row = byMonth.get(month) || { pnl: 0, dayDeployeds: [], trades: 0 };
       cumulative += row.pnl;
       return {
         label: MONTH_SHORT[month - 1],
         date: month,
         dayPnl: +row.pnl.toFixed(2),
         cumulative: +cumulative.toFixed(2),
-        deployed: +row.deployed.toFixed(2),
+        deployed: avgDailyDeployed(row.dayDeployeds),
         trades: row.trades,
       };
     });

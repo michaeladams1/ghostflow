@@ -14,7 +14,7 @@ import {
   ResponsiveContainer, ComposedChart, Line, Bar, XAxis, YAxis, Tooltip,
   CartesianGrid, ReferenceDot, ReferenceLine, ReferenceArea, Legend,
 } from "recharts";
-import { CALENDAR_LANES, laneDay, buildLaneChartSeries } from "./calendarChartSeries.js";
+import { CALENDAR_LANES, laneDay, buildLaneChartSeries, avgDailyDeployed } from "./calendarChartSeries.js";
 
 const card = "bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800";
 const faint = "text-zinc-500 dark:text-zinc-500";
@@ -668,7 +668,8 @@ function laneTotals(days, lane) {
   const dayPnls = tradedDays.map((day) => day.pnl);
   const wins = tradePnls.filter((pnl) => pnl > 0).length;
   const totalTrades = tradePnls.length;
-  const deployed = +tradedDays.reduce((sum, day) => sum + Number(day.deployed || 0), 0).toFixed(2);
+  // Avg capital in the book on trading days — Mon $3k + Tue $1k → $2k.
+  const deployed = avgDailyDeployed(tradedDays.map((day) => day.deployed));
   const peakDayDeployed = tradedDays.length
     ? Math.max(...tradedDays.map((day) => Number(day.deployed || 0)))
     : null;
@@ -704,7 +705,7 @@ function CalendarPerformanceChart({ series, laneLabel, timeframe }) {
         <div>
           <div className={heading}>P&L + deployed capital</div>
           <div className="text-sm text-zinc-800 dark:text-zinc-200 mt-0.5">
-            {laneLabel} · cumulative P&L from $0 · deployed is each {timeframe === "Year" ? "month" : "day"} only
+            {laneLabel} · cumulative P&L from $0 · deployed bars are that {timeframe === "Year" ? "month's avg daily" : "day's"} capital
           </div>
         </div>
         <div className={`text-[11px] ${faint}`}>Left: cumulative P&L · Right: capital deployed</div>
@@ -742,6 +743,11 @@ function CalendarPerformanceChart({ series, laneLabel, timeframe }) {
 function summarizeYearTotals(months) {
   const sum = (key) => +(months.reduce((s, m) => s + Number(m?.totals?.[key] || 0), 0).toFixed(2));
   const count = (key) => months.reduce((s, m) => s + Number(m?.totals?.[key] || 0), 0);
+  // Month totals.*Deployed are already avg-daily; re-average across months that traded.
+  const avgDeployedAcrossMonths = (deployedKey, tradesKey) => {
+    const active = (months || []).filter((m) => Number(m?.totals?.[tradesKey] || 0) > 0);
+    return avgDailyDeployed(active.map((m) => m?.totals?.[deployedKey]));
+  };
   const wins = count("wins");
   const totalTrades = count("totalTrades");
   const excludedTrades = count("excludedTrades");
@@ -763,28 +769,28 @@ function summarizeYearTotals(months) {
     excludedTrades,
     excludedWins,
     excludedWinRate: excludedTrades ? +((excludedWins / excludedTrades) * 100).toFixed(1) : null,
-    deployed: sum("deployed"),
-    excludedDeployed: sum("excludedDeployed"),
+    deployed: avgDeployedAcrossMonths("deployed", "totalTrades"),
+    excludedDeployed: avgDeployedAcrossMonths("excludedDeployed", "excludedTrades"),
     experimentalPnl: sum("experimentalPnl"),
     experimentalTrades,
     experimentalWins,
     experimentalWinRate: experimentalTrades ? +((experimentalWins / experimentalTrades) * 100).toFixed(1) : null,
-    experimentalDeployed: sum("experimentalDeployed"),
+    experimentalDeployed: avgDeployedAcrossMonths("experimentalDeployed", "experimentalTrades"),
     shenPnl: sum("shenPnl"),
     shenTrades,
     shenWins,
     shenWinRate: shenTrades ? +((shenWins / shenTrades) * 100).toFixed(1) : null,
-    shenDeployed: sum("shenDeployed"),
+    shenDeployed: avgDeployedAcrossMonths("shenDeployed", "shenTrades"),
     frontierPnl: sum("frontierPnl"),
     frontierTrades,
     frontierWins,
     frontierWinRate: frontierTrades ? +((frontierWins / frontierTrades) * 100).toFixed(1) : null,
-    frontierDeployed: sum("frontierDeployed"),
+    frontierDeployed: avgDeployedAcrossMonths("frontierDeployed", "frontierTrades"),
     volumePnl: sum("volumePnl"),
     volumeTrades,
     volumeWins,
     volumeWinRate: volumeTrades ? +((volumeWins / volumeTrades) * 100).toFixed(1) : null,
-    volumeDeployed: sum("volumeDeployed"),
+    volumeDeployed: avgDeployedAcrossMonths("volumeDeployed", "volumeTrades"),
     nearMissReasons: {},
   };
 }
@@ -1226,7 +1232,7 @@ function CalendarView({ onBack, onOpenDay, initialReturn }) {
               <div className={heading}>Capital deployed</div>
               <div className="text-3xl font-bold text-teal-500 mt-1">{t.deployed != null ? wholeMoney(t.deployed) : "—"}</div>
               <div className={`text-xs mt-0.5 ${faint}`}>
-                sum of entry notionals
+                avg daily capital in trades
                 {t.peakDayDeployed != null ? ` · peak day ${wholeMoney(t.peakDayDeployed)}` : ""}
               </div>
             </div>

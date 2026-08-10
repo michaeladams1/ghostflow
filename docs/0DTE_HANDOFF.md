@@ -364,10 +364,11 @@ the calendar may fall back to $1k on playbook exit prices.
 
 **Calendar capital + P&L chart:** each lane day includes `*Deployed` notionals
 (contracts × entry × 100; Frontier uses $1k paper sizing). Month/Year views
-plot **cumulative P&L from $0** (one green line) and **per-period deployed**
-bars (that day/month's capital only — never cumulative). Day/month P&L stays
-in the tooltip; it is not drawn as a second gains line (that read as −$120 on
-a +$70 cumulative day).
+plot **cumulative P&L from $0** (one green line) and deployed bars (that day's
+capital in Month view; **avg daily** capital for that month in Year view).
+The **Capital deployed** sidebar / month `cap` totals are **average daily
+capital in trades** (Mon $3k + Tue $1k → $2k) — not the sum of every entry
+notional. Peak day stays in the subtitle. Day/month P&L stays in the tooltip.
 
 **Volume sleeve (paper lane `VOLUME`)** sits beside Frontier v7 for cadence.
 Live scans: **ORB_HOLD + VWAP_RECLAIM only** (ORB_FAIL and WEEKLY_DRIVE dropped
