@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import {
   attachVwap, detectVolumeScanFires, paperDeployed, paperPnl, pickWeeklyExpiration,
 } from "./scanLib.js";
+import {
+  VOLUME_PAPER_DOLLARS, VOLUME_SL_MULT, VOLUME_TP_MULT, volumeEntryAllowed,
+} from "./frontierVolume.js";
 
 function bar(sessionDate, hour, minute, { o, h, l, c, v = 1000 } = {}) {
   // Build an epoch ms that formats to the requested ET wall clock.
@@ -103,6 +106,14 @@ function makeVwapReclaimSession() {
   // Expensive contracts: paperPnl still sizes 1 lot; search harness rejects entry*100 > $1k.
   assert.equal(paperDeployed(12, 1000), 1200);
   assert.equal(paperPnl(12, 13, 1000), 100);
+}
+
+{
+  assert.equal(VOLUME_TP_MULT, 1.30);
+  assert.equal(VOLUME_SL_MULT, 0.85);
+  assert.equal(VOLUME_PAPER_DOLLARS, 1000);
+  assert.equal(volumeEntryAllowed(9.99), true);
+  assert.equal(volumeEntryAllowed(10.01), false);
 }
 
 console.log("testScanLib: ok");

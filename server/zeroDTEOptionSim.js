@@ -68,8 +68,9 @@ export async function simulateBracketTrade({ ticker = "SPY", sessionDate, fire }
     return { ok: false, noLevel: true, reason: `Fired on RSI extension alone with no level touch. Both source documents anchor strike selection to a level ("1 strike OTM from the level"), and the Edge Lens guide calls these "information, not instructions" — so there is no playbook contract to simulate.` };
   }
 
+  const expiration = fire.expiration || sessionDate;
   const strike = pickOtmStrike({ level: fire.level, direction: fire.direction });
-  const occ = occSymbol({ underlying: ticker, expiration: sessionDate, contractType: fire.direction, strike });
+  const occ = occSymbol({ underlying: ticker, expiration, contractType: fire.direction, strike });
 
   let bars;
   try {
@@ -85,8 +86,18 @@ export async function simulateBracketTrade({ ticker = "SPY", sessionDate, fire }
 
   const entryBar = bars[entryIdx];
   const entryPrice = entryBar.close;
-  const tpPrice = +(entryPrice * TP_MULT).toFixed(2);
-  const slPrice = +(entryPrice * SL_MULT).toFixed(2);
+  // Volume sleeve (and any fire with maxPremiumDollars) must fit ≥1 lot under the cap.
+  if (fire.maxPremiumDollars != null && entryPrice * 100 > Number(fire.maxPremiumDollars)) {
+    return {
+      ok: false,
+      reason: `entry $${entryPrice.toFixed(2)} needs >$${fire.maxPremiumDollars} for 1 contract`,
+      contract: occ, strike,
+    };
+  }
+  const tpMult = Number(fire.tpMult) > 0 ? Number(fire.tpMult) : TP_MULT;
+  const slMult = Number(fire.slMult) > 0 ? Number(fire.slMult) : SL_MULT;
+  const tpPrice = +(entryPrice * tpMult).toFixed(2);
+  const slPrice = +(entryPrice * slMult).toFixed(2);
 
   // Walk forward against the minute's HIGH and LOW, not its close — a
   // resting bracket triggers the moment price trades through it.
@@ -96,28 +107,40 @@ export async function simulateBracketTrade({ ticker = "SPY", sessionDate, fire }
   const cutoffMin = fire.exitCutoffMin ?? HARD_STOP_MIN;
   const { exitBar, exitPrice, exitReason } = walkBracketBars({
     bars, entryIdx, tpPrice, slPrice, cutoffMin, enforceHardStop: fireMin < cutoffMin,
+    tpLabel: fire.tpMult ? `+${Math.round((tpMult - 1) * 100)}%` : "+20%",
+    slLabel: fire.slMult ? `-${Math.round((1 - slMult) * 100)}%` : "-12.5%",
   });
 
-  // Frontier-only exit on the SAME bars: runner / -50%, no 11:15 hard stop.
-  // Official P&L above is unchanged.
-  const frontierTp = +(entryPrice * FRONTIER_TP_MULT).toFixed(2);
-  const frontierSl = +(entryPrice * FRONTIER_SL_MULT).toFixed(2);
-  const frontierWalk = walkBracketBars({
-    bars,
-    entryIdx,
-    tpPrice: frontierTp,
-    slPrice: frontierSl,
-    cutoffMin: FRONTIER_HARD_STOP_MIN,
-    enforceHardStop: fireMin < FRONTIER_HARD_STOP_MIN,
-    tpLabel: "+900% runner",
-    slLabel: "-50%",
-    hardStopReason: "Frontier session end",
-  });
-  const frontierExitPrice = +Number(frontierWalk.exitPrice).toFixed(2);
-  const frontierPctReturn = +(((frontierExitPrice - entryPrice) / entryPrice) * 100).toFixed(1);
-  const frontierPnl = frontierPaperPnl(entryPrice, frontierExitPrice, FRONTIER_PAPER_DOLLARS);
-  const frontierExitMin = etMinutes(frontierWalk.exitBar.ts);
-  const frontierContractsN = frontierContracts(entryPrice, FRONTIER_PAPER_DOLLARS);
+  let frontierExitPrice = null;
+  let frontierPctReturn = null;
+  let frontierPnl = null;
+  let frontierExitMin = null;
+  let frontierContractsN = null;
+  let frontierWalk = null;
+  let frontierTp = null;
+  let frontierSl = null;
+  if (!fire.skipFrontierWalk) {
+    // Frontier-only exit on the SAME bars: runner / -50%, no 11:15 hard stop.
+    // Official P&L above is unchanged.
+    frontierTp = +(entryPrice * FRONTIER_TP_MULT).toFixed(2);
+    frontierSl = +(entryPrice * FRONTIER_SL_MULT).toFixed(2);
+    frontierWalk = walkBracketBars({
+      bars,
+      entryIdx,
+      tpPrice: frontierTp,
+      slPrice: frontierSl,
+      cutoffMin: FRONTIER_HARD_STOP_MIN,
+      enforceHardStop: fireMin < FRONTIER_HARD_STOP_MIN,
+      tpLabel: "+900% runner",
+      slLabel: "-50%",
+      hardStopReason: "Frontier session end",
+    });
+    frontierExitPrice = +Number(frontierWalk.exitPrice).toFixed(2);
+    frontierPctReturn = +(((frontierExitPrice - entryPrice) / entryPrice) * 100).toFixed(1);
+    frontierPnl = frontierPaperPnl(entryPrice, frontierExitPrice, FRONTIER_PAPER_DOLLARS);
+    frontierExitMin = etMinutes(frontierWalk.exitBar.ts);
+    frontierContractsN = frontierContracts(entryPrice, FRONTIER_PAPER_DOLLARS);
+  }
 
   const entryMin = etMinutes(entryBar.ts), exitMin = etMinutes(exitBar.ts);
   const pctReturn = +(((exitPrice - entryPrice) / entryPrice) * 100).toFixed(1);
@@ -125,19 +148,19 @@ export async function simulateBracketTrade({ ticker = "SPY", sessionDate, fire }
   return {
     ok: true,
     contract: occ,
-    contractLabel: `SPY $${strike} ${fire.direction === "CALL" ? "Call" : "Put"} · expires ${sessionDate}`,
-    strike, contractType: fire.direction,
+    contractLabel: `SPY $${strike} ${fire.direction === "CALL" ? "Call" : "Put"} · expires ${expiration}`,
+    strike, contractType: fire.direction, expiration,
     entryClock: minToClock(entryMin), entryPrice: +entryPrice.toFixed(2), entryMin,
     exitClock: minToClock(exitMin), exitPrice: +exitPrice.toFixed(2), exitMin,
     tpPrice, slPrice, exitReason, pctReturn, holdMinutes: exitMin - entryMin,
     frontierExitPrice,
-    frontierExitClock: minToClock(frontierExitMin),
+    frontierExitClock: frontierExitMin != null ? minToClock(frontierExitMin) : null,
     frontierExitMin,
-    frontierExitReason: frontierWalk.exitReason,
+    frontierExitReason: frontierWalk?.exitReason ?? null,
     frontierPctReturn,
     frontierPnl,
     frontierContracts: frontierContractsN,
-    frontierHoldMinutes: frontierExitMin - entryMin,
+    frontierHoldMinutes: frontierExitMin != null ? frontierExitMin - entryMin : null,
     frontierTpPrice: frontierTp,
     frontierSlPrice: frontierSl,
     frontierDeployed: frontierContractsN != null

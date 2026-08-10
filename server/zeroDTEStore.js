@@ -14,6 +14,7 @@ import {
 import {
   frontierDeployedNotional, frontierPaperPnl, passesFrontierV3, selectFrontierBestPerDay,
 } from "./frontierV3.js";
+import { VOLUME_LANE } from "./frontierVolume.js";
 
 const num = (v) => (v == null || Number.isNaN(Number(v)) ? null : Number(v));
 
@@ -79,6 +80,7 @@ export async function saveSessionTrades({ symbol = "SPY", sessionDate, rows }) {
             price: r.price, simFailed: t.ok === false ? t.reason : undefined,
             method: r.method, convictionCount: r.convictionCount,
             convictionChecks: r.convictionChecks, moveDistance: r.moveDistance,
+            ...(r.featuresExtra || {}),
           }),
           num(t.frontierExitPrice), num(t.frontierPctReturn), num(t.frontierPnl), t.frontierExitReason || null,
           build.deploymentId, build.commitSha, build.codeVersion, build.branch, build.environment,
@@ -168,11 +170,14 @@ export function calendarDaysFromRows(rows, { flowByDate = null } = {}) {
       excludedTradePnls: [], excludedTradeDeployeds: [],
       experimentalTradePnls: [], experimentalTradeDeployeds: [],
       shenTradePnls: [], shenTradeDeployeds: [],
+      volumeTradePnls: [], volumeTradeDeployeds: [],
       frontierTradePnls: [], frontierTradeDeployeds: [],
       experimentalPnl: 0, experimentalTrades: 0, experimentalWins: 0,
       shenPnl: 0, shenTrades: 0, shenWins: 0,
+      volumePnl: 0, volumeTrades: 0, volumeWins: 0,
       frontierPnl: 0, frontierTrades: 0, frontierWins: 0,
-      deployed: 0, excludedDeployed: 0, experimentalDeployed: 0, shenDeployed: 0, frontierDeployed: 0,
+      deployed: 0, excludedDeployed: 0, experimentalDeployed: 0, shenDeployed: 0,
+      volumeDeployed: 0, frontierDeployed: 0,
       nearMissReasons: [],
       _frontierKeys: new Map(),
     });
@@ -195,6 +200,10 @@ export function calendarDaysFromRows(rows, { flowByDate = null } = {}) {
       day.shenTradePnls.push(pnl); day.shenTradeDeployeds.push(deployed);
       day.shenPnl += pnl; day.shenDeployed += deployed; day.shenTrades++;
       if (pnl > 0) day.shenWins++;
+    } else if (row.lane === VOLUME_LANE) {
+      day.volumeTradePnls.push(pnl); day.volumeTradeDeployeds.push(deployed);
+      day.volumePnl += pnl; day.volumeDeployed += deployed; day.volumeTrades++;
+      if (pnl > 0) day.volumeWins++;
     } else if (row.lane !== "official") {
       day.experimentalTradePnls.push(pnl); day.experimentalTradeDeployeds.push(deployed);
       day.experimentalPnl += pnl; day.experimentalDeployed += deployed; day.experimentalTrades++;
@@ -256,12 +265,80 @@ export function calendarDaysFromRows(rows, { flowByDate = null } = {}) {
       frontierDeployed: +frontierDeployeds.reduce((sum, d) => sum + d, 0).toFixed(2),
       pnl: +day.pnl.toFixed(2), excludedPnl: +day.excludedPnl.toFixed(2),
       experimentalPnl: +day.experimentalPnl.toFixed(2), shenPnl: +day.shenPnl.toFixed(2),
+      volumePnl: +day.volumePnl.toFixed(2),
       deployed: +day.deployed.toFixed(2),
       excludedDeployed: +day.excludedDeployed.toFixed(2),
       experimentalDeployed: +day.experimentalDeployed.toFixed(2),
       shenDeployed: +day.shenDeployed.toFixed(2),
+      volumeDeployed: +day.volumeDeployed.toFixed(2),
       wins: day.tradePnls.filter((pnl) => pnl > 0).length,
     };
   });
   return days;
+}
+
+/**
+ * Upsert VOLUME lane rows onto an existing code_version without wiping other lanes.
+ * Used to backfill the volume sleeve onto the widest calendar version.
+ */
+export async function saveVolumeTrades({
+  symbol = "SPY", sessionDate, rows, codeVersion, environment = "production",
+} = {}) {
+  if (!codeVersion) throw new Error("codeVersion required for volume upsert");
+  await ensureSchema();
+  const build = (await import("./buildInfo.js")).buildInfo();
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      `DELETE FROM zerodte_trades
+       WHERE symbol = $1 AND session_date = $2 AND code_version = $3 AND lane = $4`,
+      [symbol, sessionDate, codeVersion, VOLUME_LANE],
+    );
+    for (const r of rows) {
+      const t = r.trade || {};
+      await client.query(
+        `INSERT INTO zerodte_trades (
+           id, symbol, session_date, fired_at, clock, et_minute, pb_window, lane, tier, direction,
+           level_type, level, touch_number, points, rsi, swing, vol_pts, speed_pts, wick_pts, mtf_aligned,
+           contract, strike, entry_price, exit_price, entry_clock, exit_clock, hold_minutes, exit_reason,
+           pct_return, contracts, pnl, counted, features,
+           frontier_exit_price, frontier_pct_return, frontier_pnl, frontier_exit_reason,
+           deployment_id, commit_sha, code_version, branch, environment
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+                   $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,
+                   $39,$40,$41,$42)
+         ON CONFLICT (id) DO UPDATE SET
+           pnl = EXCLUDED.pnl, pct_return = EXCLUDED.pct_return,
+           exit_reason = EXCLUDED.exit_reason, features = EXCLUDED.features`,
+        [
+          tradeId({
+            symbol, sessionDate, lane: VOLUME_LANE, direction: r.direction,
+            clock: r.clock, tier: r.tier || r.scan, codeVersion,
+          }),
+          symbol, sessionDate, r.ts ? new Date(r.ts) : null, r.clock || null, num(r.etMinute),
+          r.window || "research", VOLUME_LANE, r.tier || r.scan || null, r.direction || null,
+          r.levelType || null, num(r.level), num(r.touchNumber), null, null, null,
+          null, null, null, null,
+          t.contract || null, num(t.strike), num(t.entryPrice), num(t.exitPrice),
+          t.entryClock || null, t.exitClock || null, num(t.holdMinutes), t.exitReason || null,
+          num(t.pctReturn), num(r.contracts), num(r.pnl), false,
+          JSON.stringify({
+            size: r.size, scan: r.scan, expirationMode: r.expirationMode,
+            expiration: r.expiration || t.expiration, dte: r.dte, method: r.method,
+            ...(r.featuresExtra || {}),
+          }),
+          null, null, null, null,
+          build.deploymentId, build.commitSha, codeVersion, build.branch, environment,
+        ],
+      );
+    }
+    await client.query("COMMIT");
+    return rows.length;
+  } catch (err) {
+    await client.query("ROLLBACK");
+    throw err;
+  } finally {
+    client.release();
+  }
 }

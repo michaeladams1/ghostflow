@@ -25,6 +25,7 @@ import { fetchOhlcvBars } from "./server/databentoClient.js";
 import { runBacktest, getSessionChart } from "./server/priceBacktest.js";
 import { analyzeZeroDTESession } from "./server/zeroDTE.js";
 import { summarizeFrontierFires } from "./server/frontierV3.js";
+import { buildVolumeFires, summarizeVolumeFires } from "./server/frontierVolume.js";
 import { simulateAllFires } from "./server/zeroDTEOptionSim.js";
 import { buildSessionStory } from "./server/zeroDTEStory.js";
 import { simulateMonth, summarizeMonth } from "./server/zeroDTECalendar.js";
@@ -640,6 +641,14 @@ app.post("/api/0dte/analyze", async (req, res) => {
     const fires = await simulateAllFires({ ticker: symbol, sessionDate, fires: session.fires });
     const experiments = await simulateAllFires({ ticker: symbol, sessionDate, fires: session.experiments || [] });
     const playbookExperiments = await simulateAllFires({ ticker: symbol, sessionDate, fires: session.playbookExperiments || [] });
+    const volumeFires = await simulateAllFires({
+      ticker: symbol,
+      sessionDate,
+      fires: buildVolumeFires({
+        bars: session.bars, sessionDate, pdh: session.levels?.pdh, pdl: session.levels?.pdl,
+      }),
+    });
+    const volume = summarizeVolumeFires(volumeFires);
 
     const story = buildSessionStory({
       symbol, sessionDate,
@@ -649,12 +658,12 @@ app.post("/api/0dte/analyze", async (req, res) => {
       [...fires, ...experiments, ...playbookExperiments],
       { sessionDate },
     );
-    console.log(`[0dte] done — ${story.tradeableCount} tradeable, ${story.winCount} winners, frontier ${frontier.trades} / deployed $${frontier.deployed}`);
+    console.log(`[0dte] done — ${story.tradeableCount} tradeable, ${story.winCount} winners, frontier ${frontier.trades} / deployed $${frontier.deployed}, volume ${volume.trades} / $${volume.pnl}`);
 
     res.json({
       symbol, sessionDate, levels: session.levels, gap: session.gap, bars: session.bars,
-      fires, experiments, playbookExperiments, nearMisses: session.nearMisses || [], story,
-      frontier,
+      fires, experiments, playbookExperiments, volumeFires, nearMisses: session.nearMisses || [], story,
+      frontier, volume,
     });
   } catch (err) {
     console.error("[0dte] FAILED:", err);

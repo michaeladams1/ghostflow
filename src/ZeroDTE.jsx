@@ -8,7 +8,7 @@
 // a red down-arrow where you'd have sold.
 import { useState, useEffect } from "react";
 import {
-  Zap, Loader2, AlertTriangle, ArrowUp, ArrowDown, Target, ShieldAlert, Clock, Hash, CalendarDays, FlaskConical, BookOpenCheck, Sparkles,
+  Zap, Loader2, AlertTriangle, ArrowUp, ArrowDown, Target, ShieldAlert, Clock, Hash, CalendarDays, FlaskConical, BookOpenCheck, Sparkles, Layers,
 } from "lucide-react";
 import {
   ResponsiveContainer, ComposedChart, Line, Bar, XAxis, YAxis, Tooltip,
@@ -120,11 +120,12 @@ function asFrontierTradeView(fire) {
 function TradeCard({ fire, contracts, pnl, lane = "official" }) {
   const t = fire.trade;
   const isFrontier = lane === "frontier";
-  const won = (isFrontier ? (pnl > 0) : t.pctReturn > 0);
+  const isVolume = lane === "volume";
+  const won = (isFrontier || isVolume) ? (pnl > 0) : t.pctReturn > 0;
   const isCall = fire.direction === "CALL";
-  const pct = isFrontier ? t.pctReturn : t.pctReturn;
-  const tpLabel = isFrontier ? "runner (+900%)" : "+20%";
-  const slLabel = isFrontier ? "−50%" : "−12.5%";
+  const pct = t.pctReturn;
+  const tpLabel = isFrontier ? "runner (+900%)" : isVolume ? "+30%" : "+20%";
+  const slLabel = isFrontier ? "−50%" : isVolume ? "−15%" : "−12.5%";
 
   // ZOOM vs FULL DAY. A 4-minute trade on a full-day axis is 4 pixels wide
   // and the day's range crushes the trade zone flat — so the DEFAULT view is
@@ -154,7 +155,12 @@ function TradeCard({ fire, contracts, pnl, lane = "official" }) {
               FRONTIER PAPER · RUNNER / −50%
             </span>
           )}
-          {!isFrontier && fire.window !== "in" && (
+          {isVolume && (
+            <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-orange-600 text-white">
+              VOLUME PAPER · +30% / −15%
+            </span>
+          )}
+          {!isFrontier && !isVolume && fire.window !== "in" && (
             <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-amber-500 text-white">
               ⏰ OUTSIDE PLAYBOOK HOURS · NOT COUNTED
             </span>
@@ -410,6 +416,17 @@ export default function ZeroDTE() {
                 ? `${data.frontier.trades} trade${data.frontier.trades === 1 ? "" : "s"} · deployed ${wholeMoney(data.frontier.deployed)} · runner/−50%`
                 : "no PUT pts≥12 first-touch fire"} />
           </div>
+          {(data.volume?.trades || 0) > 0 && (
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-5">
+              <StatCard label="Volume sleeve Day P&L" value={wholeMoney(data.volume.pnl)}
+                tone={data.volume.pnl > 0 ? "good" : data.volume.pnl < 0 ? "bad" : undefined}
+                sub={`${data.volume.trades} trade${data.volume.trades === 1 ? "" : "s"} · $1k · +30%/−15% · paper only`} />
+              <StatCard label="Frontier book (v7 + volume)"
+                value={wholeMoney((data.frontier?.pnl || 0) + (data.volume?.pnl || 0))}
+                tone={((data.frontier?.pnl || 0) + (data.volume?.pnl || 0)) > 0 ? "good" : ((data.frontier?.pnl || 0) + (data.volume?.pnl || 0)) < 0 ? "bad" : undefined}
+                sub={`${(data.frontier?.trades || 0) + (data.volume?.trades || 0)} trades combined · official P&L unchanged`} />
+            </div>
+          )}
 
           {/* ---- Frontier paper trades (audit lane) ---- */}
           {(data.frontier?.selected || []).length > 0 && (
@@ -436,6 +453,39 @@ export default function ZeroDTE() {
                     fire={{ ...view.fire, steps: stepsByClock[f.clock + f.direction] }}
                     contracts={view.contracts}
                     pnl={view.pnl}
+                  />
+                );
+              })}
+            </div>
+          )}
+
+          {/* ---- Volume sleeve paper trades ---- */}
+          {(data.volume?.selected || []).length > 0 && (
+            <div className="space-y-4 mb-5">
+              <div className="flex flex-wrap items-end justify-between gap-2">
+                <div>
+                  <div className={`${heading} text-orange-700 dark:text-orange-300`}>Volume sleeve trades — paper only</div>
+                  <div className={`text-xs mt-1 ${faint}`}>
+                    ORB fail / ORB hold / VWAP reclaim / weekly PDH-PDL drive · $1k max · +30% / −15%.
+                    Cadence sleeve next to Frontier v7; does not change Official Day P&L.
+                  </div>
+                </div>
+                <div className="text-right text-sm">
+                  <div className="font-bold text-orange-700 dark:text-orange-300">{wholeMoney(data.volume.pnl)}</div>
+                  <div className={faint}>deployed {wholeMoney(data.volume.deployed)}</div>
+                </div>
+              </div>
+              {data.volume.selected.map((f, i) => {
+                const entry = f.trade.entryPrice;
+                const contracts = Math.max(1, Math.floor(1000 / (entry * 100)));
+                const pnl = +(contracts * (f.trade.exitPrice - entry) * 100).toFixed(2);
+                return (
+                  <TradeCard
+                    key={`volume-${i}`}
+                    lane="volume"
+                    fire={f}
+                    contracts={contracts}
+                    pnl={pnl}
                   />
                 );
               })}
@@ -631,6 +681,10 @@ const CALENDAR_LANES = {
     label: "Frontier v7", pnlKey: "frontierPnl", tradesKey: "frontierTradePnls",
     deployedKey: "frontierDeployed", tradeDeployedsKey: "frontierTradeDeployeds",
   },
+  volume: {
+    label: "Volume sleeve", pnlKey: "volumePnl", tradesKey: "volumeTradePnls",
+    deployedKey: "volumeDeployed", tradeDeployedsKey: "volumeTradeDeployeds",
+  },
 };
 
 function laneDay(day, lane) {
@@ -784,6 +838,8 @@ function summarizeYearTotals(months) {
   const shenWins = count("shenWins");
   const frontierTrades = count("frontierTrades");
   const frontierWins = count("frontierWins");
+  const volumeTrades = count("volumeTrades");
+  const volumeWins = count("volumeWins");
   return {
     pnl: sum("pnl"),
     excludedPnl: sum("excludedPnl"),
@@ -810,6 +866,11 @@ function summarizeYearTotals(months) {
     frontierWins,
     frontierWinRate: frontierTrades ? +((frontierWins / frontierTrades) * 100).toFixed(1) : null,
     frontierDeployed: sum("frontierDeployed"),
+    volumePnl: sum("volumePnl"),
+    volumeTrades,
+    volumeWins,
+    volumeWinRate: volumeTrades ? +((volumeWins / volumeTrades) * 100).toFixed(1) : null,
+    volumeDeployed: sum("volumeDeployed"),
     nearMissReasons: {},
   };
 }
@@ -857,6 +918,7 @@ function MonthBox({ month, totals, lane, onOpen }) {
     : config.tradesKey === "excludedTradePnls" ? "excludedTrades"
     : config.tradesKey === "experimentalTradePnls" ? "experimentalTrades"
     : config.tradesKey === "shenTradePnls" ? "shenTrades"
+    : config.tradesKey === "volumeTradePnls" ? "volumeTrades"
     : "frontierTrades";
   const trades = Number(totals?.[tradeKey] ?? 0);
   const traded = trades > 0;
@@ -1111,14 +1173,23 @@ function CalendarView({ onBack, onOpenDay, initialReturn }) {
           </div>
         </button>
       </div>
-      <div className="mb-4">
+      <div className="grid sm:grid-cols-2 gap-4 mb-4">
         <button type="button" onClick={() => setCalendarLane("frontier")} aria-pressed={calendarLane === "frontier"}
-          className={`w-full rounded-2xl bg-gradient-to-br from-teal-600 to-emerald-800 text-white p-5 flex items-center gap-4 text-left transition ${calendarLane === "frontier" ? "ring-4 ring-teal-300 ring-offset-2 dark:ring-offset-zinc-950" : "hover:scale-[1.01]"}`}>
+          className={`rounded-2xl bg-gradient-to-br from-teal-600 to-emerald-800 text-white p-5 flex items-center gap-4 text-left transition ${calendarLane === "frontier" ? "ring-4 ring-teal-300 ring-offset-2 dark:ring-offset-zinc-950" : "hover:scale-[1.01]"}`}>
           <div className="w-11 h-11 rounded-xl bg-white/15 flex items-center justify-center"><Sparkles size={20} /></div>
           <div className="min-w-0">
-            <div className="text-[11px] uppercase tracking-wider font-semibold text-teal-100">Frontier v7 · paper only · $1k/trade · PUT pts≥12 · runner / −50%</div>
+            <div className="text-[11px] uppercase tracking-wider font-semibold text-teal-100">Frontier v7 · paper · $1k · PUT pts≥12 · runner / −50%</div>
             <div className="text-3xl font-bold whitespace-nowrap">{allTotals ? (allTotals.frontierPnl >= 0 ? "+" : "") + wholeMoney(allTotals.frontierPnl) : "—"}</div>
-            <div className="text-xs text-teal-100">{tradeSummary(allTotals?.frontierTrades, allTotals?.frontierWinRate)} · touch 1 · from 9:45 · best score/day · re-sim for true exits</div>
+            <div className="text-xs text-teal-100">{tradeSummary(allTotals?.frontierTrades, allTotals?.frontierWinRate)} · touch 1 · from 9:45</div>
+          </div>
+        </button>
+        <button type="button" onClick={() => setCalendarLane("volume")} aria-pressed={calendarLane === "volume"}
+          className={`rounded-2xl bg-gradient-to-br from-orange-600 to-amber-800 text-white p-5 flex items-center gap-4 text-left transition ${calendarLane === "volume" ? "ring-4 ring-orange-300 ring-offset-2 dark:ring-offset-zinc-950" : "hover:scale-[1.01]"}`}>
+          <div className="w-11 h-11 rounded-xl bg-white/15 flex items-center justify-center"><Layers size={20} /></div>
+          <div className="min-w-0">
+            <div className="text-[11px] uppercase tracking-wider font-semibold text-orange-100">Volume sleeve · paper · $1k · +30% / −15%</div>
+            <div className="text-3xl font-bold whitespace-nowrap">{allTotals ? (allTotals.volumePnl >= 0 ? "+" : "") + wholeMoney(allTotals.volumePnl) : "—"}</div>
+            <div className="text-xs text-orange-100">{tradeSummary(allTotals?.volumeTrades, allTotals?.volumeWinRate)} · ORB / VWAP / weeklies · with v7 book ~$250/day · ~30 tpm</div>
           </div>
         </button>
       </div>

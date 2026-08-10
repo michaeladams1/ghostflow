@@ -42,12 +42,21 @@ const day = calendarDaysFromRows([
     points: 15, et_minute: 605, touch_number: 2,
   },
   { session_date: "2026-08-03", lane: "official", counted: false, pb_window: "after", entry_price: null, pnl: null },
+  {
+    session_date: "2026-08-03", lane: "VOLUME", counted: false, pb_window: "research",
+    entry_price: 2.0, exit_price: 2.6, pnl: "300",
+    direction: "CALL", level_type: "ORB15_HOLD", tier: "ORB_HOLD",
+    points: null, et_minute: 590, touch_number: 1, contracts: 5,
+  },
 ])[0];
 
 assert.deepEqual(day.tradePnls, [100, -90]);
 assert.deepEqual(day.excludedTradePnls, [40, -25]);
 assert.deepEqual(day.experimentalTradePnls, [50]);
 assert.deepEqual(day.shenTradePnls, [80, 75]);
+assert.deepEqual(day.volumeTradePnls, [300]);
+assert.equal(day.volumePnl, 300);
+assert.equal(day.volumeDeployed, 1000);
 // Best points first-touch uses stored frontier_pnl ($800), not playbook $100.
 assert.deepEqual(day.frontierTradePnls, [800]);
 assert.equal(day.frontierPnl, 800);
