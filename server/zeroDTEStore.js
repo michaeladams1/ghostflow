@@ -28,6 +28,15 @@ function deployedNotional(entryPrice, contracts, { dollars = 1000 } = {}) {
   return +(c * entry * 100).toFixed(2);
 }
 
+/** Open interval for concurrent-capital sweeps (ET minutes). */
+function tradeInterval(row, deployed) {
+  const start = row.et_minute != null ? Number(row.et_minute) : null;
+  if (!Number.isFinite(start) || !(Number(deployed) > 0)) return null;
+  const hold = row.hold_minutes != null ? Number(row.hold_minutes) : 0;
+  const end = start + (Number.isFinite(hold) && hold > 0 ? hold : 0);
+  return { startMin: start, endMin: end, deployed: Number(deployed) };
+}
+
 // Deterministic id: re-simulating a day overwrites its own rows rather than
 // appending duplicates.
 function tradeId({ symbol, sessionDate, lane, direction, clock, tier, codeVersion }) {
@@ -145,7 +154,7 @@ export async function loadSavedCalendarDays({ symbol = "SPY", year, month }) {
   const { rows } = await pool.query(
     `SELECT session_date, lane, pb_window, entry_price, exit_price, pnl, counted,
             contracts, direction, level_type, tier, points, et_minute, touch_number, level,
-            frontier_exit_price, frontier_pnl
+            hold_minutes, frontier_exit_price, frontier_pnl
      FROM zerodte_trades
      WHERE symbol = $1 AND code_version = $2
        AND session_date >= $3 AND session_date < $4
@@ -166,12 +175,12 @@ export function calendarDaysFromRows(rows, { flowByDate = null } = {}) {
   const dayFor = (date) => {
     if (!byDate.has(date)) byDate.set(date, {
       date, pnl: 0, excludedPnl: 0, trades: 0, excludedTrades: 0,
-      tradePnls: [], tradeDeployeds: [],
-      excludedTradePnls: [], excludedTradeDeployeds: [],
-      experimentalTradePnls: [], experimentalTradeDeployeds: [],
-      shenTradePnls: [], shenTradeDeployeds: [],
-      volumeTradePnls: [], volumeTradeDeployeds: [],
-      frontierTradePnls: [], frontierTradeDeployeds: [],
+      tradePnls: [], tradeDeployeds: [], tradeIntervals: [],
+      excludedTradePnls: [], excludedTradeDeployeds: [], excludedTradeIntervals: [],
+      experimentalTradePnls: [], experimentalTradeDeployeds: [], experimentalTradeIntervals: [],
+      shenTradePnls: [], shenTradeDeployeds: [], shenTradeIntervals: [],
+      volumeTradePnls: [], volumeTradeDeployeds: [], volumeTradeIntervals: [],
+      frontierTradePnls: [], frontierTradeDeployeds: [], frontierTradeIntervals: [],
       experimentalPnl: 0, experimentalTrades: 0, experimentalWins: 0,
       shenPnl: 0, shenTrades: 0, shenWins: 0,
       volumePnl: 0, volumeTrades: 0, volumeWins: 0,
@@ -190,22 +199,28 @@ export function calendarDaysFromRows(rows, { flowByDate = null } = {}) {
     const pnl = Number(row.pnl);
     const entryPrice = row.entry_price != null ? Number(row.entry_price) : null;
     const deployed = deployedNotional(entryPrice, row.contracts) ?? 0;
+    const interval = tradeInterval(row, deployed);
     if (row.lane === "official" && row.counted) {
       day.tradePnls.push(pnl); day.tradeDeployeds.push(deployed);
+      if (interval) day.tradeIntervals.push(interval);
       day.pnl += pnl; day.deployed += deployed; day.trades++;
     } else if (row.lane === "official" && row.pb_window !== "in") {
       day.excludedTradePnls.push(pnl); day.excludedTradeDeployeds.push(deployed);
+      if (interval) day.excludedTradeIntervals.push(interval);
       day.excludedPnl += pnl; day.excludedDeployed += deployed; day.excludedTrades++;
     } else if (row.lane === "SHEN_CONVICTION") {
       day.shenTradePnls.push(pnl); day.shenTradeDeployeds.push(deployed);
+      if (interval) day.shenTradeIntervals.push(interval);
       day.shenPnl += pnl; day.shenDeployed += deployed; day.shenTrades++;
       if (pnl > 0) day.shenWins++;
     } else if (row.lane === VOLUME_LANE) {
       day.volumeTradePnls.push(pnl); day.volumeTradeDeployeds.push(deployed);
+      if (interval) day.volumeTradeIntervals.push(interval);
       day.volumePnl += pnl; day.volumeDeployed += deployed; day.volumeTrades++;
       if (pnl > 0) day.volumeWins++;
     } else if (row.lane !== "official") {
       day.experimentalTradePnls.push(pnl); day.experimentalTradeDeployeds.push(deployed);
+      if (interval) day.experimentalTradeIntervals.push(interval);
       day.experimentalPnl += pnl; day.experimentalDeployed += deployed; day.experimentalTrades++;
       if (pnl > 0) day.experimentalWins++;
     }
@@ -243,8 +258,11 @@ export function calendarDaysFromRows(rows, { flowByDate = null } = {}) {
       const rank = frontierLanePriority(row.lane, { counted: !!row.counted });
       const prev = day._frontierKeys.get(key);
       if (!prev || rank < prev.rank) {
+        const hold = row.hold_minutes != null ? Number(row.hold_minutes) : 0;
         day._frontierKeys.set(key, {
           pnl: frontierPnl, deployed: frontierDeployed, rank, points, etMinute, sessionDate: row.session_date,
+          startMin: etMinute,
+          endMin: etMinute != null ? etMinute + (Number.isFinite(hold) && hold > 0 ? hold : 0) : null,
         });
       }
     }
@@ -254,11 +272,15 @@ export function calendarDaysFromRows(rows, { flowByDate = null } = {}) {
     const frontierSelected = selectFrontierBestPerDay([...day._frontierKeys.values()]);
     const frontierPnls = frontierSelected.map((x) => x.pnl);
     const frontierDeployeds = frontierSelected.map((x) => x.deployed || 0);
+    const frontierTradeIntervals = frontierSelected
+      .filter((x) => x.startMin != null && Number(x.deployed) > 0)
+      .map((x) => ({ startMin: x.startMin, endMin: x.endMin, deployed: Number(x.deployed) }));
     const { _frontierKeys, ...rest } = day;
     return {
       ...rest,
       frontierTradePnls: frontierPnls,
       frontierTradeDeployeds: frontierDeployeds,
+      frontierTradeIntervals,
       frontierTrades: frontierPnls.length,
       frontierWins: frontierPnls.filter((p) => p > 0).length,
       frontierPnl: +frontierPnls.reduce((sum, p) => sum + p, 0).toFixed(2),

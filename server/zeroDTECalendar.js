@@ -16,6 +16,7 @@ import {
 import { simulateAllFires } from "./zeroDTEOptionSim.js";
 import { buildSessionStory } from "./zeroDTEStory.js";
 import { saveSessionTrades } from "./zeroDTEStore.js";
+import { avgDailyDeployed, maxConcurrentDeployed } from "../src/calendarChartSeries.js";
 
 const dayCache = new Map(); // "SPY:2026-08-07" -> summary
 
@@ -39,6 +40,16 @@ function deployedOf(f) {
   const contracts = contractsFor(f);
   return +(contracts * f.trade.entryPrice * 100).toFixed(2);
 }
+function intervalOf(f, deployed = deployedOf(f)) {
+  const start = f?.trade?.entryMin;
+  if (!(Number(deployed) > 0) || start == null) return null;
+  const end = f?.trade?.exitMin;
+  return {
+    startMin: Number(start),
+    endMin: end != null ? Number(end) : Number(start),
+    deployed: Number(deployed),
+  };
+}
 function frontierPnlOf(f) {
   return f.trade?.frontierPnl ?? frontierPaperPnl(
     f.trade?.entryPrice, f.trade?.frontierExitPrice ?? f.trade?.exitPrice,
@@ -46,6 +57,17 @@ function frontierPnlOf(f) {
 }
 function frontierDeployedOf(f) {
   return frontierDeployedNotional(f.trade?.entryPrice) ?? 0;
+}
+function frontierIntervalOf(f) {
+  const deployed = frontierDeployedOf(f);
+  const start = f?.trade?.entryMin;
+  if (!(Number(deployed) > 0) || start == null) return null;
+  const end = f?.trade?.frontierExitMin ?? f?.trade?.exitMin;
+  return {
+    startMin: Number(start),
+    endMin: end != null ? Number(end) : Number(start),
+    deployed: Number(deployed),
+  };
 }
 
 async function simulateDay(symbol, date) {
@@ -118,33 +140,42 @@ async function simulateDay(symbol, date) {
         signals: fires.length,
         tradePnls: counted.map(pnlOf),
         tradeDeployeds: counted.map(deployedOf),
+        tradeIntervals: counted.map((f) => intervalOf(f)).filter(Boolean),
         deployed: +counted.reduce((sum, f) => sum + deployedOf(f), 0).toFixed(2),
         excludedTradePnls: excluded.map(pnlOf),
         excludedTradeDeployeds: excluded.map(deployedOf),
+        excludedTradeIntervals: excluded.map((f) => intervalOf(f)).filter(Boolean),
         excludedDeployed: +excluded.reduce((sum, f) => sum + deployedOf(f), 0).toFixed(2),
         experimentalPnl: +experimental.reduce((sum, f) => sum + pnlOf(f), 0).toFixed(2),
         experimentalTrades: experimental.length,
         experimentalWins: experimental.filter((f) => f.trade.pctReturn > 0).length,
         experimentalTradePnls: experimental.map(pnlOf),
         experimentalTradeDeployeds: experimental.map(deployedOf),
+        experimentalTradeIntervals: experimental.map((f) => intervalOf(f)).filter(Boolean),
         experimentalDeployed: +experimental.reduce((sum, f) => sum + deployedOf(f), 0).toFixed(2),
         shenPnl: +shen.reduce((sum, f) => sum + pnlOf(f), 0).toFixed(2),
         shenTrades: shen.length,
         shenWins: shen.filter((f) => f.trade.pctReturn > 0).length,
         shenTradePnls: shen.map(pnlOf),
         shenTradeDeployeds: shen.map(deployedOf),
+        shenTradeIntervals: shen.map((f) => intervalOf(f)).filter(Boolean),
         shenDeployed: +shen.reduce((sum, f) => sum + deployedOf(f), 0).toFixed(2),
         frontierPnl: +frontier.reduce((sum, f) => sum + frontierPnlOf(f), 0).toFixed(2),
         frontierTrades: frontier.length,
         frontierWins: frontier.filter((f) => frontierPnlOf(f) > 0).length,
         frontierTradePnls: frontier.map(frontierPnlOf),
         frontierTradeDeployeds: frontier.map(frontierDeployedOf),
+        frontierTradeIntervals: frontier.map((f) => frontierIntervalOf(f)).filter(Boolean),
         frontierDeployed: +frontier.reduce((sum, f) => sum + frontierDeployedOf(f), 0).toFixed(2),
         volumePnl: volume.pnl,
         volumeTrades: volume.trades,
         volumeWins: volume.wins,
         volumeTradePnls: volume.tradePnls,
         volumeTradeDeployeds: volume.tradeDeployeds,
+        volumeTradeIntervals: (volumeFires || [])
+          .filter((f) => f?.trade?.ok)
+          .map((f) => intervalOf(f, volumeDeployed(f.trade?.entryPrice)))
+          .filter(Boolean),
         volumeDeployed: volume.deployed,
         nearMissReasons: (s.nearMisses || []).flatMap((x) => x.reasons),
       };
@@ -213,7 +244,21 @@ export function summarizeMonth({ symbol = "SPY", year, month, days, saved = fals
   const volumeTradePnls = days.flatMap((x) => x.volumeTradePnls || []);
   const volumeTrades = volumeTradePnls.length;
   const volumeWins = volumeTradePnls.filter((p) => p > 0).length;
-  const sumDeployed = (key) => +days.reduce((s, x) => s + Number(x?.[key] || 0), 0).toFixed(2);
+  // Aggregate capital: avg daily (trading days only) + max open at once.
+  // Never the lifetime sum of entries — that number must not appear in totals.
+  const avgDeployed = (deployedKey, tradesKey) => {
+    const active = days.filter((x) => Number(x?.[tradesKey] || 0) > 0 && Number(x?.[deployedKey] || 0) > 0);
+    return avgDailyDeployed(active.map((x) => x?.[deployedKey]));
+  };
+  const maxDeployed = (intervalsKey, deployedKey, tradesKey) => {
+    const active = days.filter((x) => Number(x?.[tradesKey] || 0) > 0);
+    const dailyPeaks = active.map((x) => {
+      const concurrent = maxConcurrentDeployed(x?.[intervalsKey] || []);
+      if (concurrent > 0) return concurrent;
+      return Number(x?.[deployedKey] || 0);
+    }).filter((v) => v > 0);
+    return dailyPeaks.length ? +Math.max(...dailyPeaks).toFixed(2) : 0;
+  };
   const nearMissReasons = {};
   for (const reason of days.flatMap((x) => x.nearMissReasons || [])) nearMissReasons[reason] = (nearMissReasons[reason] || 0) + 1;
 
@@ -231,32 +276,38 @@ export function summarizeMonth({ symbol = "SPY", year, month, days, saved = fals
       bestTrade: allTradePnls.length ? Math.max(...allTradePnls) : null,
       worstTrade: allTradePnls.length ? Math.min(...allTradePnls) : null,
       tradingDays: days.filter((x) => !x.noData).length,
-      deployed: sumDeployed("deployed"),
-      excludedDeployed: sumDeployed("excludedDeployed"),
+      deployed: avgDeployed("deployed", "trades"),
+      maxDeployed: maxDeployed("tradeIntervals", "deployed", "trades"),
+      excludedDeployed: avgDeployed("excludedDeployed", "excludedTrades"),
+      excludedMaxDeployed: maxDeployed("excludedTradeIntervals", "excludedDeployed", "excludedTrades"),
       experimentalPnl: +experimentalTradePnls.reduce((sum, x) => sum + x, 0).toFixed(2),
       experimentalTrades,
       experimentalWins,
       experimentalLosses: experimentalTrades - experimentalWins,
       experimentalWinRate: experimentalTrades ? +((experimentalWins / experimentalTrades) * 100).toFixed(1) : null,
-      experimentalDeployed: sumDeployed("experimentalDeployed"),
+      experimentalDeployed: avgDeployed("experimentalDeployed", "experimentalTrades"),
+      experimentalMaxDeployed: maxDeployed("experimentalTradeIntervals", "experimentalDeployed", "experimentalTrades"),
       shenPnl: +shenTradePnls.reduce((sum, x) => sum + x, 0).toFixed(2),
       shenTrades,
       shenWins,
       shenLosses: shenTrades - shenWins,
       shenWinRate: shenTrades ? +((shenWins / shenTrades) * 100).toFixed(1) : null,
-      shenDeployed: sumDeployed("shenDeployed"),
+      shenDeployed: avgDeployed("shenDeployed", "shenTrades"),
+      shenMaxDeployed: maxDeployed("shenTradeIntervals", "shenDeployed", "shenTrades"),
       frontierPnl: +frontierTradePnls.reduce((sum, x) => sum + x, 0).toFixed(2),
       frontierTrades,
       frontierWins,
       frontierLosses: frontierTrades - frontierWins,
       frontierWinRate: frontierTrades ? +((frontierWins / frontierTrades) * 100).toFixed(1) : null,
-      frontierDeployed: sumDeployed("frontierDeployed"),
+      frontierDeployed: avgDeployed("frontierDeployed", "frontierTrades"),
+      frontierMaxDeployed: maxDeployed("frontierTradeIntervals", "frontierDeployed", "frontierTrades"),
       volumePnl: +volumeTradePnls.reduce((sum, x) => sum + x, 0).toFixed(2),
       volumeTrades,
       volumeWins,
       volumeLosses: volumeTrades - volumeWins,
       volumeWinRate: volumeTrades ? +((volumeWins / volumeTrades) * 100).toFixed(1) : null,
-      volumeDeployed: sumDeployed("volumeDeployed"),
+      volumeDeployed: avgDeployed("volumeDeployed", "volumeTrades"),
+      volumeMaxDeployed: maxDeployed("volumeTradeIntervals", "volumeDeployed", "volumeTrades"),
       nearMissReasons,
     },
   };
