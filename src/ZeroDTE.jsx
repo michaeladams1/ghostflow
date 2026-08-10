@@ -376,7 +376,7 @@ export default function ZeroDTE() {
             <input type="date" value={sessionDate} onChange={(e) => setSessionDate(e.target.value)}
               className="px-2.5 py-1.5 text-sm rounded-md border border-zinc-300 dark:border-zinc-700 bg-white dark:bg-zinc-900" />
           </div>
-          <button onClick={run} disabled={loading}
+          <button onClick={() => run()} disabled={loading}
             className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-sm font-medium px-3 py-1.5 rounded-md">
             {loading ? <Loader2 size={16} className="animate-spin" /> : <Zap size={16} />}
             {loading ? "Replaying session…" : "Run debrief"}
