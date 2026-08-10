@@ -3,7 +3,8 @@
 // Recipe v1 (historic, refine later):
 //   SPY · CALL or PUT · DTE 0–5 · strikes within ±3% of spot
 //   short-gamma regime (net GEX < 0 on that expiry) · flow-print trigger
-//   entry premium ≤ $1.25 · $1k paper · +30% / −15% · 9:45–11:15 · max 2/day
+//   entry premium ≤ $1.25 · $1k paper · +30% / −15% · full RTH · max 2/day
+//   No playbook 9:45–11:15 lock — multi-DTE doesn't need that window.
 //
 // LIVE EXECUTION: permanently disabled. LIVE_EXEC_SLEEVES stays Frontier+Volume.
 // Day calendar re-sims do not call this; use frontierGammaBackfill.js.
@@ -16,9 +17,9 @@ export const GAMMA_LANE = "GAMMA";
 export const GAMMA_PAPER_DOLLARS = 1000;
 export const GAMMA_TP_MULT = 1.30;
 export const GAMMA_SL_MULT = 0.85;
-export const GAMMA_HARD_STOP_MIN = 675; // 11:15 ET
-export const GAMMA_WINDOW_START_MIN = 585; // 9:45 ET
-export const GAMMA_WINDOW_END_MIN = 675;
+export const GAMMA_HARD_STOP_MIN = 960; // flat by 16:00 ET (session end)
+export const GAMMA_WINDOW_START_MIN = 570; // 9:30 ET RTH open
+export const GAMMA_WINDOW_END_MIN = 960; // 16:00 ET — full regular session
 export const GAMMA_MAX_PER_DAY = 2;
 export const GAMMA_MIN_DTE = 0;
 export const GAMMA_MAX_DTE = 5; // "a few days out" — not locked to 0DTE
@@ -26,7 +27,7 @@ export const GAMMA_MONEYNESS = 0.03;
 export const GAMMA_MAX_ENTRY = 1.25; // premium price proxy (Alpaca last/trade)
 /** Hard off — do not flip without a separate live-paper allowlist PR. */
 export const GAMMA_LIVE_ENABLED = false;
-export const GAMMA_VERSION = "flow_shortgex_dte0to5_mny3_px125__tp30_sl15_1k_max2";
+export const GAMMA_VERSION = "flow_shortgex_dte0to5_mny3_px125_rth__tp30_sl15_1k_max2";
 
 const flowEp = QD_ENDPOINTS.find((e) => e.id === "order_flow_consolidated");
 const gexEp = QD_ENDPOINTS.find((e) => e.id === "exposure_by_strike_gamma");

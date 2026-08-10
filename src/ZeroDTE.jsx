@@ -1132,7 +1132,7 @@ function CalendarView({ onBack, onOpenDay, initialReturn }) {
           <div className="min-w-0">
             <div className="text-[11px] uppercase tracking-wider font-semibold text-fuchsia-100">Gamma sleeve · research only · never live · $1k · DTE 0–5</div>
             <div className="text-3xl font-bold whitespace-nowrap">{allTotals ? (allTotals.gammaPnl >= 0 ? "+" : "") + wholeMoney(allTotals.gammaPnl) : "—"}</div>
-            <div className="text-xs text-fuchsia-100">{tradeSummary(allTotals?.gammaTrades, allTotals?.gammaWinRate)} · flow + short GEX · ≤$1.25 · max 2/day</div>
+            <div className="text-xs text-fuchsia-100">{tradeSummary(allTotals?.gammaTrades, allTotals?.gammaWinRate)} · flow + short GEX · RTH · ≤$1.25 · max 2/day</div>
           </div>
         </button>
       </div>

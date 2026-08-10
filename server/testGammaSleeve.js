@@ -106,7 +106,7 @@ const flowResult = {
 const hits = detectGammaFires({ sessionDate, flowResult, gexResult, priceResult });
 assert.ok(hits.length >= 1 && hits.length <= 2, `expected 1-2 hits, got ${hits.length}`);
 assert.ok(hits.every((h) => h.dte >= 0 && h.dte <= 5));
-assert.ok(hits.every((h) => h.etMinute >= 585 && h.etMinute < 675));
+assert.ok(hits.every((h) => h.etMinute >= 570 && h.etMinute < 960));
 assert.ok(!hits.some((h) => h.strike === 510), "positive gamma wall strike must be excluded");
 assert.ok(hits.some((h) => h.direction === "CALL") || hits.some((h) => h.direction === "PUT"));
 

@@ -401,9 +401,10 @@ change so the stored calendar reflects the new fires**.
 Recipe v1 (`GAMMA_VERSION` in `frontierGamma.js`): SPY **CALL or PUT**, **DTE
 0–5**, strike within **±3%** of spot, **short-gamma expiry** (net GEX `< 0`
 from Quant Data `exposure_by_strike_gamma`), trigger = consolidated **order
-flow** print in **9:45–11:15 ET**, entry premium **≤ $1.25** (Alpaca last),
-**$1k** paper, exits **+30% / −15%**, **max 2/day** (highest premium). Refine
-by kicking out bad trades after the book exists. Historic path:
+flow** print anytime in **regular hours (9:30–16:00 ET)** — no playbook
+9:45–11:15 lock, entry premium **≤ $1.25** (Alpaca last),
+**$1k** paper, exits **+30% / −15%** (flat by close), **max 2/day** (highest
+premium). Refine by kicking out bad trades after the book exists. Historic path:
 `buildGammaFires` → Alpaca option-bar sim → `frontierGammaBackfill.js`
 (lane-scoped). Feature cache `zerodte_gamma_features`. Day re-sims
 **preserve** `lane = GAMMA`. Not wired into live-paper or the hot
