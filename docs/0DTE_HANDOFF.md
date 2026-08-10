@@ -23,7 +23,10 @@ every signal, picks the exact option contract the playbook's rules dictate, simu
 bracket order against that contract's real price history, and writes the day up in plain
 English.
 
-**It is a learning/measurement tool, not a live trading system.** It never places orders.
+**Primary use is still learning/measurement** (debrief + calendar). Optional **live
+paper** for Frontier + Volume is gated by `LIVE_PAPER_MODE` (`off` | `shadow` |
+`submit`) in `server/zeroDTELivePaper.js` — default off. Alpaca has no freeform order
+note; sleeve is tagged in `client_order_id` as `gf-FRONTIER-…` / `gf-VOLUME-…`.
 
 Michael describes himself as a beginner coder with strong options-trading domain
 knowledge. Explain code plainly; don't assume familiarity with JS idioms. He prefers you
@@ -456,10 +459,12 @@ enough same-version observations to pass the project's sample-size guardrails.
 - The playbook's 5-min confirmation *add* (Example 2 scenario B: wait for a 5-min close
   above the level, then add). Would need position adds + blended cost basis.
 - Multi-timeframe chart-bouncing beyond the 5m/10m RSI already used for MTF confluence
-- Pine Script export for live automation (the eventual goal — TV alerts → webhook)
+- Pine Script export for live automation (superseded by in-process live paper worker)
 - Half-dollar Tier 2 levels in the Shen lane. The current engine only has whole-dollar
   psychological levels; adding half dollars should be a deliberate follow-up, not an
   undocumented expansion of this first comparison.
+- Live-paper UI / fill reconciliation vs next-day debrief (worker + `zerodte_live_orders`
+  ledger exist; shadow before `LIVE_PAPER_MODE=submit`)
 
 **Worth auditing:** the touch counter keys VWAP on *type alone*, so every VWAP touch all
 day increments one counter and by the 3rd tag it's permanently skipped. VWAP drifts

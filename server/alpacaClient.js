@@ -7,8 +7,9 @@
 // datasets (XNAS.ITCH, DBEQ.BASIC) are each a partial slice of venues.
 //
 // Free-tier accounts get an error requesting SIP data from the last 15
-// minutes. This client is ONLY ever used retrospectively (end-of-day, or
-// later), so that limit never actually applies here.
+// minutes. Algo Trader Plus removes that wall. Historical debriefs and the
+// live-paper worker both use this client; order placement lives in
+// alpacaTrading.js.
 
 const ALPACA_API_KEY = process.env.ALPACA_API_KEY;
 const ALPACA_SECRET_KEY = process.env.ALPACA_SECRET_KEY;
