@@ -1,18 +1,15 @@
-// FRONTIER v7 — $1,000 max per trade (concurrent capital allowed), blended
-// selection toward ≥$250 holdout avg $/day.
+// FRONTIER v7.1 — $1,000 max per trade (concurrent capital allowed).
 //
-// Selection: PUT only, Edge Lens points ≥ 12, first touch, from 9:45 ET,
-// best score/day. Exits (NOT playbook +20%/-12.5%): runner / −50% stop, hold
-// toward the close. Official / research / Shen keep playbook brackets.
+// Selection: PUT only, **PDH/PDL levels only** (WHOLE_DOLLAR dropped — it was
+// ~13% WR and net-negative on the stored 484-session book), Edge Lens
+// points ≥ 12, first touch, from 9:45 ET, best score/day.
+// Exits (NOT playbook +20%/-12.5%): runner / −50% stop, hold toward close.
 //
-// Local evidence (full PUT bar walks on code_version 89d991cddb31):
-//   server/frontierPutValidate.js → top1_PUT_pts12
-//   holdout avg day ~$576 (25 days) · train ~$173 (56 days)
-// Multi-trade / Shen blends and CALL-inclusive books did not clear $250 on
-// full-period train+holdout at $1k/trade (see frontierBlendSearch.js /
-// frontierBlendExpand.js). Coverage is intentionally thinner than v6.
-//
-// Requires a new 24-month backtest so frontier_* columns match this filter.
+// Stored-book evidence (code_version 1a20ea38464b, selection-only — no re-sim):
+//   all PUT pts≥12:     81 trades · 19.8% WR · +$22.7k · ~$280/day
+//   PDH/PDL only:       22 trades · 36.4% WR · +$25.0k · ~$1,136/day
+// Cadence is thinner; Volume sleeve covers trade count. No 24mo re-sim needed
+// for this filter change — calendar re-derives Frontier at read time.
 
 import { QD_ENDPOINTS } from "./quantDataRegistry.js";
 import { fetchEndpointCached } from "./quantDataClient.js";
@@ -22,6 +19,8 @@ export const FRONTIER_V3_MIN_POINTS = 12;
 export const FRONTIER_V3_MAX_POINTS = null;
 export const FRONTIER_V3_MIN_ENTRY = 0;
 export const FRONTIER_V3_DIRECTION = "PUT";
+/** Prior-day high/low only — WHOLE_DOLLAR / PMH / PML / VWAP are out. */
+export const FRONTIER_V3_LEVEL_TYPES = Object.freeze(["PDH", "PDL"]);
 export const FRONTIER_V3_FLOW_VETO = null;
 export const FRONTIER_V3_FLOW_BUCKETS = 30;
 export const FRONTIER_V3_REQUIRE_FIRST_TOUCH = true;
@@ -37,13 +36,16 @@ export const FRONTIER_TP_MULT = 10.0;
 export const FRONTIER_SL_MULT = 0.50;
 /** 16:00 ET — no playbook 11:15 force-flat for Frontier. */
 export const FRONTIER_HARD_STOP_MIN = 960;
-export const FRONTIER_V3_VERSION = "put_pts12_touch1_from945__runner_sl50_1k";
+export const FRONTIER_V3_VERSION = "put_pdh_pdl_pts12_touch1_from945__runner_sl50_1k";
 
 export function isFrontierV3Fire({
   direction, levelType, tier, points, etMinute, entryPrice, touchNumber,
 } = {}) {
-  void levelType; void tier;
+  void tier;
   if (FRONTIER_V3_DIRECTION && direction !== FRONTIER_V3_DIRECTION) return false;
+  if (FRONTIER_V3_LEVEL_TYPES?.length) {
+    if (!FRONTIER_V3_LEVEL_TYPES.includes(levelType)) return false;
+  }
   const minute = Number(etMinute);
   if (!Number.isFinite(minute) || minute < FRONTIER_V3_MIN_MINUTE) return false;
   const entry = Number(entryPrice);

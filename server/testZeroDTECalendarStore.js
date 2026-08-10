@@ -7,13 +7,13 @@ const day = calendarDaysFromRows([
   {
     session_date: "2026-08-03", lane: "official", counted: true, pb_window: "in",
     entry_price: 1.05, exit_price: 1.26, frontier_exit_price: 2.10, frontier_pnl: 800,
-    pnl: "100", direction: "PUT", level_type: "WHOLE_DOLLAR",
+    pnl: "100", direction: "PUT", level_type: "PDH",
     tier: "A", points: 13, et_minute: 610, touch_number: 1,
   },
   {
     session_date: "2026-08-03", lane: "SHEN_CONVICTION", counted: false, pb_window: "in",
     entry_price: 1.05, exit_price: 1.20, frontier_pnl: 400,
-    pnl: "80", direction: "PUT", level_type: "WHOLE_DOLLAR",
+    pnl: "80", direction: "PUT", level_type: "PDH",
     tier: "Shen FULL 3/3", points: 13, et_minute: 610, touch_number: 1,
   },
   {
@@ -69,12 +69,24 @@ const fallback = calendarDaysFromRows([
   {
     session_date: "2026-08-04", lane: "official", counted: true, pb_window: "in",
     entry_price: 1.00, exit_price: 1.20, pnl: "80",
-    direction: "PUT", level_type: "WHOLE_DOLLAR", tier: "A",
+    direction: "PUT", level_type: "PDL", tier: "A",
     points: 12, et_minute: 610, touch_number: 1,
   },
 ])[0];
 assert.equal(fallback.frontierPnl, frontierPaperPnl(1.00, 1.20));
 assert.equal(fallback.frontierDeployed, 1000);
+
+// WHOLE_DOLLAR no longer qualifies for Frontier after v7.1.
+const wholeDollarSkipped = calendarDaysFromRows([
+  {
+    session_date: "2026-08-05", lane: "official", counted: true, pb_window: "in",
+    entry_price: 1.00, exit_price: 1.20, frontier_pnl: 500, pnl: "80",
+    direction: "PUT", level_type: "WHOLE_DOLLAR", tier: "A",
+    points: 14, et_minute: 610, touch_number: 1,
+  },
+])[0];
+assert.equal(wholeDollarSkipped.frontierTrades, 0);
+assert.equal(wholeDollarSkipped.frontierPnl, 0);
 
 const totals = summarizeMonth({ symbol: "SPY", year: 2026, month: 8, days: [day] }).totals;
 assert.equal(totals.frontierTrades, 1);

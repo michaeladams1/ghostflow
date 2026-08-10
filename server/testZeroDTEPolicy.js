@@ -5,7 +5,7 @@ import {
 } from "./zeroDTE.js";
 import {
   FRONTIER_PAPER_DOLLARS, FRONTIER_SL_MULT, FRONTIER_TP_MULT,
-  FRONTIER_V3_DIRECTION, FRONTIER_V3_MIN_POINTS,
+  FRONTIER_V3_DIRECTION, FRONTIER_V3_LEVEL_TYPES, FRONTIER_V3_MIN_POINTS,
   frontierDeployedNotional, frontierPaperPnl, frontierV3FlowVeto,
   passesFrontierV3, selectFrontierBestPerDay, summarizeFrontierFires,
 } from "./frontierV3.js";
@@ -42,12 +42,15 @@ assert.equal(classifyShenConviction({ minutes: 600, levelType: "PDH", touchNumbe
 assert.equal(classifyShenConviction({ minutes: 600, levelType: "PDL", touchNumber: 2, exhaustionMove: 3, moveDistance: 3, rsi: null, direction: "CALL" }), null);
 
 const frontierBase = {
-  direction: "PUT", levelType: "WHOLE_DOLLAR", tier: "A", points: 12,
+  direction: "PUT", levelType: "PDH", tier: "A", points: 12,
   etMinute: 590, entryPrice: 1.05, touchNumber: 1,
 };
 assert.equal(FRONTIER_V3_DIRECTION, "PUT");
 assert.equal(FRONTIER_V3_MIN_POINTS, 12);
+assert.deepEqual(FRONTIER_V3_LEVEL_TYPES, ["PDH", "PDL"]);
 assert.equal(isFrontierFire(frontierBase), true);
+assert.equal(isFrontierFire({ ...frontierBase, levelType: "PDL" }), true);
+assert.equal(isFrontierFire({ ...frontierBase, levelType: "WHOLE_DOLLAR" }), false);
 assert.equal(isFrontierFire({ ...frontierBase, direction: "CALL", levelType: "PDL" }), false);
 assert.equal(isFrontierFire({ ...frontierBase, points: 11 }), false);
 assert.equal(isFrontierFire({ ...frontierBase, tier: "A+" }), true);
@@ -66,8 +69,12 @@ assert.equal(passesFrontierV3({ ...frontierBase, flowImbalance: 0.90 }), true);
 
 const frontierDay = summarizeFrontierFires([
   {
-    direction: "PUT", levelType: "WHOLE_DOLLAR", points: 13, touchNumber: 1, clock: "10:10 AM ET",
+    direction: "PUT", levelType: "PDH", points: 13, touchNumber: 1, clock: "10:10 AM ET",
     trade: { ok: true, entryPrice: 1.00, exitPrice: 1.20, frontierPnl: 400 },
+  },
+  {
+    direction: "PUT", levelType: "WHOLE_DOLLAR", points: 16, touchNumber: 1, clock: "10:05 AM ET",
+    trade: { ok: true, entryPrice: 1.00, exitPrice: 1.20, frontierPnl: 999 },
   },
   {
     direction: "CALL", levelType: "PDL", points: 14, touchNumber: 1, clock: "10:20 AM ET",

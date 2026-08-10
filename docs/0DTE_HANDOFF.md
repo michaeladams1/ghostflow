@@ -344,10 +344,12 @@ the experiment measures entry quality without inventing a dollar mapping for the
 "standard" versus "full" language. Results have their own fourth calendar box and are
 excluded from official and existing research totals.
 
-**Frontier v7 is the live paper lane** ($1,000 max **per trade**; concurrent
+**Frontier v7.1 is the live paper lane** ($1,000 max **per trade**; concurrent
 capital above $1k is allowed, but selection currently keeps **1 fire/day**).
-Eligibility: **PUT only**, Edge Lens **points ≥ 12**, **first touch**,
-`et_minute >= 585`, `entry_price > 0`. Best score/day after setup dedupe.
+Eligibility: **PUT only**, **PDH/PDL levels only** (WHOLE_DOLLAR dropped after
+it showed ~13% WR / net-negative on the stored book), Edge Lens **points ≥ 12**,
+**first touch**, `et_minute >= 585`, `entry_price > 0`. Best score/day after
+setup dedupe. Selection-only change — no 24mo re-sim required.
 **Exits abandon the playbook +20%/−12.5% bracket**: runner target / **−50% stop**,
 hold toward the close (no 11:15 hard stop). Official / research / Shen still use
 playbook brackets. Frontier P&L is stored in `frontier_*` columns at **$1,000
