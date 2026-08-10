@@ -1,13 +1,19 @@
 // Pure unit tests for live-paper id / mode helpers (no DB / Alpaca).
 import assert from "node:assert/strict";
 import {
-  LIVE_SLEEVE_FRONTIER, LIVE_SLEEVE_VOLUME, buildClientOrderId, isRthEtMinute,
-  lastClosedEtMinute, liveFireKey, parseLivePaperMode, sleeveNote,
+  LIVE_EXEC_SLEEVES, LIVE_SLEEVE_FRONTIER, LIVE_SLEEVE_VOLUME, buildClientOrderId,
+  isLiveExecSleeve, isRthEtMinute, lastClosedEtMinute, liveFireKey,
+  parseLivePaperMode, sleeveNote,
 } from "./livePaperIds.js";
 
 assert.equal(sleeveNote("VOLUME"), "VOLUME");
 assert.equal(sleeveNote("frontier"), "FRONTIER");
 assert.equal(sleeveNote("official"), null);
+assert.equal(sleeveNote("GAMMA"), null);
+assert.deepEqual([...LIVE_EXEC_SLEEVES], ["FRONTIER", "VOLUME"]);
+assert.equal(isLiveExecSleeve("FRONTIER"), true);
+assert.equal(isLiveExecSleeve("VOLUME"), true);
+assert.equal(isLiveExecSleeve("GAMMA"), false);
 
 assert.equal(parseLivePaperMode("off"), "off");
 assert.equal(parseLivePaperMode(undefined), "off");

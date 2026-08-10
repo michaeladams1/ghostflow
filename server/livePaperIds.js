@@ -1,14 +1,30 @@
 // Pure helpers for live-paper fire identity + Alpaca client_order_id tagging.
 // No I/O — unit-tested without keys/DB.
+//
+// LIVE EXEC ALLOWLIST: only Frontier + Volume may shadow/submit orders.
+// Research sleeves (GAMMA, Shen, official, …) must never appear here.
 
 export const LIVE_SLEEVE_FRONTIER = "FRONTIER";
 export const LIVE_SLEEVE_VOLUME = "VOLUME";
 
+/** Sleeves the live-paper worker is allowed to act on. GAMMA is intentionally absent. */
+export const LIVE_EXEC_SLEEVES = Object.freeze([
+  LIVE_SLEEVE_FRONTIER,
+  LIVE_SLEEVE_VOLUME,
+]);
+
+export function isLiveExecSleeve(lane) {
+  const note = sleeveNote(lane);
+  return note != null && LIVE_EXEC_SLEEVES.includes(note);
+}
+
 /** Human-readable sleeve note stored in DB and encoded into Alpaca client_order_id. */
 export function sleeveNote(lane) {
   const u = String(lane || "").toUpperCase();
-  if (u === "FRONTIER" || u === "VOLUME") return u;
-  if (u === "VOL") return LIVE_SLEEVE_VOLUME;
+  if (u === "FRONTIER") return LIVE_SLEEVE_FRONTIER;
+  if (u === "VOLUME" || u === "VOL") return LIVE_SLEEVE_VOLUME;
+  // Explicit reject — do not silently map research lanes into live ids.
+  if (u === "GAMMA") return null;
   return null;
 }
 
@@ -20,7 +36,9 @@ export function buildClientOrderId({
   sleeve, sessionDate, setup, direction, etMinute,
 } = {}) {
   const note = sleeveNote(sleeve);
-  if (!note) throw new Error(`invalid sleeve for client_order_id: ${sleeve}`);
+  if (!note || !LIVE_EXEC_SLEEVES.includes(note)) {
+    throw new Error(`invalid sleeve for client_order_id: ${sleeve}`);
+  }
   const ymd = String(sessionDate || "").replace(/-/g, "");
   const setupPart = String(setup || "SETUP").replace(/[^A-Za-z0-9_]/g, "").slice(0, 24) || "SETUP";
   const dir = String(direction || "").toUpperCase().startsWith("P") ? "PUT" : "CALL";
@@ -35,6 +53,9 @@ export function liveFireKey({
   symbol = "SPY", sessionDate, sleeve, setup, direction, etMinute, levelType,
 } = {}) {
   const note = sleeveNote(sleeve);
+  if (!note) {
+    throw new Error(`invalid sleeve for liveFireKey: ${sleeve}`);
+  }
   return [
     symbol,
     sessionDate,

@@ -244,6 +244,9 @@ export function summarizeMonth({ symbol = "SPY", year, month, days, saved = fals
   const volumeTradePnls = days.flatMap((x) => x.volumeTradePnls || []);
   const volumeTrades = volumeTradePnls.length;
   const volumeWins = volumeTradePnls.filter((p) => p > 0).length;
+  const gammaTradePnls = days.flatMap((x) => x.gammaTradePnls || []);
+  const gammaTrades = gammaTradePnls.length;
+  const gammaWins = gammaTradePnls.filter((p) => p > 0).length;
   // Aggregate capital: avg daily (trading days only) + max open at once.
   // Never the lifetime sum of entries — that number must not appear in totals.
   const avgDeployed = (deployedKey, tradesKey) => {
@@ -308,6 +311,13 @@ export function summarizeMonth({ symbol = "SPY", year, month, days, saved = fals
       volumeWinRate: volumeTrades ? +((volumeWins / volumeTrades) * 100).toFixed(1) : null,
       volumeDeployed: avgDeployed("volumeDeployed", "volumeTrades"),
       volumeMaxDeployed: maxDeployed("volumeTradeIntervals", "volumeDeployed", "volumeTrades"),
+      gammaPnl: +gammaTradePnls.reduce((sum, x) => sum + x, 0).toFixed(2),
+      gammaTrades,
+      gammaWins,
+      gammaLosses: gammaTrades - gammaWins,
+      gammaWinRate: gammaTrades ? +((gammaWins / gammaTrades) * 100).toFixed(1) : null,
+      gammaDeployed: avgDeployed("gammaDeployed", "gammaTrades"),
+      gammaMaxDeployed: maxDeployed("gammaTradeIntervals", "gammaDeployed", "gammaTrades"),
       nearMissReasons,
     },
   };

@@ -33,6 +33,11 @@ export const CALENDAR_LANES = {
     deployedKey: "volumeDeployed", tradeDeployedsKey: "volumeTradeDeployeds",
     intervalsKey: "volumeTradeIntervals",
   },
+  gamma: {
+    label: "Gamma sleeve", pnlKey: "gammaPnl", tradesKey: "gammaTradePnls",
+    deployedKey: "gammaDeployed", tradeDeployedsKey: "gammaTradeDeployeds",
+    intervalsKey: "gammaTradeIntervals",
+  },
 };
 
 const MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",

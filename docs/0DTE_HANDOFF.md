@@ -27,6 +27,9 @@ English.
 paper** for Frontier + Volume is gated by `LIVE_PAPER_MODE` (`off` | `shadow` |
 `submit`) in `server/zeroDTELivePaper.js` — default off. Alpaca has no freeform order
 note; sleeve is tagged in `client_order_id` as `gf-FRONTIER-…` / `gf-VOLUME-…`.
+**Live exec allowlist is hard-coded to Frontier + Volume only**
+(`LIVE_EXEC_SLEEVES` in `livePaperIds.js`). The GAMMA research sleeve is never
+collected, shadowed, or submitted — `GAMMA_LIVE_ENABLED` stays false.
 
 Michael describes himself as a beginner coder with strong options-trading domain
 knowledge. Explain code plainly; don't assume familiarity with JS idioms. He prefers you
@@ -101,6 +104,9 @@ route — Michael already has a Databento account.
 ```
 server/
   alpacaClient.js      SPY SIP bars + option bars (occSymbol builds OCC symbols)
+  frontierGamma.js     GAMMA research sleeve scaffold (never live; fires=[] until recipe)
+  zeroDTEGammaStore.js GAMMA feature cache + lane-scoped trade upsert
+  livePaperIds.js      LIVE_EXEC_SLEEVES allowlist (FRONTIER + VOLUME only)
   zeroDTE.js           THE ENGINE. Ports Edge Lens v4 scoring to run retrospectively.
                        Indicators (RSI/ATR/ADX/VWAP/MTF), levels, scoring, fire logic,
                        playbook touch policy, research-lane classification, near-misses
@@ -390,13 +396,24 @@ strictly worse). Version `orb1_hold_sl20_vwap_sl15__tp30_1k`. Persist via
 widest calendar `code_version`) — **rerun the backfill after this recipe
 change so the stored calendar reflects the new fires**.
 
+**Gamma sleeve (paper lane `GAMMA`)** is the third research leg: cheap 0DTE
+volume-accumulation / short-gamma style signals (historic recipe still TBD via
+Quant Data + Alpaca option bars). **Never live.** Scaffold in
+`server/frontierGamma.js` (`buildGammaFires` → `[]` until recipe lands).
+Feature cache table `zerodte_gamma_features`; lane-scoped trade upsert via
+`saveGammaTrades` in `zeroDTEGammaStore.js`. Day re-sims (`saveSessionTrades`)
+**preserve** `lane = GAMMA` rows so Frontier/Volume calendar rebuilds cannot
+wipe gamma research. Calendar card reads `gamma*` aggregates; empty until a
+backfill writes trades.
+
 **Audit layers (do not mix):** Official Day P&L = playbook +20%/−12.5% on
 counted in-hours fires. Frontier Day P&L = PUT pts≥12 first-touch selection
 with runner/−50% exits on the same option bars. Volume Day P&L = VOLUME lane
-rows with +30%/−15%. The daily debrief shows Frontier and Volume as separate
-sections with full trade cards; Frontier cards include an
+rows with +30%/−15%. Gamma Day P&L = GAMMA lane rows only (research). The
+daily debrief shows Frontier and Volume as separate sections with full trade
+cards; Frontier cards include an
 `Audit: N × (exit − entry) × 100 = P&L` line so calendar totals can be
-checked trade-by-trade.
+checked trade-by-trade. Live paper executes Frontier + Volume only.
 
 ---
 
