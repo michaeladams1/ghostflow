@@ -4,12 +4,28 @@
 import { QD_ENDPOINTS } from "./quantDataRegistry.js";
 import { fetchEndpointCached } from "./quantDataClient.js";
 import { netFlowEarlyImbalance } from "./frontierV3.js";
+import { etParts } from "./scanLib.js";
 
-function etEpoch(sessionDate, etMinute) {
+/** Epoch ms for sessionDate + ET clock minute, DST-correct via America/New_York. */
+export function etEpoch(sessionDate, etMinute) {
+  if (!sessionDate || !Number.isFinite(etMinute)) return NaN;
   const h = Math.floor(etMinute / 60);
   const m = etMinute % 60;
+  // Seed near midday UTC and walk until NY local date+minute match.
+  let t = Date.parse(`${sessionDate}T17:00:00Z`);
+  for (let i = 0; i < 12; i++) {
+    const p = etParts(t);
+    if (p.dateStr !== sessionDate) {
+      t += (p.dateStr < sessionDate ? 1 : -1) * 6 * 3600_000;
+      continue;
+    }
+    const diffMin = etMinute - p.minutes;
+    if (diffMin === 0) return t;
+    t += diffMin * 60_000;
+  }
+  // Fallback: still better than a hard-coded EDT offset in winter.
   const pad = (n) => String(n).padStart(2, "0");
-  return new Date(`${sessionDate}T${pad(h)}:${pad(m)}:00-04:00`).getTime();
+  return new Date(`${sessionDate}T${pad(h)}:${pad(m)}:00-05:00`).getTime();
 }
 
 /** Net call-put premium imbalance in [etMinute-windowMin, etMinute]. */
