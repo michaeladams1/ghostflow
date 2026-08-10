@@ -64,12 +64,20 @@ export function walkBracketBars({
 }
 
 export async function simulateBracketTrade({ ticker = "SPY", sessionDate, fire }) {
-  if (!fire.level) {
+  // Gamma (and any flow-picked sleeve) may supply the exact contract strike.
+  // Playbook / Frontier / Volume still require a level for 1-strike-OTM selection.
+  const useFireStrike = fire.useFireStrike || (fire.strike != null && fire.levelType === "GAMMA");
+  if (!useFireStrike && !fire.level) {
     return { ok: false, noLevel: true, reason: `Fired on RSI extension alone with no level touch. Both source documents anchor strike selection to a level ("1 strike OTM from the level"), and the Edge Lens guide calls these "information, not instructions" — so there is no playbook contract to simulate.` };
   }
 
   const expiration = fire.expiration || sessionDate;
-  const strike = pickOtmStrike({ level: fire.level, direction: fire.direction });
+  const strike = useFireStrike
+    ? Number(fire.strike)
+    : pickOtmStrike({ level: fire.level, direction: fire.direction });
+  if (!(strike > 0)) {
+    return { ok: false, reason: "invalid strike for simulation", strike };
+  }
   const occ = occSymbol({ underlying: ticker, expiration, contractType: fire.direction, strike });
 
   let bars;
@@ -86,6 +94,14 @@ export async function simulateBracketTrade({ ticker = "SPY", sessionDate, fire }
 
   const entryBar = bars[entryIdx];
   const entryPrice = entryBar.close;
+  // Cheap-premium gate (Gamma: ask/last ≤ $1.25). Checked before $1k lot sizing.
+  if (fire.maxEntryPrice != null && entryPrice > Number(fire.maxEntryPrice)) {
+    return {
+      ok: false,
+      reason: `entry $${entryPrice.toFixed(2)} above maxEntryPrice $${Number(fire.maxEntryPrice).toFixed(2)}`,
+      contract: occ, strike,
+    };
+  }
   // Volume sleeve (and any fire with maxPremiumDollars) must fit ≥1 lot under the cap.
   if (fire.maxPremiumDollars != null && entryPrice * 100 > Number(fire.maxPremiumDollars)) {
     return {

@@ -104,7 +104,8 @@ route — Michael already has a Databento account.
 ```
 server/
   alpacaClient.js      SPY SIP bars + option bars (occSymbol builds OCC symbols)
-  frontierGamma.js     GAMMA research sleeve scaffold (never live; fires=[] until recipe)
+  frontierGamma.js     GAMMA research sleeve (DTE 0–5 flow+short-GEX; never live)
+  frontierGammaBackfill.js  Lane-scoped historic backfill onto calendar code_version
   zeroDTEGammaStore.js GAMMA feature cache + lane-scoped trade upsert
   livePaperIds.js      LIVE_EXEC_SLEEVES allowlist (FRONTIER + VOLUME only)
   zeroDTE.js           THE ENGINE. Ports Edge Lens v4 scoring to run retrospectively.
@@ -396,15 +397,17 @@ strictly worse). Version `orb1_hold_sl20_vwap_sl15__tp30_1k`. Persist via
 widest calendar `code_version`) — **rerun the backfill after this recipe
 change so the stored calendar reflects the new fires**.
 
-**Gamma sleeve (paper lane `GAMMA`)** is the third research leg: cheap 0DTE
-volume-accumulation / short-gamma style signals (historic recipe still TBD via
-Quant Data + Alpaca option bars). **Never live.** Scaffold in
-`server/frontierGamma.js` (`buildGammaFires` → `[]` until recipe lands).
-Feature cache table `zerodte_gamma_features`; lane-scoped trade upsert via
-`saveGammaTrades` in `zeroDTEGammaStore.js`. Day re-sims (`saveSessionTrades`)
-**preserve** `lane = GAMMA` rows so Frontier/Volume calendar rebuilds cannot
-wipe gamma research. Calendar card reads `gamma*` aggregates; empty until a
-backfill writes trades.
+**Gamma sleeve (paper lane `GAMMA`)** is the third research leg. **Never live.**
+Recipe v1 (`GAMMA_VERSION` in `frontierGamma.js`): SPY **CALL or PUT**, **DTE
+0–5**, strike within **±3%** of spot, **short-gamma expiry** (net GEX `< 0`
+from Quant Data `exposure_by_strike_gamma`), trigger = consolidated **order
+flow** print in **9:45–11:15 ET**, entry premium **≤ $1.25** (Alpaca last),
+**$1k** paper, exits **+30% / −15%**, **max 2/day** (highest premium). Refine
+by kicking out bad trades after the book exists. Historic path:
+`buildGammaFires` → Alpaca option-bar sim → `frontierGammaBackfill.js`
+(lane-scoped). Feature cache `zerodte_gamma_features`. Day re-sims
+**preserve** `lane = GAMMA`. Not wired into live-paper or the hot
+`simulateDay` path — backfill only so Frontier/Volume exec is untouched.
 
 **Audit layers (do not mix):** Official Day P&L = playbook +20%/−12.5% on
 counted in-hours fires. Frontier Day P&L = PUT pts≥12 first-touch selection

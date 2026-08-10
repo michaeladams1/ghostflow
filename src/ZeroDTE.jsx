@@ -1130,9 +1130,9 @@ function CalendarView({ onBack, onOpenDay, initialReturn }) {
           className={`rounded-2xl bg-gradient-to-br from-fuchsia-700 to-rose-900 text-white p-5 flex items-center gap-4 text-left transition ${calendarLane === "gamma" ? "ring-4 ring-fuchsia-300 ring-offset-2 dark:ring-offset-zinc-950" : "hover:scale-[1.01]"}`}>
           <div className="w-11 h-11 rounded-xl bg-white/15 flex items-center justify-center"><Activity size={20} /></div>
           <div className="min-w-0">
-            <div className="text-[11px] uppercase tracking-wider font-semibold text-fuchsia-100">Gamma sleeve · research only · never live · $1k</div>
+            <div className="text-[11px] uppercase tracking-wider font-semibold text-fuchsia-100">Gamma sleeve · research only · never live · $1k · DTE 0–5</div>
             <div className="text-3xl font-bold whitespace-nowrap">{allTotals ? (allTotals.gammaPnl >= 0 ? "+" : "") + wholeMoney(allTotals.gammaPnl) : "—"}</div>
-            <div className="text-xs text-fuchsia-100">{tradeSummary(allTotals?.gammaTrades, allTotals?.gammaWinRate)} · scaffold · no live orders</div>
+            <div className="text-xs text-fuchsia-100">{tradeSummary(allTotals?.gammaTrades, allTotals?.gammaWinRate)} · flow + short GEX · ≤$1.25 · max 2/day</div>
           </div>
         </button>
       </div>
