@@ -466,7 +466,7 @@ export default function ZeroDTE() {
                 <div>
                   <div className={`${heading} text-orange-700 dark:text-orange-300`}>Volume sleeve trades — paper only</div>
                   <div className={`text-xs mt-1 ${faint}`}>
-                    ORB fail / ORB hold / VWAP reclaim / weekly PDH-PDL drive · $1k max · +30% / −15%.
+                    ORB hold + VWAP reclaim only · $1k max · +30% / −15%.
                     Cadence sleeve next to Frontier v7; does not change Official Day P&L.
                   </div>
                 </div>
@@ -1189,7 +1189,7 @@ function CalendarView({ onBack, onOpenDay, initialReturn }) {
           <div className="min-w-0">
             <div className="text-[11px] uppercase tracking-wider font-semibold text-orange-100">Volume sleeve · paper · $1k · +30% / −15%</div>
             <div className="text-3xl font-bold whitespace-nowrap">{allTotals ? (allTotals.volumePnl >= 0 ? "+" : "") + wholeMoney(allTotals.volumePnl) : "—"}</div>
-            <div className="text-xs text-orange-100">{tradeSummary(allTotals?.volumeTrades, allTotals?.volumeWinRate)} · ORB / VWAP / weeklies · with v7 book ~$250/day · ~30 tpm</div>
+            <div className="text-xs text-orange-100">{tradeSummary(allTotals?.volumeTrades, allTotals?.volumeWinRate)} · ORB hold + VWAP · ~30 tpm cadence sleeve</div>
           </div>
         </button>
       </div>

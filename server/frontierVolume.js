@@ -1,18 +1,20 @@
-// Frontier VOLUME sleeve — paper-only scans that cleared local gates when
-// combined with Frontier v7 Core:
-//   holdout ~$256 avg/day · ~30 tpm · ≤$1k/trade (tp +30% / sl −15%)
-// Official playbook P&L is never touched.
+// Frontier VOLUME sleeve — paper-only cadence next to Frontier v7.
+// Live recipe (2026 YTD tighten): ORB_HOLD + VWAP_RECLAIM only.
+// Dropped ORB_FAIL + WEEKLY_DRIVE (net-negative / low quality on stored book).
+// Exits: +30% / −15%, ≤$1k/trade. Official playbook P&L is never touched.
 
 import {
-  detectVolumeScanFires, paperDeployed, paperPnl, pickWeeklyExpiration, sessionRthBars,
+  detectVolumeScanFires, paperDeployed, paperPnl, sessionRthBars,
 } from "./scanLib.js";
 
 export const VOLUME_LANE = "VOLUME";
 export const VOLUME_PAPER_DOLLARS = 1000;
 export const VOLUME_TP_MULT = 1.30;
 export const VOLUME_SL_MULT = 0.85;
-export const VOLUME_HARD_STOP_MIN = 675; // 11:15 for 0DTE; weeklies override to 960
-export const VOLUME_VERSION = "orb_hold_vwap_weekly__tp30_sl15_1k";
+export const VOLUME_HARD_STOP_MIN = 675; // 11:15 ET
+/** Scans promoted into the live VOLUME lane. */
+export const VOLUME_SCANS = Object.freeze(["ORB_HOLD", "VWAP_RECLAIM"]);
+export const VOLUME_VERSION = "orb_hold_vwap__tp30_sl15_1k";
 
 function minToClock(min) {
   const h24 = Math.floor(min / 60);
@@ -26,18 +28,16 @@ function minToClock(min) {
 export function buildVolumeFires({ bars, sessionDate, pdh, pdl } = {}) {
   if (!bars?.length || !sessionDate || pdh == null || pdl == null) return [];
   const rth = sessionRthBars(bars, sessionDate);
-  const raw = detectVolumeScanFires({ rthBars: rth, sessionDate, pdh, pdl });
+  const raw = detectVolumeScanFires({
+    rthBars: rth, sessionDate, pdh, pdl,
+    enableOrbFail: false,
+    enableOrbHold: true,
+    enableVwapReclaim: true,
+    enableWeeklyDrive: false,
+  });
   const out = [];
   for (const f of raw) {
-    let expiration = sessionDate;
-    let dte = 0;
-    if (f.expirationMode === "WEEKLY") {
-      const w = pickWeeklyExpiration(sessionDate);
-      if (!w) continue;
-      expiration = w.expiration;
-      dte = w.dte;
-    }
-    const hard = f.expirationMode === "WEEKLY" ? 960 : VOLUME_HARD_STOP_MIN;
+    if (!VOLUME_SCANS.includes(f.scan)) continue;
     out.push({
       ...f,
       lane: VOLUME_LANE,
@@ -48,12 +48,12 @@ export function buildVolumeFires({ bars, sessionDate, pdh, pdl } = {}) {
       window: "research",
       size: `FULL $${VOLUME_PAPER_DOLLARS}`,
       paperOnly: true,
-      expiration,
-      expirationMode: f.expirationMode,
-      dte,
+      expiration: sessionDate,
+      expirationMode: "0DTE",
+      dte: 0,
       tpMult: VOLUME_TP_MULT,
       slMult: VOLUME_SL_MULT,
-      exitCutoffMin: hard,
+      exitCutoffMin: VOLUME_HARD_STOP_MIN,
       skipFrontierWalk: true,
       maxPremiumDollars: VOLUME_PAPER_DOLLARS,
       touchNumber: 1,

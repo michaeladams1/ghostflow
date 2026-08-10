@@ -367,14 +367,12 @@ the calendar may fall back to $1k on playbook exit prices.
 draw a cumulative P&L line with deployed-capital bars above the grid.
 
 **Volume sleeve (paper lane `VOLUME`)** sits beside Frontier v7 for cadence.
-Scans: ORB fail, ORB hold, VWAP reclaim (0DTE), weekly PDH/PDL drive (3–7 DTE).
-Sizing $1k/trade; exits **+30% / −15%** (not Frontier runner/−50%). Official
-P&L unchanged. Local gate search (`frontierVolumeSearch.js` +
-`frontierVolumeExpand.js`) promoted `volume__tp30_sl15` **plus v7 Core**:
-holdout ~**$256/day** · **30 tpm** (train ~$166/day — soft). Volume alone does
-not clear $250; the **combined Frontier book** does. Persist via
-`simulateDay` or `frontierVolumeBackfill.js` (lane-scoped upsert onto the
-widest calendar `code_version` so partial reruns don't steal the calendar).
+Live scans: **ORB_HOLD + VWAP_RECLAIM only** (ORB_FAIL and WEEKLY_DRIVE dropped
+after 2026 YTD validation — better WR/P&L, still ~32 tpm). Sizing $1k/trade;
+exits **+30% / −15%** (not Frontier runner/−50%). Official P&L unchanged.
+Volume alone does not clear $250; the **combined Frontier book** does.
+Persist via `simulateDay` or `frontierVolumeBackfill.js` (lane-scoped upsert
+onto the widest calendar `code_version`).
 
 **Audit layers (do not mix):** Official Day P&L = playbook +20%/−12.5% on
 counted in-hours fires. Frontier Day P&L = PUT pts≥12 first-touch selection
