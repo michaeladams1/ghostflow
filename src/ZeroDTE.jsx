@@ -14,7 +14,7 @@ import {
   ResponsiveContainer, ComposedChart, Line, Bar, XAxis, YAxis, Tooltip,
   CartesianGrid, ReferenceDot, ReferenceLine, ReferenceArea, Legend,
 } from "recharts";
-import { CALENDAR_LANES, laneDay, buildLaneChartSeries, avgDailyDeployed } from "./calendarChartSeries.js";
+import { CALENDAR_LANES, laneDay, buildLaneChartSeries, avgDailyDeployed, maxConcurrentDeployed } from "./calendarChartSeries.js";
 
 const card = "bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800";
 const faint = "text-zinc-500 dark:text-zinc-500";
@@ -663,16 +663,20 @@ function PerfBar({ label, value, maxAbs, tone }) {
 
 function laneTotals(days, lane) {
   const laneDays = (days || []).map((day) => laneDay(day, lane)).filter(Boolean);
-  const tradedDays = laneDays.filter((day) => day.trades > 0);
+  // Trading days only — no $0 / flat days in the average.
+  const tradedDays = laneDays.filter((day) => day.trades > 0 && Number(day.deployed) > 0);
   const tradePnls = tradedDays.flatMap((day) => day.tradePnls);
   const dayPnls = tradedDays.map((day) => day.pnl);
   const wins = tradePnls.filter((pnl) => pnl > 0).length;
   const totalTrades = tradePnls.length;
-  // Avg capital in the book on trading days — Mon $3k + Tue $1k → $2k.
+  // Avg of each trading day's capital put to work (Mon $3k + Tue $1k → $2k).
   const deployed = avgDailyDeployed(tradedDays.map((day) => day.deployed));
-  const peakDayDeployed = tradedDays.length
-    ? Math.max(...tradedDays.map((day) => Number(day.deployed || 0)))
-    : null;
+  // Max open at once: peak of each day's concurrent capital (not lifetime sum).
+  const dailyMaxes = tradedDays.map((day) => {
+    const concurrent = maxConcurrentDeployed(day.tradeIntervals || []);
+    return concurrent > 0 ? concurrent : Number(day.deployed || 0);
+  }).filter((v) => v > 0);
+  const maxDeployed = dailyMaxes.length ? +Math.max(...dailyMaxes).toFixed(2) : 0;
   return {
     pnl: +laneDays.reduce((sum, day) => sum + day.pnl, 0).toFixed(2),
     totalTrades,
@@ -684,7 +688,7 @@ function laneTotals(days, lane) {
     bestTrade: tradePnls.length ? Math.max(...tradePnls) : null,
     worstTrade: tradePnls.length ? Math.min(...tradePnls) : null,
     deployed,
-    peakDayDeployed,
+    maxDeployed,
   };
 }
 
@@ -1232,8 +1236,8 @@ function CalendarView({ onBack, onOpenDay, initialReturn }) {
               <div className={heading}>Capital deployed</div>
               <div className="text-3xl font-bold text-teal-500 mt-1">{t.deployed != null ? wholeMoney(t.deployed) : "—"}</div>
               <div className={`text-xs mt-0.5 ${faint}`}>
-                avg daily capital in trades
-                {t.peakDayDeployed != null ? ` · peak day ${wholeMoney(t.peakDayDeployed)}` : ""}
+                avg daily
+                {t.maxDeployed != null && t.maxDeployed > 0 ? ` · max ${wholeMoney(t.maxDeployed)} at once` : ""}
               </div>
             </div>
             <div className={`${card} rounded-xl p-4 mb-3`}>
