@@ -14,6 +14,7 @@ import {
   ResponsiveContainer, ComposedChart, Line, Bar, XAxis, YAxis, Tooltip,
   CartesianGrid, ReferenceDot, ReferenceLine, ReferenceArea, Legend,
 } from "recharts";
+import { CALENDAR_LANES, laneDay, buildLaneChartSeries } from "./calendarChartSeries.js";
 
 const card = "bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800";
 const faint = "text-zinc-500 dark:text-zinc-500";
@@ -660,51 +661,6 @@ function PerfBar({ label, value, maxAbs, tone }) {
   );
 }
 
-const CALENDAR_LANES = {
-  official: {
-    label: "Playbook hours", pnlKey: "pnl", tradesKey: "tradePnls",
-    deployedKey: "deployed", tradeDeployedsKey: "tradeDeployeds",
-  },
-  outside: {
-    label: "Outside hours", pnlKey: "excludedPnl", tradesKey: "excludedTradePnls",
-    deployedKey: "excludedDeployed", tradeDeployedsKey: "excludedTradeDeployeds",
-  },
-  research: {
-    label: "Research lanes", pnlKey: "experimentalPnl", tradesKey: "experimentalTradePnls",
-    deployedKey: "experimentalDeployed", tradeDeployedsKey: "experimentalTradeDeployeds",
-  },
-  shen: {
-    label: "Shen conviction", pnlKey: "shenPnl", tradesKey: "shenTradePnls",
-    deployedKey: "shenDeployed", tradeDeployedsKey: "shenTradeDeployeds",
-  },
-  frontier: {
-    label: "Frontier v7", pnlKey: "frontierPnl", tradesKey: "frontierTradePnls",
-    deployedKey: "frontierDeployed", tradeDeployedsKey: "frontierTradeDeployeds",
-  },
-  volume: {
-    label: "Volume sleeve", pnlKey: "volumePnl", tradesKey: "volumeTradePnls",
-    deployedKey: "volumeDeployed", tradeDeployedsKey: "volumeTradeDeployeds",
-  },
-};
-
-function laneDay(day, lane) {
-  if (!day) return null;
-  const config = CALENDAR_LANES[lane];
-  const tradePnls = day[config.tradesKey] || [];
-  const tradeDeployeds = day[config.tradeDeployedsKey] || [];
-  const deployed = Number(day[config.deployedKey] != null
-    ? day[config.deployedKey]
-    : tradeDeployeds.reduce((s, d) => s + Number(d || 0), 0));
-  return {
-    ...day,
-    pnl: Number(day[config.pnlKey] || 0),
-    trades: tradePnls.length,
-    tradePnls,
-    tradeDeployeds,
-    deployed,
-  };
-}
-
 function laneTotals(days, lane) {
   const laneDays = (days || []).map((day) => laneDay(day, lane)).filter(Boolean);
   const tradedDays = laneDays.filter((day) => day.trades > 0);
@@ -731,48 +687,6 @@ function laneTotals(days, lane) {
   };
 }
 
-function buildLaneChartSeries(days, lane, { mode = "month" } = {}) {
-  const laneDays = (days || [])
-    .map((day) => laneDay(day, lane))
-    .filter((day) => day && (day.trades > 0 || Number(day.pnl) !== 0 || Number(day.deployed) > 0))
-    .sort((a, b) => String(a.date).localeCompare(String(b.date)));
-  let cumulative = 0;
-  if (mode === "year") {
-    const byMonth = new Map();
-    for (const day of laneDays) {
-      const month = Number(String(day.date).slice(5, 7));
-      if (!byMonth.has(month)) byMonth.set(month, { pnl: 0, deployed: 0, trades: 0 });
-      const row = byMonth.get(month);
-      row.pnl += Number(day.pnl || 0);
-      row.deployed += Number(day.deployed || 0);
-      row.trades += day.trades || 0;
-    }
-    return Array.from({ length: 12 }, (_, i) => i + 1).map((month) => {
-      const row = byMonth.get(month) || { pnl: 0, deployed: 0, trades: 0 };
-      cumulative += row.pnl;
-      return {
-        label: MONTH_NAMES[month - 1].slice(0, 3),
-        date: month,
-        dayPnl: +row.pnl.toFixed(2),
-        cumulative: +cumulative.toFixed(2),
-        deployed: +row.deployed.toFixed(2),
-        trades: row.trades,
-      };
-    });
-  }
-  return laneDays.map((day) => {
-    cumulative += Number(day.pnl || 0);
-    return {
-      label: String(day.date).slice(8, 10),
-      date: day.date,
-      dayPnl: Number(day.pnl || 0),
-      cumulative: +cumulative.toFixed(2),
-      deployed: Number(day.deployed || 0),
-      trades: day.trades || 0,
-    };
-  });
-}
-
 function CalendarPerformanceChart({ series, laneLabel, timeframe }) {
   if (!series?.length) return null;
   const hasActivity = series.some((p) => p.trades > 0 || p.dayPnl !== 0 || p.deployed > 0);
@@ -783,13 +697,14 @@ function CalendarPerformanceChart({ series, laneLabel, timeframe }) {
       </div>
     );
   }
+  const periodPnlName = timeframe === "Year" ? "Month P&L" : "Day P&L";
   return (
     <div className={`${card} rounded-xl p-4 mb-4`}>
       <div className="flex flex-wrap items-end justify-between gap-2 mb-2">
         <div>
           <div className={heading}>P&L + deployed capital</div>
           <div className="text-sm text-zinc-800 dark:text-zinc-200 mt-0.5">
-            {laneLabel} · {timeframe === "Year" ? "monthly" : "daily"} cumulative P&L with capital outlay
+            {laneLabel} · cumulative P&L from $0 · deployed is each {timeframe === "Year" ? "month" : "day"} only
           </div>
         </div>
         <div className={`text-[11px] ${faint}`}>Left: cumulative P&L · Right: capital deployed</div>
@@ -808,17 +723,16 @@ function CalendarPerformanceChart({ series, laneLabel, timeframe }) {
             labelFormatter={(_, payload) => {
               const row = payload?.[0]?.payload;
               if (!row) return "";
-              return timeframe === "Year"
+              const when = timeframe === "Year"
                 ? `${row.label} · ${row.trades} trade${row.trades === 1 ? "" : "s"}`
                 : `${row.date} · ${row.trades} trade${row.trades === 1 ? "" : "s"}`;
+              return `${when} · ${periodPnlName} ${wholeMoney(Number(row.dayPnl) || 0)}`;
             }}
           />
           <Legend wrapperStyle={{ fontSize: 11 }} />
           <Bar yAxisId="cap" dataKey="deployed" name="Deployed" fill="#2dd4bf" fillOpacity={0.35} maxBarSize={28} />
           <Line yAxisId="pnl" type="monotone" dataKey="cumulative" name="Cumulative P&L"
-            stroke="#10b981" strokeWidth={2} dot={false} />
-          <Line yAxisId="pnl" type="monotone" dataKey="dayPnl" name={timeframe === "Year" ? "Month P&L" : "Day P&L"}
-            stroke="#6366f1" strokeWidth={1.5} strokeDasharray="4 3" dot={false} />
+            stroke="#10b981" strokeWidth={2} dot={{ r: 3, strokeWidth: 0, fill: "#10b981" }} />
         </ComposedChart>
       </ResponsiveContainer>
     </div>
