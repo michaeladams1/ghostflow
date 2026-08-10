@@ -62,9 +62,25 @@ function makeVwapReclaimSession() {
   assert.ok(withVwap.at(-1).vwap > 0);
   const fires = detectVolumeScanFires({
     rthBars: bars, sessionDate, pdh: 510, pdl: 490,
-    enableOrbFail: false, enableWeeklyDrive: false,
+    enableOrbFail: false, enableOrbHold: false, enableWeeklyDrive: false,
+    vwapStreakMin: 3,
   });
   assert.ok(fires.some((f) => f.scan === "VWAP_RECLAIM" && f.direction === "CALL"), "VWAP reclaim CALL");
+}
+
+{
+  const d = "2025-06-04";
+  const bars = [];
+  for (let m = 30; m < 45; m++) bars.push(bar(d, 9, m, { o: 500, h: 500.5, l: 499.5, c: 500 }));
+  // 3 closes above ORB → ORB_HOLD CALL
+  bars.push(bar(d, 9, 46, { o: 500.6, h: 501, l: 500.5, c: 500.8 }));
+  bars.push(bar(d, 9, 47, { o: 500.8, h: 501.2, l: 500.7, c: 501.0 }));
+  bars.push(bar(d, 9, 48, { o: 501.0, h: 501.5, l: 500.9, c: 501.3 }));
+  const fires = detectVolumeScanFires({
+    rthBars: bars, sessionDate: d, pdh: 510, pdl: 490,
+    enableOrbFail: false, enableVwapReclaim: false, enableWeeklyDrive: false,
+  });
+  assert.ok(fires.some((f) => f.scan === "ORB_HOLD" && f.direction === "CALL"), "ORB hold CALL");
 }
 
 {

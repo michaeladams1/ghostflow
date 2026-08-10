@@ -72,7 +72,8 @@ export function attachVwap(rthBars) {
  */
 export function detectVolumeScanFires({
   rthBars, sessionDate, pdh, pdl,
-  enableOrbFail = true, enableVwapReclaim = true, enableWeeklyDrive = true,
+  enableOrbFail = true, enableOrbHold = true, enableVwapReclaim = true, enableWeeklyDrive = true,
+  vwapStreakMin = 3,
 } = {}) {
   if (!rthBars?.length) return [];
   const bars = attachVwap(rthBars);
@@ -81,9 +82,11 @@ export function detectVolumeScanFires({
   // ORB15: 9:30–9:45
   let orbHigh = null, orbLow = null;
   let brokeUp = false, brokeDn = false;
+  let holdUp = 0, holdDn = 0;
   let orbFailPut = false, orbFailCall = false;
+  let orbHoldCall = false, orbHoldPut = false;
   let belowVwapStreak = 0, aboveVwapStreak = 0;
-  let vwapCall = false, vwapPut = false;
+  let lastVwapCallMin = -999, lastVwapPutMin = -999;
   let weeklyFired = false;
 
   for (let i = 0; i < bars.length; i++) {
@@ -97,8 +100,9 @@ export function detectVolumeScanFires({
     }
     if (minutes < 585) continue;
 
-    if (orbHigh != null && b.close > orbHigh) brokeUp = true;
-    if (orbLow != null && b.close < orbLow) brokeDn = true;
+    if (orbHigh != null && b.close > orbHigh) { brokeUp = true; holdUp++; holdDn = 0; }
+    else if (orbLow != null && b.close < orbLow) { brokeDn = true; holdDn++; holdUp = 0; }
+    else { holdUp = 0; holdDn = 0; }
 
     // Failed ORB: broke out, then closed back through the ORB line.
     if (enableOrbFail && !orbFailPut && brokeUp && orbHigh != null && b.close < orbHigh && minutes <= 720) {
@@ -130,12 +134,44 @@ export function detectVolumeScanFires({
       });
     }
 
-    // VWAP reclaim: 5+ minutes on one side, then close back through VWAP.
-    // Evaluate reclaim against the prior streak before updating this bar's side.
+    // ORB hold / continuation: 3 closes outside ORB before 11:00.
+    if (enableOrbHold && !orbHoldCall && holdUp >= 3 && orbHigh != null && minutes <= 660) {
+      orbHoldCall = true;
+      fires.push({
+        scan: "ORB_HOLD",
+        direction: "CALL",
+        ts: b.ts,
+        etMinute: minutes,
+        level: +orbHigh.toFixed(2),
+        levelType: "ORB15_HOLD",
+        price: b.close,
+        expirationMode: "0DTE",
+        sessionDate,
+      });
+    }
+    if (enableOrbHold && !orbHoldPut && holdDn >= 3 && orbLow != null && minutes <= 660) {
+      orbHoldPut = true;
+      fires.push({
+        scan: "ORB_HOLD",
+        direction: "PUT",
+        ts: b.ts,
+        etMinute: minutes,
+        level: +orbLow.toFixed(2),
+        levelType: "ORB15_HOLD",
+        price: b.close,
+        expirationMode: "0DTE",
+        sessionDate,
+      });
+    }
+
+    // VWAP reclaim: streak on one side, then close back through VWAP.
+    // Allow a second fire after 60 minutes (AM + lunch).
     const vwap = b.vwap;
-    if (enableVwapReclaim && !vwapCall && belowVwapStreak >= 5
-      && b.close > vwap && b.close > b.open && minutes >= 600 && minutes <= 780) {
-      vwapCall = true;
+    const canVwapCall = minutes - lastVwapCallMin >= 60;
+    const canVwapPut = minutes - lastVwapPutMin >= 60;
+    if (enableVwapReclaim && canVwapCall && belowVwapStreak >= vwapStreakMin
+      && b.close > vwap && b.close > b.open && minutes >= 585 && minutes <= 840) {
+      lastVwapCallMin = minutes;
       belowVwapStreak = 0;
       aboveVwapStreak = 0;
       fires.push({
@@ -149,9 +185,9 @@ export function detectVolumeScanFires({
         expirationMode: "0DTE",
         sessionDate,
       });
-    } else if (enableVwapReclaim && !vwapPut && aboveVwapStreak >= 5
-      && b.close < vwap && b.close < b.open && minutes >= 600 && minutes <= 780) {
-      vwapPut = true;
+    } else if (enableVwapReclaim && canVwapPut && aboveVwapStreak >= vwapStreakMin
+      && b.close < vwap && b.close < b.open && minutes >= 585 && minutes <= 840) {
+      lastVwapPutMin = minutes;
       belowVwapStreak = 0;
       aboveVwapStreak = 0;
       fires.push({
@@ -165,10 +201,10 @@ export function detectVolumeScanFires({
         expirationMode: "0DTE",
         sessionDate,
       });
-    } else if (b.close < vwap * 0.999) {
+    } else if (b.close < vwap * 0.9995) {
       belowVwapStreak++;
       aboveVwapStreak = 0;
-    } else if (b.close > vwap * 1.001) {
+    } else if (b.close > vwap * 1.0005) {
       aboveVwapStreak++;
       belowVwapStreak = 0;
     } else {

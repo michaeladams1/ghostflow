@@ -167,8 +167,14 @@ async function main() {
   const allDates = dateRows.map((r) => r.session_date);
   const holdDates = allDates.filter((d) => d >= HOLDOUT_START);
   const trainDates = allDates.filter((d) => d < HOLDOUT_START);
-  // Balanced recent sample for speed; prefer full holdout + last N train.
-  const sampleDates = [...trainDates.slice(-Math.floor(MAX_DATES / 2)), ...holdDates.slice(-Math.ceil(MAX_DATES / 2))];
+  // Balanced sample: recent train + spread holdout (not only the last months).
+  const trainN = Math.floor(MAX_DATES / 2);
+  const holdN = Math.ceil(MAX_DATES / 2);
+  const trainSample = trainDates.slice(-trainN);
+  const holdSample = holdDates.length <= holdN
+    ? holdDates
+    : holdDates.filter((_, i) => i % Math.ceil(holdDates.length / holdN) === 0).slice(0, holdN);
+  const sampleDates = [...trainSample, ...holdSample];
   const sampleSet = new Set(sampleDates);
   console.log(`[frontier-volume-search] dates=${allDates.length} sample=${sampleDates.length} holdout=${holdDates.length}`);
 
@@ -258,14 +264,26 @@ async function main() {
   }
   console.log(`\n[frontier-volume-search] simulated signals=${simulated.length}`);
 
+  // Persist sims for offline filter expand (frontierVolumeExpand.js).
+  fs.writeFileSync(path.join(OUT_DIR, "volume-sim-latest.json"), JSON.stringify({
+    generatedAt: new Date().toISOString(),
+    codeVersion: CODE_VERSION,
+    sampleDates,
+    coreTrades,
+    simulated,
+  }));
+
   // Portfolio recipes: which scans + which exit + include v7 core?
   const recipes = [];
   const scanSets = [
     ["orb", ["ORB_FAIL"]],
+    ["orb_hold", ["ORB_HOLD"]],
     ["vwap", ["VWAP_RECLAIM"]],
     ["weekly", ["WEEKLY_DRIVE"]],
     ["orb_vwap", ["ORB_FAIL", "VWAP_RECLAIM"]],
-    ["all_new", ["ORB_FAIL", "VWAP_RECLAIM", "WEEKLY_DRIVE"]],
+    ["orb_pair", ["ORB_FAIL", "ORB_HOLD"]],
+    ["orb_weekly", ["ORB_FAIL", "WEEKLY_DRIVE"]],
+    ["volume", ["ORB_FAIL", "ORB_HOLD", "VWAP_RECLAIM", "WEEKLY_DRIVE"]],
   ];
   for (const [name, scans] of scanSets) {
     for (const exit of Object.values(EXITS)) {
@@ -278,7 +296,6 @@ async function main() {
     }
   }
 
-  const holdSet = new Set(holdDates);
   const results = [];
   for (const recipe of recipes) {
     const trades = [];
