@@ -107,13 +107,19 @@ export async function loadVolumeQuantSession(sessionDate) {
     fetchEndpointCached(flowEp, { ticker: "SPY", sessionDate }),
     fetchEndpointCached(gexEp, { ticker: "SPY", sessionDate }),
   ]);
-  const flowData = flow.ok ? (flow.data?.data || flow.data) : null;
-  const gexParsed = gex.ok ? parseGexMap(gex, sessionDate) : null;
+  // QD often returns HTTP 200 with `{ data: {} }` outside retention — treat as missing.
+  const rawFlow = flow.ok ? (flow.data?.data || flow.data) : null;
+  const flowKeys = rawFlow && typeof rawFlow === "object"
+    ? Object.keys(rawFlow).filter((k) => Number.isFinite(Number(k)))
+    : [];
+  const flowData = flowKeys.length ? rawFlow : null;
+  const gexParsed = gex.ok ? parseGexMap(gex.data ?? gex, sessionDate) : null;
   return {
     ok: !!(flowData || gexParsed),
     flowData,
     gexParsed,
     flowEarly: flowData ? netFlowEarlyImbalance(flowData, 30) : null,
+    reason: !(flowData || gexParsed) ? "empty-qd-payload" : null,
   };
 }
 

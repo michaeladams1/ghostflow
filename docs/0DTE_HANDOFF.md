@@ -378,7 +378,9 @@ Fire-time Quant Data is stored in `features` JSONB: `flowEarly`, `flowAtEntry`,
 `flowSupportEarly` / `flowSupportAtEntry`, `gexNetAtLevel`, `gexSignAtLevel`,
 `gexNetAtSpot`. Enrichment is best-effort (missing QD key → `qdOk:false`).
 `etEpoch` for flow windows is DST-correct (`America/New_York`) — do not hard-code
-`-04:00` or winter `flowAtEntry` goes null. Re-backfill with
+`-04:00` or winter `flowAtEntry` goes null. Quant Data `net_flow` / strike GEX
+for SPY currently returns empty payloads before ~2025-01 (HTTP 200 with `{}`);
+those days store `qdOk:false`. Re-backfill with
 `node server/frontierVolumeBackfill.js` after schema/version changes.
 
 Exit asymmetry research (`node server/frontierVolumeExitSearch.js`): on the
