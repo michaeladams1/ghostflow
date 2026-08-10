@@ -373,11 +373,19 @@ lifetime sum of entry notionals must not appear.
 
 **Volume sleeve (paper lane `VOLUME`)** sits beside Frontier v7 for cadence.
 Live scans: **ORB_HOLD + VWAP_RECLAIM only** (ORB_FAIL and WEEKLY_DRIVE dropped
-after 2026 YTD validation — better WR/P&L, still ~32 tpm). Sizing $1k/trade;
-exits **+30% / −15%** (not Frontier runner/−50%). Official P&L unchanged.
-Volume alone does not clear $250; the **combined Frontier book** does.
-Persist via `simulateDay` or `frontierVolumeBackfill.js` (lane-scoped upsert
-onto the widest calendar `code_version`).
+after 2026 YTD validation). Sizing $1k/trade; TP **+30%**; official P&L unchanged.
+**ORB_HOLD enters on the FIRST 1-min close outside the ORB15**
+(`orbHoldConfirmBars = 1`) with a **−20% stop**; VWAP_RECLAIM keeps the 3-bar
+grind + reclaim close with a **−15% stop**. WHY: a 24-month re-sim against real
+option bars (782 trades) showed the old 3-close confirm systematically bought
+the top of the option spike — 81% of sampled stop-outs entered within 5% of the
+local 5-min high, median already +38% off the 5-min low. First-close entry took
+the same book from **+$1.6k / 12 of 24 losing months to +$10.2k / 7 of 24**,
+positive in both 12-month halves (entry/exit-only tweaks and chase filters were
+strictly worse). Version `orb1_hold_sl20_vwap_sl15__tp30_1k`. Persist via
+`simulateDay` or `frontierVolumeBackfill.js` (lane-scoped upsert onto the
+widest calendar `code_version`) — **rerun the backfill after this recipe
+change so the stored calendar reflects the new fires**.
 
 **Audit layers (do not mix):** Official Day P&L = playbook +20%/−12.5% on
 counted in-hours fires. Frontier Day P&L = PUT pts≥12 first-touch selection

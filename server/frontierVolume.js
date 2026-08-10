@@ -1,7 +1,9 @@
 // Frontier VOLUME sleeve — paper-only cadence next to Frontier v7.
-// Live recipe (2026 YTD tighten): ORB_HOLD + VWAP_RECLAIM only.
-// Dropped ORB_FAIL + WEEKLY_DRIVE (net-negative / low quality on stored book).
-// Exits: +30% / −15%, ≤$1k/trade. Official playbook P&L is never touched.
+// Live recipe (first-close entry): ORB_HOLD fires on the FIRST 1-min close
+// outside the ORB15 (was 3 consecutive closes — waiting 3 bars systematically
+// bought the top of the option spike; see docs/0DTE_HANDOFF.md §5).
+// Exits: ORB_HOLD +30% / −20%, VWAP_RECLAIM +30% / −15%, ≤$1k/trade.
+// Official playbook P&L is never touched.
 
 import {
   detectVolumeScanFires, paperDeployed, paperPnl, sessionRthBars,
@@ -10,11 +12,13 @@ import {
 export const VOLUME_LANE = "VOLUME";
 export const VOLUME_PAPER_DOLLARS = 1000;
 export const VOLUME_TP_MULT = 1.30;
-export const VOLUME_SL_MULT = 0.85;
+export const VOLUME_SL_MULT = 0.85;          // VWAP_RECLAIM stop
+export const VOLUME_ORB_SL_MULT = 0.80;      // ORB_HOLD stop — earlier/cheaper entry breathes more
+export const VOLUME_ORB_CONFIRM_BARS = 1;    // enter on the first close outside the ORB
 export const VOLUME_HARD_STOP_MIN = 675; // 11:15 ET
 /** Scans promoted into the live VOLUME lane. */
 export const VOLUME_SCANS = Object.freeze(["ORB_HOLD", "VWAP_RECLAIM"]);
-export const VOLUME_VERSION = "orb_hold_vwap__tp30_sl15_1k";
+export const VOLUME_VERSION = "orb1_hold_sl20_vwap_sl15__tp30_1k";
 
 function minToClock(min) {
   const h24 = Math.floor(min / 60);
@@ -34,6 +38,7 @@ export function buildVolumeFires({ bars, sessionDate, pdh, pdl } = {}) {
     enableOrbHold: true,
     enableVwapReclaim: true,
     enableWeeklyDrive: false,
+    orbHoldConfirmBars: VOLUME_ORB_CONFIRM_BARS,
   });
   const out = [];
   for (const f of raw) {
@@ -52,7 +57,7 @@ export function buildVolumeFires({ bars, sessionDate, pdh, pdl } = {}) {
       expirationMode: "0DTE",
       dte: 0,
       tpMult: VOLUME_TP_MULT,
-      slMult: VOLUME_SL_MULT,
+      slMult: f.scan === "ORB_HOLD" ? VOLUME_ORB_SL_MULT : VOLUME_SL_MULT,
       exitCutoffMin: VOLUME_HARD_STOP_MIN,
       skipFrontierWalk: true,
       maxPremiumDollars: VOLUME_PAPER_DOLLARS,

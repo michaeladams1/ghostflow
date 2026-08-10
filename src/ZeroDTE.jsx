@@ -158,7 +158,7 @@ function TradeCard({ fire, contracts, pnl, lane = "official" }) {
           )}
           {isVolume && (
             <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-orange-600 text-white">
-              VOLUME PAPER · +30% / −15%
+              VOLUME PAPER · +30% / {fire.tier === "ORB_HOLD" ? "−20%" : "−15%"}
             </span>
           )}
           {!isFrontier && !isVolume && fire.window !== "in" && (
@@ -421,7 +421,7 @@ export default function ZeroDTE() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-5">
               <StatCard label="Volume sleeve Day P&L" value={wholeMoney(data.volume.pnl)}
                 tone={data.volume.pnl > 0 ? "good" : data.volume.pnl < 0 ? "bad" : undefined}
-                sub={`${data.volume.trades} trade${data.volume.trades === 1 ? "" : "s"} · $1k · +30%/−15% · paper only`} />
+                sub={`${data.volume.trades} trade${data.volume.trades === 1 ? "" : "s"} · $1k · +30% TP · paper only`} />
               <StatCard label="Frontier book (v7 + volume)"
                 value={wholeMoney((data.frontier?.pnl || 0) + (data.volume?.pnl || 0))}
                 tone={((data.frontier?.pnl || 0) + (data.volume?.pnl || 0)) > 0 ? "good" : ((data.frontier?.pnl || 0) + (data.volume?.pnl || 0)) < 0 ? "bad" : undefined}
@@ -467,7 +467,7 @@ export default function ZeroDTE() {
                 <div>
                   <div className={`${heading} text-orange-700 dark:text-orange-300`}>Volume sleeve trades — paper only</div>
                   <div className={`text-xs mt-1 ${faint}`}>
-                    ORB hold + VWAP reclaim only · $1k max · +30% / −15%.
+                    ORB hold (first close out, −20% stop) + VWAP reclaim (−15% stop) · $1k max · +30% TP.
                     Cadence sleeve next to Frontier v7; does not change Official Day P&L.
                   </div>
                 </div>
@@ -1111,7 +1111,7 @@ function CalendarView({ onBack, onOpenDay, initialReturn }) {
           className={`rounded-2xl bg-gradient-to-br from-orange-600 to-amber-800 text-white p-5 flex items-center gap-4 text-left transition ${calendarLane === "volume" ? "ring-4 ring-orange-300 ring-offset-2 dark:ring-offset-zinc-950" : "hover:scale-[1.01]"}`}>
           <div className="w-11 h-11 rounded-xl bg-white/15 flex items-center justify-center"><Layers size={20} /></div>
           <div className="min-w-0">
-            <div className="text-[11px] uppercase tracking-wider font-semibold text-orange-100">Volume sleeve · paper · $1k · +30% / −15%</div>
+            <div className="text-[11px] uppercase tracking-wider font-semibold text-orange-100">Volume sleeve · paper · $1k · +30% TP</div>
             <div className="text-3xl font-bold whitespace-nowrap">{allTotals ? (allTotals.volumePnl >= 0 ? "+" : "") + wholeMoney(allTotals.volumePnl) : "—"}</div>
             <div className="text-xs text-orange-100">{tradeSummary(allTotals?.volumeTrades, allTotals?.volumeWinRate)} · ORB hold + VWAP · ~30 tpm cadence sleeve</div>
           </div>

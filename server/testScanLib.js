@@ -4,7 +4,8 @@ import {
   attachVwap, detectVolumeScanFires, paperDeployed, paperPnl, pickWeeklyExpiration,
 } from "./scanLib.js";
 import {
-  VOLUME_PAPER_DOLLARS, VOLUME_SCANS, VOLUME_SL_MULT, VOLUME_TP_MULT, volumeEntryAllowed,
+  VOLUME_ORB_CONFIRM_BARS, VOLUME_ORB_SL_MULT, VOLUME_PAPER_DOLLARS, VOLUME_SCANS,
+  VOLUME_SL_MULT, VOLUME_TP_MULT, buildVolumeFires, volumeEntryAllowed,
 } from "./frontierVolume.js";
 
 function bar(sessionDate, hour, minute, { o, h, l, c, v = 1000 } = {}) {
@@ -84,6 +85,31 @@ function makeVwapReclaimSession() {
     enableOrbFail: false, enableVwapReclaim: false, enableWeeklyDrive: false,
   });
   assert.ok(fires.some((f) => f.scan === "ORB_HOLD" && f.direction === "CALL"), "ORB hold CALL");
+  // Default (3-bar confirm) fires on the 3rd close: 9:48.
+  assert.equal(fires.find((f) => f.scan === "ORB_HOLD").etMinute, 588, "3-bar confirm fires on 3rd close");
+  // First-close entry (live VOLUME recipe) fires on the 1st close: 9:46.
+  const early = detectVolumeScanFires({
+    rthBars: bars, sessionDate: d, pdh: 510, pdl: 490,
+    enableOrbFail: false, enableVwapReclaim: false, enableWeeklyDrive: false,
+    orbHoldConfirmBars: 1,
+  });
+  assert.equal(early.find((f) => f.scan === "ORB_HOLD").etMinute, 586, "first-close entry fires 2 min earlier");
+}
+
+{
+  // buildVolumeFires wires the live recipe: ORB first-close entry, per-scan stops.
+  const d = "2025-06-04";
+  const bars = [];
+  for (let m = 30; m < 45; m++) bars.push(bar(d, 9, m, { o: 500, h: 500.5, l: 499.5, c: 500 }));
+  bars.push(bar(d, 9, 46, { o: 500.6, h: 501, l: 500.5, c: 500.8 }));
+  bars.push(bar(d, 9, 47, { o: 500.8, h: 501.2, l: 500.7, c: 501.0 }));
+  bars.push(bar(d, 9, 48, { o: 501.0, h: 501.5, l: 500.9, c: 501.3 }));
+  const fires = buildVolumeFires({ bars, sessionDate: d, pdh: 510, pdl: 490 });
+  const orb = fires.find((f) => f.scan === "ORB_HOLD");
+  assert.ok(orb, "volume lane fires ORB_HOLD");
+  assert.equal(orb.etMinute, 586, "volume lane enters on the first close outside the ORB");
+  assert.equal(orb.slMult, VOLUME_ORB_SL_MULT, "ORB_HOLD uses the -20% stop");
+  assert.equal(orb.tpMult, VOLUME_TP_MULT);
 }
 
 {
@@ -111,6 +137,8 @@ function makeVwapReclaimSession() {
 {
   assert.equal(VOLUME_TP_MULT, 1.30);
   assert.equal(VOLUME_SL_MULT, 0.85);
+  assert.equal(VOLUME_ORB_SL_MULT, 0.80);
+  assert.equal(VOLUME_ORB_CONFIRM_BARS, 1);
   assert.equal(VOLUME_PAPER_DOLLARS, 1000);
   assert.deepEqual(VOLUME_SCANS, ["ORB_HOLD", "VWAP_RECLAIM"]);
   assert.equal(volumeEntryAllowed(9.99), true);
