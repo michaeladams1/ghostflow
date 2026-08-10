@@ -131,15 +131,13 @@ export function detectVolumeScanFires({
     }
 
     // VWAP reclaim: 5+ minutes on one side, then close back through VWAP.
+    // Evaluate reclaim against the prior streak before updating this bar's side.
     const vwap = b.vwap;
-    if (b.close < vwap * 0.999) { belowVwapStreak++; aboveVwapStreak = 0; }
-    else if (b.close > vwap * 1.001) { aboveVwapStreak++; belowVwapStreak = 0; }
-    else { belowVwapStreak = 0; aboveVwapStreak = 0; }
-
-    if (enableVwapReclaim && !vwapCall && belowVwapStreak >= 5 && b.close > vwap && b.close > b.open && minutes >= 600 && minutes <= 780) {
-      // reset streak so we need a fresh excursion; mark fired
+    if (enableVwapReclaim && !vwapCall && belowVwapStreak >= 5
+      && b.close > vwap && b.close > b.open && minutes >= 600 && minutes <= 780) {
       vwapCall = true;
       belowVwapStreak = 0;
+      aboveVwapStreak = 0;
       fires.push({
         scan: "VWAP_RECLAIM",
         direction: "CALL",
@@ -151,9 +149,10 @@ export function detectVolumeScanFires({
         expirationMode: "0DTE",
         sessionDate,
       });
-    }
-    if (enableVwapReclaim && !vwapPut && aboveVwapStreak >= 5 && b.close < vwap && b.close < b.open && minutes >= 600 && minutes <= 780) {
+    } else if (enableVwapReclaim && !vwapPut && aboveVwapStreak >= 5
+      && b.close < vwap && b.close < b.open && minutes >= 600 && minutes <= 780) {
       vwapPut = true;
+      belowVwapStreak = 0;
       aboveVwapStreak = 0;
       fires.push({
         scan: "VWAP_RECLAIM",
@@ -166,6 +165,15 @@ export function detectVolumeScanFires({
         expirationMode: "0DTE",
         sessionDate,
       });
+    } else if (b.close < vwap * 0.999) {
+      belowVwapStreak++;
+      aboveVwapStreak = 0;
+    } else if (b.close > vwap * 1.001) {
+      aboveVwapStreak++;
+      belowVwapStreak = 0;
+    } else {
+      belowVwapStreak = 0;
+      aboveVwapStreak = 0;
     }
 
     // Weekly drive: first bar at/after 10:00 — bias from PDH/PDL location.
