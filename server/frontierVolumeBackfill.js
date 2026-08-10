@@ -1,11 +1,13 @@
-// Backfill VOLUME sleeve rows onto the widest production calendar code_version
-// without wiping Frontier/official rows.
+// Backfill VOLUME sleeve (ORB_HOLD + VWAP) with option sims + Quant Data
+// flow/GEX at fire time onto the widest production calendar code_version.
 //
 // Run: node server/frontierVolumeBackfill.js
-// Env: VOLUME_BACKFILL_MAX_DATES (default 120), VOLUME_BACKFILL_CODE_VERSION
+// Env:
+//   VOLUME_BACKFILL_MAX_DATES (default: all sessions for code version)
+//   VOLUME_BACKFILL_CODE_VERSION (default: 1a20ea38464b)
+//   VOLUME_SLEEP_MS
 // Completion: [frontier-volume-backfill] complete
 
-// Prefer the public Railway URL locally (internal hostname won't resolve).
 if (process.env.DATABASE_PUBLIC_URL
   && (!process.env.DATABASE_URL || /railway\.internal/.test(process.env.DATABASE_URL))) {
   process.env.DATABASE_URL = process.env.DATABASE_PUBLIC_URL;
@@ -17,7 +19,7 @@ const path = await import("node:path");
 const { fileURLToPath } = await import("node:url");
 const { fetchAlpacaBars } = await import("./alpacaClient.js");
 const {
-  buildVolumeFires, summarizeVolumeFires, volumePaperPnl, VOLUME_LANE,
+  buildVolumeFiresWithQuant, summarizeVolumeFires, volumePaperPnl, VOLUME_LANE, VOLUME_VERSION,
 } = await import("./frontierVolume.js");
 const { simulateAllFires } = await import("./zeroDTEOptionSim.js");
 const { saveVolumeTrades } = await import("./zeroDTEStore.js");
@@ -25,8 +27,10 @@ const { sessionRthBars } = await import("./scanLib.js");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CACHE = path.join(__dirname, "data", "frontier-volume", "spy-cache");
-const MAX = Number(process.env.VOLUME_BACKFILL_MAX_DATES || 120);
-const SLEEP = Number(process.env.VOLUME_SLEEP_MS || 100);
+const MAX = process.env.VOLUME_BACKFILL_MAX_DATES != null
+  ? Number(process.env.VOLUME_BACKFILL_MAX_DATES)
+  : null;
+const SLEEP = Number(process.env.VOLUME_SLEEP_MS || 80);
 const CODE_VERSION = process.env.VOLUME_BACKFILL_CODE_VERSION || "1a20ea38464b";
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
@@ -72,6 +76,9 @@ async function main() {
   const url = dbUrl();
   if (!url) throw new Error("missing DATABASE_URL");
   if (!process.env.ALPACA_API_KEY) throw new Error("missing ALPACA_API_KEY");
+  if (!process.env.QUANTDATA_API_KEY) {
+    console.warn("[frontier-volume-backfill] WARN: QUANTDATA_API_KEY missing — sims will run without flow/GEX");
+  }
 
   const client = new pg.Client({
     connectionString: url,
@@ -81,15 +88,15 @@ async function main() {
   const { rows } = await client.query(
     `SELECT DISTINCT session_date FROM zerodte_trades
      WHERE symbol='SPY' AND code_version=$1
-     ORDER BY session_date DESC
-     LIMIT $2`,
-    [CODE_VERSION, MAX],
+     ORDER BY session_date ASC`,
+    [CODE_VERSION],
   );
   await client.end();
-  const dates = rows.map((r) => r.session_date).reverse();
-  console.log(`[frontier-volume-backfill] code_version=${CODE_VERSION} dates=${dates.length} lane=${VOLUME_LANE}`);
+  let dates = rows.map((r) => r.session_date);
+  if (MAX != null && Number.isFinite(MAX) && MAX > 0) dates = dates.slice(-MAX);
+  console.log(`[frontier-volume-backfill] code_version=${CODE_VERSION} dates=${dates.length} lane=${VOLUME_LANE} version=${VOLUME_VERSION}`);
 
-  let wrote = 0, signals = 0, errors = 0;
+  let wrote = 0, signals = 0, errors = 0, qdOkDays = 0;
   for (let i = 0; i < dates.length; i++) {
     const sessionDate = dates[i];
     process.stdout.write(`[frontier-volume-backfill] ${i + 1}/${dates.length} ${sessionDate}\r`);
@@ -97,9 +104,10 @@ async function main() {
       const allBars = await loadSpy(sessionDate);
       const prior = priorHl(allBars, sessionDate);
       if (!prior || !sessionRthBars(allBars, sessionDate).length) continue;
-      const fires = buildVolumeFires({
+      const fires = await buildVolumeFiresWithQuant({
         bars: allBars, sessionDate, pdh: prior.high, pdl: prior.low,
       });
+      if (fires.some((f) => f.featuresExtra?.qdOk)) qdOkDays++;
       const simmed = await simulateAllFires({ ticker: "SPY", sessionDate, fires });
       const ok = summarizeVolumeFires(simmed).selected;
       signals += ok.length;
@@ -118,7 +126,7 @@ async function main() {
       console.warn(`\n[frontier-volume-backfill] skip ${sessionDate}: ${err.message}`);
     }
   }
-  console.log(`\n[frontier-volume-backfill] wrote=${wrote} signals=${signals} errors=${errors}`);
+  console.log(`\n[frontier-volume-backfill] wrote=${wrote} signals=${signals} errors=${errors} qdOkDays=${qdOkDays}`);
   console.log("[frontier-volume-backfill] complete");
 }
 

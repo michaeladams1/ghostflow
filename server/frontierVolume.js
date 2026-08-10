@@ -6,6 +6,7 @@
 import {
   detectVolumeScanFires, paperDeployed, paperPnl, sessionRthBars,
 } from "./scanLib.js";
+import { enrichVolumeFireQuant, loadVolumeQuantSession } from "./volumeQuant.js";
 
 export const VOLUME_LANE = "VOLUME";
 export const VOLUME_PAPER_DOLLARS = 1000;
@@ -14,7 +15,8 @@ export const VOLUME_SL_MULT = 0.85;
 export const VOLUME_HARD_STOP_MIN = 675; // 11:15 ET
 /** Scans promoted into the live VOLUME lane. */
 export const VOLUME_SCANS = Object.freeze(["ORB_HOLD", "VWAP_RECLAIM"]);
-export const VOLUME_VERSION = "orb_hold_vwap__tp30_sl15_1k";
+/** Version bumps when scan set, exits, or fire-time feature schema changes. */
+export const VOLUME_VERSION = "orb_hold_vwap__tp30_sl15_1k__qd_flow_gex";
 
 function minToClock(min) {
   const h24 = Math.floor(min / 60);
@@ -62,6 +64,33 @@ export function buildVolumeFires({ bars, sessionDate, pdh, pdl } = {}) {
     });
   }
   return out;
+}
+
+/**
+ * Build Volume fires and attach Quant Data flow/GEX at fire time.
+ * QD failures are non-fatal — fires still simulate; features just omit QD fields.
+ */
+export async function buildVolumeFiresWithQuant({ bars, sessionDate, pdh, pdl } = {}) {
+  const fires = buildVolumeFires({ bars, sessionDate, pdh, pdl });
+  if (!fires.length) return fires;
+  let qd = null;
+  try {
+    qd = await loadVolumeQuantSession(sessionDate);
+  } catch (err) {
+    console.warn(`[frontier-volume] QD load failed ${sessionDate}: ${err.message}`);
+  }
+  if (!qd?.ok) return fires.map((f) => ({ ...f, featuresExtra: { ...(f.featuresExtra || {}), qdOk: false } }));
+  return fires.map((f) => {
+    const q = enrichVolumeFireQuant(f, qd);
+    return {
+      ...f,
+      featuresExtra: {
+        ...(f.featuresExtra || {}),
+        qdOk: true,
+        ...q,
+      },
+    };
+  });
 }
 
 export function volumePaperPnl(entry, exit) {

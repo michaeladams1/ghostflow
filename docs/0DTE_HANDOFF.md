@@ -374,6 +374,27 @@ Volume alone does not clear $250; the **combined Frontier book** does.
 Persist via `simulateDay` or `frontierVolumeBackfill.js` (lane-scoped upsert
 onto the widest calendar `code_version`).
 
+Fire-time Quant Data is stored in `features` JSONB: `flowEarly`, `flowAtEntry`,
+`flowSupportEarly` / `flowSupportAtEntry`, `gexNetAtLevel`, `gexSignAtLevel`,
+`gexNetAtSpot`. Enrichment is best-effort (missing QD key → `qdOk:false`).
+`etEpoch` for flow windows is DST-correct (`America/New_York`) — do not hard-code
+`-04:00` or winter `flowAtEntry` goes null. Quant Data `net_flow` / strike GEX
+for SPY currently returns empty payloads before ~2025-01 (HTTP 200 with `{}`);
+those days store `qdOk:false`. Re-backfill with
+`node server/frontierVolumeBackfill.js` after schema/version changes.
+
+Exit asymmetry research (`node server/frontierVolumeExitSearch.js`) on the
+full ORB_HOLD+VWAP book (782 trades): **wider TP helps** (`tp50_sl15` 2026
+~$5.6k vs baseline ~$3.6k; full-book ~$3.0k vs ~$1.9k) but WR falls (~28% vs
+~37%). **Tighter SL alone hurts** (more stop-outs before TP). Runner-style
+exits inflate full-book PnL but do not beat `tp50_sl15` on 2026. Live exits
+stay +30%/−15% until explicitly promoted.
+
+Fire-time flow/GEX on the enriched book (2025-01+): `flowSupportAtEntry` does
+not separate wins; **early flow** does mildly (support WR ~37% / +$4.2k vs
+oppose ~30% / −$3.0k). GEX sign buckets are uneven — treat as research, not a
+live gate yet.
+
 **Audit layers (do not mix):** Official Day P&L = playbook +20%/−12.5% on
 counted in-hours fires. Frontier Day P&L = PUT pts≥12 first-touch selection
 with runner/−50% exits on the same option bars. Volume Day P&L = VOLUME lane

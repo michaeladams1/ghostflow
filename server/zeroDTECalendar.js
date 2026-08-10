@@ -11,7 +11,7 @@ import {
   frontierDeployedNotional, frontierPaperPnl, selectFrontierBestPerDay,
 } from "./frontierV3.js";
 import {
-  VOLUME_LANE, buildVolumeFires, summarizeVolumeFires, volumeDeployed, volumePaperPnl,
+  VOLUME_LANE, buildVolumeFiresWithQuant, summarizeVolumeFires, volumeDeployed, volumePaperPnl,
 } from "./frontierVolume.js";
 import { simulateAllFires } from "./zeroDTEOptionSim.js";
 import { buildSessionStory } from "./zeroDTEStory.js";
@@ -61,7 +61,7 @@ async function simulateDay(symbol, date) {
       const fires = await simulateAllFires({ ticker: symbol, sessionDate: date, fires: s.fires });
       const experiments = await simulateAllFires({ ticker: symbol, sessionDate: date, fires: s.experiments || [] });
       const playbookExperiments = await simulateAllFires({ ticker: symbol, sessionDate: date, fires: s.playbookExperiments || [] });
-      const volumeFiresRaw = buildVolumeFires({
+      const volumeFiresRaw = await buildVolumeFiresWithQuant({
         bars: s.bars, sessionDate: date, pdh: s.levels?.pdh, pdl: s.levels?.pdl,
       });
       const volumeFires = await simulateAllFires({ ticker: symbol, sessionDate: date, fires: volumeFiresRaw });
@@ -169,6 +169,7 @@ async function simulateDay(symbol, date) {
           featuresExtra: isVolume ? {
             scan: f.scan, expirationMode: f.expirationMode, expiration: f.expiration,
             dte: f.dte, method: f.method, volumeDeployed: volumeDeployed(f.trade?.entryPrice),
+            ...(f.featuresExtra || {}),
           } : undefined,
         };
       };
