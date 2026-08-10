@@ -35,6 +35,7 @@ import { coveredSessions, loadSavedCalendarDays } from "./server/zeroDTEStore.js
 import {
   createBacktestJob, getBacktestJob, getLatestBacktestJob, startBacktestJobWorker,
 } from "./server/zeroDTEBacktestJobs.js";
+import { startLivePaperWorker } from "./server/zeroDTELivePaper.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DIST_DIR = path.join(__dirname, "dist");
@@ -794,6 +795,7 @@ app.listen(PORT, () => {
   runAIProviderHealthCheck();
   cleanupStaleJobs();
   startBacktestJobWorker();
+  startLivePaperWorker();
 });
 
 // STALE JOB CLEANUP. Background jobs are in-process — if the server restarts
