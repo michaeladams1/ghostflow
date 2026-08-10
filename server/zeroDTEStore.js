@@ -154,7 +154,7 @@ export async function loadSavedCalendarDays({ symbol = "SPY", year, month }) {
   const { rows } = await pool.query(
     `SELECT session_date, lane, pb_window, entry_price, exit_price, pnl, counted,
             contracts, direction, level_type, tier, points, et_minute, touch_number, level,
-            frontier_exit_price, frontier_pnl
+            hold_minutes, frontier_exit_price, frontier_pnl
      FROM zerodte_trades
      WHERE symbol = $1 AND code_version = $2
        AND session_date >= $3 AND session_date < $4
