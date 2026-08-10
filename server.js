@@ -25,7 +25,7 @@ import { fetchOhlcvBars } from "./server/databentoClient.js";
 import { runBacktest, getSessionChart } from "./server/priceBacktest.js";
 import { analyzeZeroDTESession } from "./server/zeroDTE.js";
 import { summarizeFrontierFires } from "./server/frontierV3.js";
-import { buildVolumeFires, summarizeVolumeFires } from "./server/frontierVolume.js";
+import { buildVolumeFiresWithQuant, summarizeVolumeFires } from "./server/frontierVolume.js";
 import { simulateAllFires } from "./server/zeroDTEOptionSim.js";
 import { buildSessionStory } from "./server/zeroDTEStory.js";
 import { simulateMonth, summarizeMonth } from "./server/zeroDTECalendar.js";
@@ -644,7 +644,7 @@ app.post("/api/0dte/analyze", async (req, res) => {
     const volumeFires = await simulateAllFires({
       ticker: symbol,
       sessionDate,
-      fires: buildVolumeFires({
+      fires: await buildVolumeFiresWithQuant({
         bars: session.bars, sessionDate, pdh: session.levels?.pdh, pdl: session.levels?.pdl,
       }),
     });

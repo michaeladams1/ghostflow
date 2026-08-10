@@ -374,6 +374,12 @@ Volume alone does not clear $250; the **combined Frontier book** does.
 Persist via `simulateDay` or `frontierVolumeBackfill.js` (lane-scoped upsert
 onto the widest calendar `code_version`).
 
+Fire-time Quant Data is stored in `features` JSONB: `flowEarly`, `flowAtEntry`,
+`flowSupportEarly` / `flowSupportAtEntry`, `gexNetAtLevel`, `gexSignAtLevel`,
+`gexNetAtSpot`. Enrichment is best-effort (missing QD key → `qdOk:false`).
+Re-backfill with `node server/frontierVolumeBackfill.js` after schema/version
+changes. Exit asymmetry research: `node server/frontierVolumeExitSearch.js`.
+
 **Audit layers (do not mix):** Official Day P&L = playbook +20%/−12.5% on
 counted in-hours fires. Frontier Day P&L = PUT pts≥12 first-touch selection
 with runner/−50% exits on the same option bars. Volume Day P&L = VOLUME lane
