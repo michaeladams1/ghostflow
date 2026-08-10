@@ -9,6 +9,9 @@
 // LIVE EXECUTION: permanently disabled. LIVE_EXEC_SLEEVES stays Frontier+Volume.
 // Day calendar re-sims do not call this; use frontierGammaBackfill.js.
 
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { paperDeployed, paperPnl } from "./scanLib.js";
 import { fetchEndpointCached } from "./quantDataClient.js";
 import { QD_ENDPOINTS } from "./quantDataRegistry.js";
@@ -24,14 +27,19 @@ export const GAMMA_MAX_PER_DAY = 2;
 export const GAMMA_MIN_DTE = 0;
 export const GAMMA_MAX_DTE = 5; // "a few days out" — not locked to 0DTE
 export const GAMMA_MONEYNESS = 0.03;
-export const GAMMA_MAX_ENTRY = 1.25; // premium price proxy (Alpaca last/trade)
+export const GAMMA_MAX_ENTRY = 1.25; // premium price proxy (ask/last)
 /** Hard off — do not flip without a separate live-paper allowlist PR. */
 export const GAMMA_LIVE_ENABLED = false;
-export const GAMMA_VERSION = "flow_shortgex_dte0to5_mny3_px125_rth__tp30_sl15_1k_max2";
+export const GAMMA_VERSION = "flow_pages_shortgex_dte0to5_mny3_px125_rth__tp30_sl15_1k_max2";
+/** Cap pages so a single day cannot burn the QD rate budget. ~50 rows/page. */
+export const GAMMA_FLOW_MAX_PAGES = Number(process.env.GAMMA_FLOW_MAX_PAGES || 120);
 
-const flowEp = QD_ENDPOINTS.find((e) => e.id === "order_flow_consolidated");
 const gexEp = QD_ENDPOINTS.find((e) => e.id === "exposure_by_strike_gamma");
 const priceEp = QD_ENDPOINTS.find((e) => e.id === "stock_price_over_time");
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const FLOW_CACHE_DIR = path.join(__dirname, "data", "gamma-flow");
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function minToClock(min) {
   const h24 = Math.floor(min / 60);
@@ -65,7 +73,108 @@ function dteDays(sessionDate, expirationDate) {
 }
 
 function rowsOf(result) {
-  return Object.entries(result?.data?.data || {});
+  const raw = result?.data?.data;
+  if (Array.isArray(raw)) return raw.map((row, i) => [String(i), row]);
+  if (raw && typeof raw === "object") return Object.entries(raw);
+  // Paginated helper stores rows at result.data.rows
+  if (Array.isArray(result?.data?.rows)) {
+    return result.data.rows.map((row, i) => [String(i), row]);
+  }
+  return [];
+}
+
+/**
+ * Quant Data consolidated flow is newest-first and paginated via
+ * nextSearchAfter. A single page is almost always post-close — useless for
+ * RTH signals. Walk pages until we cover windowStart or hit the page cap.
+ */
+export async function fetchPaginatedConsolidatedFlow({
+  ticker = "SPY", sessionDate, maxPages = GAMMA_FLOW_MAX_PAGES,
+  windowStart = GAMMA_WINDOW_START_MIN,
+} = {}) {
+  if (!process.env.QUANTDATA_API_KEY) {
+    return { ok: false, status: "NO_KEY", error: "QUANTDATA_API_KEY missing", data: null };
+  }
+  fs.mkdirSync(FLOW_CACHE_DIR, { recursive: true });
+  const cacheFile = path.join(FLOW_CACHE_DIR, `${ticker}_${sessionDate}.json`);
+  if (fs.existsSync(cacheFile)) {
+    try {
+      const cached = JSON.parse(fs.readFileSync(cacheFile, "utf8"));
+      if (cached?.ok && Array.isArray(cached?.data?.rows)) return cached;
+    } catch { /* refetch */ }
+  }
+
+  const rows = [];
+  const seen = new Set();
+  let searchAfter = null;
+  let pages = 0;
+  let oldestMin = Infinity;
+
+  while (pages < maxPages) {
+    const body = { filter: { ticker }, sessionDate, pageSize: 100 };
+    if (searchAfter) body.searchAfter = searchAfter;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 25000);
+    let json;
+    try {
+      const res = await fetch("https://api.quantdata.us/v1/options/tool/order-flow/consolidated", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.QUANTDATA_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+      const text = await res.text();
+      if (res.status === 429) {
+        await sleep(2000 * (pages % 3 + 1));
+        continue;
+      }
+      if (!res.ok) {
+        return {
+          ok: false, status: res.status, error: text.slice(0, 300),
+          data: { rows, pages },
+        };
+      }
+      json = JSON.parse(text);
+    } catch (err) {
+      clearTimeout(timer);
+      if (rows.length) break;
+      return { ok: false, status: "NETWORK_ERROR", error: err.message, data: null };
+    }
+
+    const batch = Array.isArray(json.data) ? json.data : Object.values(json.data || {});
+    if (!batch.length) break;
+    pages += 1;
+    for (const row of batch) {
+      const id = row.id || `${row.tradeTime}|${row.strikePrice}|${row.premium}|${row.contractType}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      rows.push(row);
+      const p = nyParts(row.tradeTime ?? row.timestamp);
+      if (p) oldestMin = Math.min(oldestMin, p.minutes);
+    }
+    const next = json.nextSearchAfter;
+    if (!next || next === searchAfter) break;
+    searchAfter = next;
+    // Newest-first: once the oldest row on this walk is at/before RTH open, stop.
+    if (Number.isFinite(oldestMin) && oldestMin <= windowStart) break;
+    await sleep(80);
+  }
+
+  const result = {
+    ok: true,
+    status: 200,
+    error: null,
+    data: { rows, pages, oldestMin: Number.isFinite(oldestMin) ? oldestMin : null },
+  };
+  try { fs.writeFileSync(cacheFile, JSON.stringify(result)); } catch { /* ignore */ }
+  console.log(
+    `[gamma] flow pages=${pages} rows=${rows.length} oldestMin=${result.data.oldestMin} date=${sessionDate}`,
+  );
+  return result;
 }
 
 /** Spot series: [{ min, close }] regular hours. */
@@ -132,6 +241,9 @@ export function parseFlowPrints(flowResult, sessionDate) {
     if (!p) continue;
     // Keep prints dated on the session (ignore overnight junk).
     if (p.dateStr !== sessionDate) continue;
+    const ask = Number(row.askPrice);
+    const optPx = Number(row.optionPrice);
+    const px = ask > 0 ? ask : (optPx > 0 ? optPx : null);
     out.push({
       etMinute: p.minutes,
       ts: Number(row.tradeTime ?? row.timestamp) || null,
@@ -139,6 +251,7 @@ export function parseFlowPrints(flowResult, sessionDate) {
       expiration: String(row.expirationDate),
       direction: dir,
       premium,
+      askPrice: px,
       tradeSide: row.tradeSide || row.tradeSideCode || null,
       sentimentType: row.sentimentType || null,
     });
@@ -172,9 +285,11 @@ export function detectGammaFires({
   const seen = new Set(); // one fire per contract/day (first qualifying print)
   for (const pr of prints) {
     if (pr.etMinute < windowStart || pr.etMinute >= windowEnd) continue;
+    // Prefer QD ask/option price when present — avoids simulating fat contracts.
+    if (pr.askPrice != null && pr.askPrice > GAMMA_MAX_ENTRY) continue;
     const dte = dteDays(sessionDate, pr.expiration);
     if (dte == null || dte < minDte || dte > maxDte) continue;
-    const spot = spotAt(spots, pr.etMinute);
+    const spot = spotAt(spots, pr.etMinute) ?? Number(pr.spot);
     if (!(spot > 0)) continue;
     if (Math.abs(pr.strike / spot - 1) > moneyness) continue;
     const g = gex.get(pr.expiration);
@@ -257,13 +372,18 @@ export async function buildGammaFires({ sessionDate, ticker = "SPY" } = {}) {
     console.log(`[gamma] skipped: no QUANTDATA_API_KEY date=${sessionDate}`);
     return [];
   }
-  if (!flowEp || !gexEp || !priceEp) return [];
+  if (!gexEp || !priceEp) return [];
   const [flowResult, gexResult, priceResult] = await Promise.all([
-    fetchEndpointCached(flowEp, { ticker, sessionDate }),
+    fetchPaginatedConsolidatedFlow({ ticker, sessionDate }),
     fetchEndpointCached(gexEp, { ticker, sessionDate }),
     fetchEndpointCached(priceEp, { ticker, sessionDate }),
   ]);
+  if (!flowResult.ok) {
+    console.warn(`[gamma] flow fetch failed date=${sessionDate}: ${flowResult.error || flowResult.status}`);
+    return [];
+  }
   const hits = detectGammaFires({ sessionDate, flowResult, gexResult, priceResult });
+  console.log(`[gamma] hits=${hits.length} date=${sessionDate} flowRows=${flowResult.data?.rows?.length || 0}`);
   return firesFromGammaCandidates(hits, { sessionDate });
 }
 
