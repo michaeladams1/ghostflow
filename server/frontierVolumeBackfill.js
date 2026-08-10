@@ -5,15 +5,23 @@
 // Env: VOLUME_BACKFILL_MAX_DATES (default 120), VOLUME_BACKFILL_CODE_VERSION
 // Completion: [frontier-volume-backfill] complete
 
-import pg from "pg";
-import { fetchAlpacaBars } from "./alpacaClient.js";
-import { buildVolumeFires, summarizeVolumeFires, volumePaperPnl, VOLUME_LANE } from "./frontierVolume.js";
-import { simulateAllFires } from "./zeroDTEOptionSim.js";
-import { saveVolumeTrades } from "./zeroDTEStore.js";
-import { sessionRthBars } from "./scanLib.js";
-import fs from "node:fs";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+// Prefer the public Railway URL locally (internal hostname won't resolve).
+if (process.env.DATABASE_PUBLIC_URL
+  && (!process.env.DATABASE_URL || /railway\.internal/.test(process.env.DATABASE_URL))) {
+  process.env.DATABASE_URL = process.env.DATABASE_PUBLIC_URL;
+}
+
+const pg = (await import("pg")).default;
+const fs = await import("node:fs");
+const path = await import("node:path");
+const { fileURLToPath } = await import("node:url");
+const { fetchAlpacaBars } = await import("./alpacaClient.js");
+const {
+  buildVolumeFires, summarizeVolumeFires, volumePaperPnl, VOLUME_LANE,
+} = await import("./frontierVolume.js");
+const { simulateAllFires } = await import("./zeroDTEOptionSim.js");
+const { saveVolumeTrades } = await import("./zeroDTEStore.js");
+const { sessionRthBars } = await import("./scanLib.js");
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CACHE = path.join(__dirname, "data", "frontier-volume", "spy-cache");
