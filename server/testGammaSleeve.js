@@ -16,9 +16,10 @@ assert.equal(GAMMA_LANE, "GAMMA");
 assert.equal(GAMMA_LIVE_ENABLED, false);
 assert.equal(GAMMA_MAX_DTE, 5);
 assert.equal(GAMMA_MAX_ENTRY, 1.25);
-assert.match(GAMMA_VERSION, /dte0to5/);
+assert.match(GAMMA_VERSION, /flow_pages/);
 assertGammaNotLive();
-assert.deepEqual(await buildGammaFires({ sessionDate: "2026-08-10" }), []);
+// Without a sessionDate the async builder is a no-op (does not hit vendors).
+assert.deepEqual(await buildGammaFires({}), []);
 
 // --- Live allowlist unchanged ---
 assert.deepEqual([...LIVE_EXEC_SLEEVES], [LIVE_SLEEVE_FRONTIER, LIVE_SLEEVE_VOLUME]);

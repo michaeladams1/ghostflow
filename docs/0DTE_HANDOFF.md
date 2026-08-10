@@ -402,7 +402,9 @@ Recipe v1 (`GAMMA_VERSION` in `frontierGamma.js`): SPY **CALL or PUT**, **DTE
 0–5**, strike within **±3%** of spot, **short-gamma expiry** (net GEX `< 0`
 from Quant Data `exposure_by_strike_gamma`), trigger = consolidated **order
 flow** print anytime in **regular hours (9:30–16:00 ET)** — no playbook
-9:45–11:15 lock, entry premium **≤ $1.25** (Alpaca last),
+9:45–11:15 lock. Flow is **paginated** via Quant Data `nextSearchAfter`
+(single page is post-close only — insufficient). Entry premium **≤ $1.25**
+(QD ask when present, else Alpaca last),
 **$1k** paper, exits **+30% / −15%** (flat by close), **max 2/day** (highest
 premium). Refine by kicking out bad trades after the book exists. Historic path:
 `buildGammaFires` → Alpaca option-bar sim → `frontierGammaBackfill.js`
