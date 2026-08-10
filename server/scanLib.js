@@ -74,6 +74,7 @@ export function detectVolumeScanFires({
   rthBars, sessionDate, pdh, pdl,
   enableOrbFail = true, enableOrbHold = true, enableVwapReclaim = true, enableWeeklyDrive = true,
   vwapStreakMin = 3,
+  orbHoldConfirmBars = 3,
 } = {}) {
   if (!rthBars?.length) return [];
   const bars = attachVwap(rthBars);
@@ -134,8 +135,10 @@ export function detectVolumeScanFires({
       });
     }
 
-    // ORB hold / continuation: 3 closes outside ORB before 11:00.
-    if (enableOrbHold && !orbHoldCall && holdUp >= 3 && orbHigh != null && minutes <= 660) {
+    // ORB hold / continuation: N closes outside ORB before 11:00.
+    // Default 3; the live VOLUME lane uses 1 (enter on the first close
+    // outside the range — waiting 3 bars bought the top of the spike).
+    if (enableOrbHold && !orbHoldCall && holdUp >= orbHoldConfirmBars && orbHigh != null && minutes <= 660) {
       orbHoldCall = true;
       fires.push({
         scan: "ORB_HOLD",
@@ -149,7 +152,7 @@ export function detectVolumeScanFires({
         sessionDate,
       });
     }
-    if (enableOrbHold && !orbHoldPut && holdDn >= 3 && orbLow != null && minutes <= 660) {
+    if (enableOrbHold && !orbHoldPut && holdDn >= orbHoldConfirmBars && orbLow != null && minutes <= 660) {
       orbHoldPut = true;
       fires.push({
         scan: "ORB_HOLD",
