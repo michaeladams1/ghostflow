@@ -27,6 +27,12 @@ export const pool = new Pool({
   ssl: isLocal ? false : { rejectUnauthorized: false },
 });
 
+// Idle clients can drop (Railway proxy, long backfills). Without this handler
+// node treats the pool 'error' event as uncaught and kills the process.
+pool.on("error", (err) => {
+  console.warn(`[db] pool client error (idle): ${err.message}`);
+});
+
 let schemaReady = null;
 export function ensureSchema() {
   if (!schemaReady) {

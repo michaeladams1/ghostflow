@@ -5,6 +5,8 @@
 // Env:
 //   GAMMA_BACKFILL_CODE_VERSION  (default: widest calendar version helper below)
 //   GAMMA_BACKFILL_MAX_DATES     (default 60)
+//   GAMMA_BACKFILL_MIN_DATE      (optional YYYY-MM-DD — skip earlier calendar days)
+//   GAMMA_BACKFILL_SKIP_EXISTING (1 = skip days that already have GAMMA trade rows)
 // Completion marker: [frontier-gamma-backfill] complete
 
 if (process.env.DATABASE_PUBLIC_URL
@@ -23,6 +25,8 @@ const { saveGammaTrades, saveGammaFeatures } = await import("./zeroDTEGammaStore
 const MAX = Number(process.env.GAMMA_BACKFILL_MAX_DATES || 60);
 const SLEEP = Number(process.env.GAMMA_SLEEP_MS || 150);
 const CODE_VERSION = process.env.GAMMA_BACKFILL_CODE_VERSION || null;
+const MIN_DATE = process.env.GAMMA_BACKFILL_MIN_DATE || null;
+const SKIP_EXISTING = /^(1|true|yes)$/i.test(String(process.env.GAMMA_BACKFILL_SKIP_EXISTING || ""));
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 function dbUrl() { return process.env.DATABASE_PUBLIC_URL || process.env.DATABASE_URL; }
@@ -56,19 +60,44 @@ async function main() {
     connectionString: url,
     ssl: /localhost|127\.0\.0\.1/.test(url) ? false : { rejectUnauthorized: false },
   });
+  client.on("error", (err) => {
+    console.warn(`[frontier-gamma-backfill] list-client error: ${err.message}`);
+  });
   await client.connect();
   const codeVersion = await resolveCodeVersion(client);
-  const { rows } = await client.query(
-    `SELECT DISTINCT session_date FROM zerodte_trades
-     WHERE symbol='SPY' AND code_version=$1
-     ORDER BY session_date DESC
-     LIMIT $2`,
-    [codeVersion, MAX],
-  );
+  const params = [codeVersion];
+  let dateSql = `SELECT DISTINCT session_date FROM zerodte_trades
+     WHERE symbol='SPY' AND code_version=$1`;
+  if (MIN_DATE) {
+    params.push(MIN_DATE);
+    dateSql += ` AND session_date >= $${params.length}`;
+  }
+  dateSql += ` ORDER BY session_date DESC LIMIT $${params.length + 1}`;
+  params.push(MAX);
+  const { rows } = await client.query(dateSql, params);
+
+  let existing = new Set();
+  if (SKIP_EXISTING) {
+    const existParams = [codeVersion];
+    let existSql = `SELECT DISTINCT session_date::text AS d FROM zerodte_trades
+      WHERE symbol='SPY' AND code_version=$1 AND lane=$2`;
+    existParams.push(GAMMA_LANE);
+    if (MIN_DATE) {
+      existParams.push(MIN_DATE);
+      existSql += ` AND session_date >= $${existParams.length}`;
+    }
+    const { rows: have } = await client.query(existSql, existParams);
+    existing = new Set(have.map((r) => r.d));
+  }
   await client.end();
-  const dates = rows.map((r) => r.session_date).reverse();
+
+  const dates = rows
+    .map((r) => String(r.session_date).slice(0, 10))
+    .reverse()
+    .filter((d) => !existing.has(d));
   console.log(
     `[frontier-gamma-backfill] code_version=${codeVersion} dates=${dates.length} `
+    + `skipped_existing=${existing.size} min_date=${MIN_DATE || "-"} `
     + `lane=${GAMMA_LANE} method=${GAMMA_VERSION}`,
   );
 
