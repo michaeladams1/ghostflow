@@ -133,19 +133,25 @@ export async function coveredSessions({ symbol = "SPY" } = {}) {
 // Rebuild the calendar's compact day summaries from persisted trade rows.
 // Pick the production code version with the widest session coverage; a new
 // partial rerun must not replace a completed 24-month calendar halfway through.
-// Ties go to the most recently written version.
+// When session counts tie, prefer the version with the richest sleeve coverage
+// (Volume + Frontier columns + Gamma) so a research-lane backfill cannot hide
+// live-paper sleeves that live on an equally-wide older version. Recency is
+// the final tie-break only.
 export async function loadSavedCalendarDays({ symbol = "SPY", year, month }) {
   await ensureSchema();
   const versionResult = await pool.query(
     `SELECT code_version, COUNT(DISTINCT session_date)::int AS sessions,
-            MAX(created_at) AS latest
+            MAX(created_at) AS latest,
+            (COUNT(*) FILTER (WHERE lane = 'VOLUME')
+              + COUNT(*) FILTER (WHERE frontier_pnl IS NOT NULL)
+              + COUNT(*) FILTER (WHERE lane = 'GAMMA'))::int AS sleeve_weight
      FROM zerodte_trades
      WHERE symbol = $1
        AND (environment = 'production' OR NOT EXISTS (
          SELECT 1 FROM zerodte_trades p WHERE p.symbol = $1 AND p.environment = 'production'
        ))
      GROUP BY code_version
-     ORDER BY sessions DESC, latest DESC
+     ORDER BY sessions DESC, sleeve_weight DESC, latest DESC
      LIMIT 1`, [symbol]);
   const version = versionResult.rows[0];
   if (!version) return { codeVersion: null, sessionsCovered: 0, days: [] };
