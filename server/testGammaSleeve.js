@@ -1,7 +1,7 @@
 // Gamma sleeve — recipe detector + live-exec isolation.
 import assert from "node:assert/strict";
 import {
-  GAMMA_LANE, GAMMA_LIVE_ENABLED, GAMMA_MAX_DTE, GAMMA_MAX_ENTRY, GAMMA_VERSION,
+  GAMMA_LANE, GAMMA_LIVE_ENABLED, GAMMA_MIN_DTE, GAMMA_MAX_DTE, GAMMA_MAX_ENTRY, GAMMA_VERSION,
   assertGammaNotLive, buildGammaFires, detectGammaFires, firesFromGammaCandidates,
   gammaEntryAllowed, summarizeGammaFires,
 } from "./frontierGamma.js";
@@ -14,9 +14,10 @@ import { summarizeMonth } from "./zeroDTECalendar.js";
 
 assert.equal(GAMMA_LANE, "GAMMA");
 assert.equal(GAMMA_LIVE_ENABLED, false);
+assert.equal(GAMMA_MIN_DTE, 2);
 assert.equal(GAMMA_MAX_DTE, 5);
 assert.equal(GAMMA_MAX_ENTRY, 1.25);
-assert.match(GAMMA_VERSION, /flow_pages/);
+assert.match(GAMMA_VERSION, /dte2to5/);
 assertGammaNotLive();
 // Without a sessionDate the async builder is a no-op (does not hit vendors).
 assert.deepEqual(await buildGammaFires({}), []);
@@ -105,11 +106,13 @@ const flowResult = {
 };
 
 const hits = detectGammaFires({ sessionDate, flowResult, gexResult, priceResult });
-assert.ok(hits.length >= 1 && hits.length <= 2, `expected 1-2 hits, got ${hits.length}`);
-assert.ok(hits.every((h) => h.dte >= 0 && h.dte <= 5));
+assert.equal(hits.length, 1, `DTE≥2 should keep only the DTE2 CALL, got ${hits.length}`);
+assert.ok(hits.every((h) => h.dte >= GAMMA_MIN_DTE && h.dte <= GAMMA_MAX_DTE));
 assert.ok(hits.every((h) => h.etMinute >= 570 && h.etMinute < 960));
 assert.ok(!hits.some((h) => h.strike === 510), "positive gamma wall strike must be excluded");
-assert.ok(hits.some((h) => h.direction === "CALL") || hits.some((h) => h.direction === "PUT"));
+assert.ok(!hits.some((h) => h.strike === 498), "DTE 0 flow must be excluded");
+assert.equal(hits[0].direction, "CALL");
+assert.equal(hits[0].dte, 2);
 
 const fires = firesFromGammaCandidates(hits, { sessionDate });
 assert.equal(fires[0].lane, GAMMA_LANE);
