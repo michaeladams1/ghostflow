@@ -29,10 +29,17 @@ function dbUrl() { return process.env.DATABASE_PUBLIC_URL || process.env.DATABAS
 
 async function resolveCodeVersion(client) {
   if (CODE_VERSION) return CODE_VERSION;
+  // Same preference as loadSavedCalendarDays: widest coverage, then richest
+  // sleeves, so Gamma attaches to the calendar the UI actually shows.
   const { rows } = await client.query(
-    `SELECT code_version, COUNT(DISTINCT session_date)::int AS n
+    `SELECT code_version, COUNT(DISTINCT session_date)::int AS n,
+            (COUNT(*) FILTER (WHERE lane = 'VOLUME')
+              + COUNT(*) FILTER (WHERE frontier_pnl IS NOT NULL)
+              + COUNT(*) FILTER (WHERE lane = 'GAMMA'))::int AS sleeve_weight
      FROM zerodte_trades WHERE symbol='SPY'
-     GROUP BY code_version ORDER BY n DESC, code_version DESC LIMIT 1`,
+     GROUP BY code_version
+     ORDER BY n DESC, sleeve_weight DESC, code_version DESC
+     LIMIT 1`,
   );
   if (!rows.length) throw new Error("no zerodte_trades code_version to attach gamma onto");
   return rows[0].code_version;
