@@ -14,7 +14,7 @@ import {
   ResponsiveContainer, ComposedChart, Line, Bar, XAxis, YAxis, Tooltip,
   CartesianGrid, ReferenceDot, ReferenceLine, ReferenceArea, Legend,
 } from "recharts";
-import { CALENDAR_LANES, laneDay, buildLaneChartSeries, avgDailyDeployed, maxConcurrentDeployed } from "./calendarChartSeries.js";
+import { CALENDAR_LANES, laneDay, laneTotalsTrades, buildLaneChartSeries, avgDailyDeployed, maxConcurrentDeployed } from "./calendarChartSeries.js";
 
 const card = "bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800";
 const faint = "text-zinc-500 dark:text-zinc-500";
@@ -845,13 +845,9 @@ function DayBox({ dayNum, data, ghost, lane, onOpen }) {
 function MonthBox({ month, totals, lane, onOpen }) {
   const config = CALENDAR_LANES[lane];
   const pnl = Number(totals?.[config.pnlKey] ?? 0);
-  const tradeKey = config.tradesKey === "tradePnls" ? "totalTrades"
-    : config.tradesKey === "excludedTradePnls" ? "excludedTrades"
-    : config.tradesKey === "experimentalTradePnls" ? "experimentalTrades"
-    : config.tradesKey === "shenTradePnls" ? "shenTrades"
-    : config.tradesKey === "volumeTradePnls" ? "volumeTrades"
-    : "frontierTrades";
-  const trades = Number(totals?.[tradeKey] ?? 0);
+  // Must use the lane's own totals key — a fall-through to frontierTrades made
+  // Gamma year tiles show Frontier's trade count (e.g. July "1 trade" vs 33).
+  const trades = laneTotalsTrades(totals, lane);
   const traded = trades > 0;
   const pos = traded && pnl > 0, neg = traded && pnl < 0;
   const cls = pos ? "bg-emerald-100 dark:bg-emerald-950/50 border border-emerald-300 dark:border-emerald-800"
