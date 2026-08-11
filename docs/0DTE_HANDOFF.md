@@ -104,7 +104,7 @@ route — Michael already has a Databento account.
 ```
 server/
   alpacaClient.js      SPY SIP bars + option bars (occSymbol builds OCC symbols)
-  frontierGamma.js     GAMMA research sleeve (DTE 0–5 flow+short-GEX; never live)
+  frontierGamma.js     GAMMA research sleeve (DTE 2–5 flow+short-GEX; never live)
   frontierGammaBackfill.js  Lane-scoped historic backfill onto calendar code_version
   zeroDTEGammaStore.js GAMMA feature cache + lane-scoped trade upsert
   livePaperIds.js      LIVE_EXEC_SLEEVES allowlist (FRONTIER + VOLUME only)

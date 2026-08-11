@@ -1,7 +1,8 @@
 // GAMMA sleeve — paper-only research lane #3.
 //
-// Recipe v1 (historic, refine later):
-//   SPY · CALL or PUT · DTE 0–5 · strikes within ±3% of spot
+// Recipe v1.1 (historic, refine later):
+//   SPY · CALL or PUT · DTE 2–5 · strikes within ±3% of spot
+//   (DTE 0–1 cut: 24mo book was −$6k @ ~28% WR; DTE 2–5 was +$2.4k @ 37%)
 //   short-gamma regime (net GEX < 0 on that expiry) · flow-print trigger
 //   entry premium ≤ $1.25 · $1k paper · +30% / −15% · full RTH · max 2/day
 //   No playbook 9:45–11:15 lock — multi-DTE doesn't need that window.
@@ -24,13 +25,13 @@ export const GAMMA_HARD_STOP_MIN = 960; // flat by 16:00 ET (session end)
 export const GAMMA_WINDOW_START_MIN = 570; // 9:30 ET RTH open
 export const GAMMA_WINDOW_END_MIN = 960; // 16:00 ET — full regular session
 export const GAMMA_MAX_PER_DAY = 2;
-export const GAMMA_MIN_DTE = 0;
+export const GAMMA_MIN_DTE = 2; // ban 0–1 — see recipe note above
 export const GAMMA_MAX_DTE = 5; // "a few days out" — not locked to 0DTE
 export const GAMMA_MONEYNESS = 0.03;
 export const GAMMA_MAX_ENTRY = 1.25; // premium price proxy (ask/last)
 /** Hard off — do not flip without a separate live-paper allowlist PR. */
 export const GAMMA_LIVE_ENABLED = false;
-export const GAMMA_VERSION = "flow_pages_shortgex_dte0to5_mny3_px125_rth__tp30_sl15_1k_max2";
+export const GAMMA_VERSION = "flow_pages_shortgex_dte2to5_mny3_px125_rth__tp30_sl15_1k_max2";
 /** Cap pages so a single day cannot burn the QD rate budget. ~50 rows/page. */
 export const GAMMA_FLOW_MAX_PAGES = Number(process.env.GAMMA_FLOW_MAX_PAGES || 120);
 
