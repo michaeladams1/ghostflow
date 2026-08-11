@@ -398,8 +398,9 @@ widest calendar `code_version`) — **rerun the backfill after this recipe
 change so the stored calendar reflects the new fires**.
 
 **Gamma sleeve (paper lane `GAMMA`)** is the third research leg. **Never live.**
-Recipe v1 (`GAMMA_VERSION` in `frontierGamma.js`): SPY **CALL or PUT**, **DTE
-0–5**, strike within **±3%** of spot, **short-gamma expiry** (net GEX `< 0`
+Recipe v1.1 (`GAMMA_VERSION` in `frontierGamma.js`): SPY **CALL or PUT**, **DTE
+2–5** (0–1 cut after the 24mo book showed DTE0–1 ≈ −$6k / DTE2–5 ≈ +$2.4k),
+strike within **±3%** of spot, **short-gamma expiry** (net GEX `< 0`
 from Quant Data `exposure_by_strike_gamma`), trigger = consolidated **order
 flow** print anytime in **regular hours (9:30–16:00 ET)** — no playbook
 9:45–11:15 lock. Flow is **paginated** via Quant Data `nextSearchAfter`
