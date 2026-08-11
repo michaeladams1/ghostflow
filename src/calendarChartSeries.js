@@ -5,40 +5,54 @@
 export const CALENDAR_LANES = {
   official: {
     label: "Playbook hours", pnlKey: "pnl", tradesKey: "tradePnls",
+    totalsTradesKey: "totalTrades",
     deployedKey: "deployed", tradeDeployedsKey: "tradeDeployeds",
     intervalsKey: "tradeIntervals",
   },
   outside: {
     label: "Outside hours", pnlKey: "excludedPnl", tradesKey: "excludedTradePnls",
+    totalsTradesKey: "excludedTrades",
     deployedKey: "excludedDeployed", tradeDeployedsKey: "excludedTradeDeployeds",
     intervalsKey: "excludedTradeIntervals",
   },
   research: {
     label: "Research lanes", pnlKey: "experimentalPnl", tradesKey: "experimentalTradePnls",
+    totalsTradesKey: "experimentalTrades",
     deployedKey: "experimentalDeployed", tradeDeployedsKey: "experimentalTradeDeployeds",
     intervalsKey: "experimentalTradeIntervals",
   },
   shen: {
     label: "Shen conviction", pnlKey: "shenPnl", tradesKey: "shenTradePnls",
+    totalsTradesKey: "shenTrades",
     deployedKey: "shenDeployed", tradeDeployedsKey: "shenTradeDeployeds",
     intervalsKey: "shenTradeIntervals",
   },
   frontier: {
     label: "Frontier v7", pnlKey: "frontierPnl", tradesKey: "frontierTradePnls",
+    totalsTradesKey: "frontierTrades",
     deployedKey: "frontierDeployed", tradeDeployedsKey: "frontierTradeDeployeds",
     intervalsKey: "frontierTradeIntervals",
   },
   volume: {
     label: "Volume sleeve", pnlKey: "volumePnl", tradesKey: "volumeTradePnls",
+    totalsTradesKey: "volumeTrades",
     deployedKey: "volumeDeployed", tradeDeployedsKey: "volumeTradeDeployeds",
     intervalsKey: "volumeTradeIntervals",
   },
   gamma: {
     label: "Gamma sleeve", pnlKey: "gammaPnl", tradesKey: "gammaTradePnls",
+    totalsTradesKey: "gammaTrades",
     deployedKey: "gammaDeployed", tradeDeployedsKey: "gammaTradeDeployeds",
     intervalsKey: "gammaTradeIntervals",
   },
 };
+
+/** Month/year tile trade count from summarizeMonth totals for a lane. */
+export function laneTotalsTrades(totals, lane) {
+  const key = CALENDAR_LANES[lane]?.totalsTradesKey;
+  if (!key || !totals) return 0;
+  return Number(totals[key] ?? 0);
+}
 
 const MONTH_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];

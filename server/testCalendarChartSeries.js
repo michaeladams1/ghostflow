@@ -1,7 +1,7 @@
 // Calendar capital: avg daily (no $0 days) + max concurrent — never lifetime sum.
 import assert from "node:assert/strict";
 import {
-  avgDailyDeployed, buildLaneChartSeries, maxConcurrentDeployed,
+  avgDailyDeployed, buildLaneChartSeries, maxConcurrentDeployed, laneTotalsTrades,
 } from "../src/calendarChartSeries.js";
 import { summarizeMonth } from "./zeroDTECalendar.js";
 
@@ -82,5 +82,17 @@ const monthTotals = summarizeMonth({
 }).totals;
 assert.equal(monthTotals.volumeDeployed, 2000, "month cap = avg daily volume deployed");
 assert.equal(monthTotals.volumeMaxDeployed, 1000, "month max at once with sequential fills");
+
+// Year MonthBox must read gammaTrades — not fall through to frontierTrades.
+const mixedTotals = {
+  gammaPnl: 1341, gammaTrades: 33, gammaDeployed: 1768,
+  frontierPnl: 371, frontierTrades: 1, frontierDeployed: 945,
+  volumePnl: 909, volumeTrades: 36,
+  totalTrades: 10,
+};
+assert.equal(laneTotalsTrades(mixedTotals, "gamma"), 33, "gamma year tile uses gammaTrades");
+assert.equal(laneTotalsTrades(mixedTotals, "frontier"), 1, "frontier year tile uses frontierTrades");
+assert.equal(laneTotalsTrades(mixedTotals, "volume"), 36);
+assert.equal(laneTotalsTrades(mixedTotals, "official"), 10);
 
 console.log("testCalendarChartSeries: ok");
