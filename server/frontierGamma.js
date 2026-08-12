@@ -1,11 +1,11 @@
 // GAMMA sleeve — paper-only research lane #3.
 //
-// Recipe v1.1 (historic, refine later):
+// Recipe v1.2 (historic bakeoff — re-selection, not retrospective filters):
 //   SPY · CALL or PUT · DTE 2–5 · strikes within ±3% of spot
-//   (DTE 0–1 cut: 24mo book was −$6k @ ~28% WR; DTE 2–5 was +$2.4k @ 37%)
 //   short-gamma regime (net GEX < 0 on that expiry) · flow-print trigger
-//   entry premium ≤ $1.25 · $1k paper · +30% / −15% · full RTH · max 2/day
-//   No playbook 9:45–11:15 lock — multi-DTE doesn't need that window.
+//   window from 12:00 ET (morning re-picks hurt) · flow premium ≥ $30k
+//   entry $0.40–$1.25 · $1k paper · +30% / −15% · max 2/day
+//   Local eval on 484 sessions: stacked gates ≈ +$4k all / +$2.7k in 2026.
 //
 // LIVE EXECUTION: permanently disabled. LIVE_EXEC_SLEEVES stays Frontier+Volume.
 // Day calendar re-sims do not call this; use frontierGammaBackfill.js.
@@ -22,16 +22,18 @@ export const GAMMA_PAPER_DOLLARS = 1000;
 export const GAMMA_TP_MULT = 1.30;
 export const GAMMA_SL_MULT = 0.85;
 export const GAMMA_HARD_STOP_MIN = 960; // flat by 16:00 ET (session end)
-export const GAMMA_WINDOW_START_MIN = 570; // 9:30 ET RTH open
-export const GAMMA_WINDOW_END_MIN = 960; // 16:00 ET — full regular session
+export const GAMMA_WINDOW_START_MIN = 720; // 12:00 ET — morning re-selection lost money
+export const GAMMA_WINDOW_END_MIN = 960; // 16:00 ET
 export const GAMMA_MAX_PER_DAY = 2;
-export const GAMMA_MIN_DTE = 2; // ban 0–1 — see recipe note above
-export const GAMMA_MAX_DTE = 5; // "a few days out" — not locked to 0DTE
+export const GAMMA_MIN_DTE = 2; // ban 0–1
+export const GAMMA_MAX_DTE = 5;
 export const GAMMA_MONEYNESS = 0.03;
+export const GAMMA_MIN_ENTRY = 0.40; // junk sub-$0.40 underperform in bakeoff
 export const GAMMA_MAX_ENTRY = 1.25; // premium price proxy (ask/last)
+export const GAMMA_MIN_PREMIUM = 30_000; // QD flow premium / score floor
 /** Hard off — do not flip without a separate live-paper allowlist PR. */
 export const GAMMA_LIVE_ENABLED = false;
-export const GAMMA_VERSION = "flow_pages_shortgex_dte2to5_mny3_px125_rth__tp30_sl15_1k_max2";
+export const GAMMA_VERSION = "flow_pages_shortgex_dte2to5_mny3_px040_125_noon_prem30k__tp30_sl15_1k_max2";
 /** Cap pages so a single day cannot burn the QD rate budget. ~50 rows/page. */
 export const GAMMA_FLOW_MAX_PAGES = Number(process.env.GAMMA_FLOW_MAX_PAGES || 120);
 
@@ -275,6 +277,9 @@ export function detectGammaFires({
   moneyness = GAMMA_MONEYNESS,
   windowStart = GAMMA_WINDOW_START_MIN,
   windowEnd = GAMMA_WINDOW_END_MIN,
+  minPremium = GAMMA_MIN_PREMIUM,
+  minEntry = GAMMA_MIN_ENTRY,
+  maxEntry = GAMMA_MAX_ENTRY,
 } = {}) {
   if (!sessionDate) return [];
   const spots = parseSpotSeries(priceResult);
@@ -286,8 +291,11 @@ export function detectGammaFires({
   const seen = new Set(); // one fire per contract/day (first qualifying print)
   for (const pr of prints) {
     if (pr.etMinute < windowStart || pr.etMinute >= windowEnd) continue;
-    // Prefer QD ask/option price when present — avoids simulating fat contracts.
-    if (pr.askPrice != null && pr.askPrice > GAMMA_MAX_ENTRY) continue;
+    if (Number(pr.premium || 0) < minPremium) continue;
+    // Prefer QD ask/option price when present — avoids simulating fat/junk contracts.
+    if (pr.askPrice != null) {
+      if (pr.askPrice > maxEntry || pr.askPrice < minEntry) continue;
+    }
     const dte = dteDays(sessionDate, pr.expiration);
     if (dte == null || dte < minDte || dte > maxDte) continue;
     const spot = spotAt(spots, pr.etMinute) ?? Number(pr.spot);
@@ -316,7 +324,9 @@ export function detectGammaFires({
   }
 
   candidates.sort((a, b) => b.score - a.score || a.etMinute - b.etMinute);
-  return candidates.slice(0, Math.max(1, maxPerDay));
+  // Over-fetch so post-sim entry floor can still fill maxPerDay.
+  const budget = Math.max(1, maxPerDay) * 4;
+  return candidates.slice(0, budget);
 }
 
 /** Turn detector hits into simulateBracketTrade fire objects. */
@@ -348,6 +358,7 @@ export function firesFromGammaCandidates(candidates, { sessionDate } = {}) {
       skipFrontierWalk: true,
       maxPremiumDollars: GAMMA_PAPER_DOLLARS,
       maxEntryPrice: GAMMA_MAX_ENTRY,
+      minEntryPrice: GAMMA_MIN_ENTRY,
       touchNumber: 1,
       points: null,
       method: GAMMA_VERSION,
@@ -383,7 +394,10 @@ export async function buildGammaFires({ sessionDate, ticker = "SPY" } = {}) {
     console.warn(`[gamma] flow fetch failed date=${sessionDate}: ${flowResult.error || flowResult.status}`);
     return [];
   }
-  const hits = detectGammaFires({ sessionDate, flowResult, gexResult, priceResult });
+  const hits = detectGammaFires({
+    sessionDate, flowResult, gexResult, priceResult,
+    maxPerDay: GAMMA_MAX_PER_DAY,
+  });
   console.log(`[gamma] hits=${hits.length} date=${sessionDate} flowRows=${flowResult.data?.rows?.length || 0}`);
   return firesFromGammaCandidates(hits, { sessionDate });
 }
@@ -399,12 +413,18 @@ export function gammaDeployed(entry) {
 export function gammaEntryAllowed(entryPrice, dollars = GAMMA_PAPER_DOLLARS) {
   const entry = Number(entryPrice);
   return entry > 0
+    && entry >= GAMMA_MIN_ENTRY
     && entry <= GAMMA_MAX_ENTRY
     && entry * 100 <= dollars;
 }
 
-export function summarizeGammaFires(fires) {
-  const selected = (fires || []).filter((f) => f?.trade?.ok && gammaEntryAllowed(f.trade.entryPrice));
+export function summarizeGammaFires(fires, { maxPerDay = GAMMA_MAX_PER_DAY } = {}) {
+  const eligible = (fires || []).filter((f) => f?.trade?.ok && gammaEntryAllowed(f.trade.entryPrice));
+  const selected = eligible
+    .slice()
+    .sort((a, b) => (b.featuresExtra?.score || 0) - (a.featuresExtra?.score || 0)
+      || (a.etMinute || 0) - (b.etMinute || 0))
+    .slice(0, Math.max(0, maxPerDay));
   const tradePnls = selected.map((f) => gammaPaperPnl(f.trade.entryPrice, f.trade.exitPrice) ?? 0);
   const tradeDeployeds = selected.map((f) => gammaDeployed(f.trade.entryPrice) ?? 0);
   return {

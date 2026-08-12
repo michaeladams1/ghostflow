@@ -104,7 +104,7 @@ route — Michael already has a Databento account.
 ```
 server/
   alpacaClient.js      SPY SIP bars + option bars (occSymbol builds OCC symbols)
-  frontierGamma.js     GAMMA research sleeve (DTE 2–5 flow+short-GEX; never live)
+  frontierGamma.js     GAMMA research sleeve (DTE 2–5 noon+ prem≥$30k; never live)
   frontierGammaBackfill.js  Lane-scoped historic backfill onto calendar code_version
   zeroDTEGammaStore.js GAMMA feature cache + lane-scoped trade upsert
   livePaperIds.js      LIVE_EXEC_SLEEVES allowlist (FRONTIER + VOLUME only)
@@ -398,20 +398,18 @@ widest calendar `code_version`) — **rerun the backfill after this recipe
 change so the stored calendar reflects the new fires**.
 
 **Gamma sleeve (paper lane `GAMMA`)** is the third research leg. **Never live.**
-Recipe v1.1 (`GAMMA_VERSION` in `frontierGamma.js`): SPY **CALL or PUT**, **DTE
-2–5** (0–1 cut after the 24mo book showed DTE0–1 ≈ −$6k / DTE2–5 ≈ +$2.4k),
-strike within **±3%** of spot, **short-gamma expiry** (net GEX `< 0`
+Recipe v1.2 (`GAMMA_VERSION` in `frontierGamma.js`): SPY **CALL or PUT**, **DTE
+2–5**, strike within **±3%** of spot, **short-gamma expiry** (net GEX `< 0`
 from Quant Data `exposure_by_strike_gamma`), trigger = consolidated **order
-flow** print anytime in **regular hours (9:30–16:00 ET)** — no playbook
-9:45–11:15 lock. Flow is **paginated** via Quant Data `nextSearchAfter`
-(single page is post-close only — insufficient). Entry premium **≤ $1.25**
-(QD ask when present, else Alpaca last),
-**$1k** paper, exits **+30% / −15%** (flat by close), **max 2/day** (highest
-premium). Refine by kicking out bad trades after the book exists. Historic path:
-`buildGammaFires` → Alpaca option-bar sim → `frontierGammaBackfill.js`
-(lane-scoped). Feature cache `zerodte_gamma_features`. Day re-sims
-**preserve** `lane = GAMMA`. Not wired into live-paper or the hot
-`simulateDay` path — backfill only so Frontier/Volume exec is untouched.
+flow** with premium **≥ $30k** from **12:00–16:00 ET** (morning re-selection
+lost money in the 484-day bakeoff). Flow is **paginated** via Quant Data
+`nextSearchAfter`. Entry **$0.40–$1.25** (QD ask when present, else Alpaca
+last), **$1k** paper, exits **+30% / −15%** (flat by close), **max 2/day**
+(highest premium after gates). Historic path: `buildGammaFires` → Alpaca
+option-bar sim → `frontierGammaBackfill.js` (lane-scoped). Feature cache
+`zerodte_gamma_features`. Day re-sims **preserve** `lane = GAMMA`. Not wired
+into live-paper or the hot `simulateDay` path — backfill only so
+Frontier/Volume exec is untouched.
 
 **Audit layers (do not mix):** Official Day P&L = playbook +20%/−12.5% on
 counted in-hours fires. Frontier Day P&L = PUT pts≥12 first-touch selection
