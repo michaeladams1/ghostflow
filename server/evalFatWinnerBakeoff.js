@@ -140,8 +140,11 @@ async function fetchRthFlow({ ticker, sessionDate }) {
 const STRATEGY_IDS = [
   "FLOW_SPIKE_25",
   "FLOW_SPIKE_30",
+  "FLOW_SPIKE_50",
   "DRIFT_ALIGN_30",
   "NEG_GEX_FLOW_30",
+  "NEG_GEX_FLOW_50",
+  "NEG_GEX_CONFIRM_50",
   ...(SKIP_BLOCKS ? [] : ["BLOCK_FOLLOW_30"]),
 ];
 
@@ -305,6 +308,14 @@ function spotAt(rth, min) {
   return b ? Number(b.close) : null;
 }
 
+function priceConfirm(withVwap, etMinute, direction, lookAhead = 5, minMovePct = 0.12) {
+  const a = barAt(withVwap, etMinute);
+  const b = barAt(withVwap, etMinute + lookAhead);
+  if (!a || !b || !(a.close > 0)) return false;
+  const move = ((b.close - a.close) / a.close) * 100;
+  return direction === "CALL" ? move >= minMovePct : move <= -minMovePct;
+}
+
 /** Build at most one candidate fire per strategy for this ticker/day. */
 export function buildFatCandidates({ sessionDate, ticker, bars, feeds }) {
   const rth = sessionRthBars(bars, sessionDate);
@@ -353,7 +364,7 @@ export function buildFatCandidates({ sessionDate, ticker, bars, feeds }) {
     const spot = bar ? Number(bar.close) : null;
     if (spot > 0) {
       const level = direction === "CALL" ? Math.floor(spot) : Math.ceil(spot);
-      for (const [id, tp] of [["FLOW_SPIKE_25", 1.25], ["FLOW_SPIKE_30", 1.30]]) {
+      for (const [id, tp] of [["FLOW_SPIKE_25", 1.25], ["FLOW_SPIKE_30", 1.30], ["FLOW_SPIKE_50", 1.50]]) {
         out[id] = [fireBase(sessionDate, ticker, {
           etMinute: bestSpike.min,
           direction,
@@ -448,19 +459,42 @@ export function buildFatCandidates({ sessionDate, ticker, bars, feeds }) {
     const bar = barAt(withVwap, bestSpike.min);
     const spot = bar ? Number(bar.close) : null;
     if (spot > 0) {
-      out.NEG_GEX_FLOW_30 = [fireBase(sessionDate, ticker, {
-        etMinute: bestSpike.min,
-        direction,
-        level: direction === "CALL" ? Math.floor(spot) : Math.ceil(spot),
-        levelType: "SPOT",
-        scan: "NEG_GEX_FLOW_30",
-        tpMult: 1.30,
-        slMult: 0.85,
-        barTs: bar.ts,
-      })];
-      out.NEG_GEX_FLOW_30[0].featuresExtra = {
-        netGex, net: bestSpike.net, rangePct: exp.rangePct,
-      };
+      const level = direction === "CALL" ? Math.floor(spot) : Math.ceil(spot);
+      for (const [id, tp] of [["NEG_GEX_FLOW_30", 1.30], ["NEG_GEX_FLOW_50", 1.50]]) {
+        out[id] = [fireBase(sessionDate, ticker, {
+          etMinute: bestSpike.min,
+          direction,
+          level,
+          levelType: "SPOT",
+          scan: id,
+          tpMult: tp,
+          slMult: 0.85,
+          barTs: bar.ts,
+        })];
+        out[id][0].featuresExtra = {
+          netGex, net: bestSpike.net, rangePct: exp.rangePct,
+        };
+      }
+      // Delayed entry: wait 5 min for underlying to confirm flow direction.
+      if (priceConfirm(withVwap, bestSpike.min, direction)) {
+        const confBar = barAt(withVwap, bestSpike.min + 5);
+        const confSpot = confBar ? Number(confBar.close) : null;
+        if (confSpot > 0) {
+          out.NEG_GEX_CONFIRM_50 = [fireBase(sessionDate, ticker, {
+            etMinute: bestSpike.min + 5,
+            direction,
+            level: direction === "CALL" ? Math.floor(confSpot) : Math.ceil(confSpot),
+            levelType: "SPOT",
+            scan: "NEG_GEX_CONFIRM_50",
+            tpMult: 1.50,
+            slMult: 0.85,
+            barTs: confBar.ts,
+          })];
+          out.NEG_GEX_CONFIRM_50[0].featuresExtra = {
+            netGex, net: bestSpike.net, rangePct: exp.rangePct, confirmed: true,
+          };
+        }
+      }
     }
   }
 
