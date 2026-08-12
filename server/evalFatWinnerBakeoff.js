@@ -28,6 +28,7 @@ import { QD_ENDPOINTS } from "./quantDataRegistry.js";
 import { sessionRthBars, priorDayHl, attachVwap, paperPnl } from "./scanLib.js";
 import { simulateBracketTrade } from "./zeroDTEOptionSim.js";
 import { pickOtmStrike } from "./zeroDTE.js";
+import { parseGexByExpiry } from "./frontierGamma.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const OUT_DIR = path.join(__dirname, "data", "fat-winner-eval");
@@ -37,18 +38,103 @@ const TICKERS = (process.env.FAT_EVAL_TICKERS || "QQQ,SPY,NVDA")
   .split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
 const DOLLARS = 1000;
 const FAT_PCT = Number(process.env.FAT_EVAL_FAT_PCT || 25); // ≥25% = fat win
-const EXP_RANGE_PCT = Number(process.env.FAT_EVAL_EXP_RANGE || 0.35); // early range % of open
-const FLOW_SPIKE_USD = Number(process.env.FAT_EVAL_FLOW_SPIKE || 80_000);
-const BLOCK_MIN_USD = Number(process.env.FAT_EVAL_BLOCK_MIN || 75_000);
-const WINDOW_START = 585; // 9:45 ET
+const EXP_RANGE_PCT = Number(process.env.FAT_EVAL_EXP_RANGE || 0.50); // early range % of open
+const FLOW_SPIKE_USD = Number(process.env.FAT_EVAL_FLOW_SPIKE || 120_000);
+const BLOCK_MIN_USD = Number(process.env.FAT_EVAL_BLOCK_MIN || 100_000);
+const FLOW_MAX_PAGES = Number(process.env.FAT_EVAL_FLOW_PAGES || 120);
 const WINDOW_END = 840;   // 14:00 ET
 const ENTRY_AFTER_EXP = 600; // expansion measured through 10:00; fires after
 
 const netFlowEp = QD_ENDPOINTS.find((e) => e.id === "net_flow");
 const netDriftEp = QD_ENDPOINTS.find((e) => e.id === "net_drift");
-const flowEp = QD_ENDPOINTS.find((e) => e.id === "order_flow_consolidated");
 const gexEp = QD_ENDPOINTS.find((e) => e.id === "exposure_by_strike_gamma");
 const priceEp = QD_ENDPOINTS.find((e) => e.id === "stock_price_over_time");
+
+const FLOW_CACHE_DIR = path.join(OUT_DIR, "flow");
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Independent RTH flow walk (does not reuse Gamma disk caches that often stop at noon).
+ * Newest-first pagination until oldest row ≤ ENTRY_AFTER_EXP or page cap.
+ */
+async function fetchRthFlow({ ticker, sessionDate }) {
+  fs.mkdirSync(FLOW_CACHE_DIR, { recursive: true });
+  const cacheFile = path.join(FLOW_CACHE_DIR, `${ticker}_${sessionDate}_p${FLOW_MAX_PAGES}.json`);
+  if (fs.existsSync(cacheFile)) {
+    try {
+      const cached = JSON.parse(fs.readFileSync(cacheFile, "utf8"));
+      if (cached?.ok && Array.isArray(cached?.data?.rows)
+        && (cached.data.oldestMin == null || cached.data.oldestMin <= ENTRY_AFTER_EXP + 45)) {
+        return cached;
+      }
+    } catch { /* refetch */ }
+  }
+  if (!process.env.QUANTDATA_API_KEY) {
+    return { ok: false, data: { rows: [] } };
+  }
+
+  const rows = [];
+  const seen = new Set();
+  let searchAfter = null;
+  let pages = 0;
+  let oldestMin = Infinity;
+
+  while (pages < FLOW_MAX_PAGES) {
+    const body = { filter: { ticker }, sessionDate, pageSize: 100 };
+    if (searchAfter) body.searchAfter = searchAfter;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 25000);
+    let json;
+    try {
+      const res = await fetch("https://api.quantdata.us/v1/options/tool/order-flow/consolidated", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${process.env.QUANTDATA_API_KEY}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+      const text = await res.text();
+      if (res.status === 429) {
+        await sleep(2000 * (pages % 3 + 1));
+        continue;
+      }
+      if (!res.ok) break;
+      json = JSON.parse(text);
+    } catch {
+      clearTimeout(timer);
+      break;
+    }
+    const batch = Array.isArray(json.data) ? json.data : Object.values(json.data || {});
+    if (!batch.length) break;
+    pages += 1;
+    for (const row of batch) {
+      const id = row.id || `${row.tradeTime}|${row.strikePrice}|${row.premium}|${row.contractType}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      rows.push(row);
+      const min = etMin(row.tradeTime ?? row.timestamp);
+      if (Number.isFinite(min)) oldestMin = Math.min(oldestMin, min);
+    }
+    const next = json.nextSearchAfter;
+    if (!next || next === searchAfter) break;
+    searchAfter = next;
+    if (Number.isFinite(oldestMin) && oldestMin <= ENTRY_AFTER_EXP) break;
+    await sleep(60);
+  }
+
+  const result = {
+    ok: true,
+    data: { rows, pages, oldestMin: Number.isFinite(oldestMin) ? oldestMin : null },
+  };
+  try { fs.writeFileSync(cacheFile, JSON.stringify(result)); } catch { /* ignore */ }
+  if (pages > 0) {
+    console.log(`[fat-eval] flow ${ticker} ${sessionDate} pages=${pages} rows=${rows.length} oldest=${result.data.oldestMin}`);
+  }
+  return result;
+}
 
 const STRATEGY_IDS = [
   "FLOW_SPIKE_25",
@@ -138,27 +224,14 @@ function driftSeries(driftResult) {
     .sort((a, b) => a.min - b.min);
 }
 
-function parseNetGex(gexResult) {
-  const raw = gexResult?.data?.data;
-  if (!raw || typeof raw !== "object") return null;
+/** Net GEX for session 0DTE expiry if present, else sum across expiries. */
+function parseNetGex(gexResult, sessionDate) {
+  const byExp = parseGexByExpiry(gexResult);
+  if (!byExp.size) return null;
+  if (byExp.has(sessionDate)) return byExp.get(sessionDate).net;
   let net = 0;
-  let n = 0;
-  for (const byStrike of Object.values(raw)) {
-    if (!byStrike || typeof byStrike !== "object") continue;
-    for (const cell of Object.values(byStrike)) {
-      if (cell == null) continue;
-      if (typeof cell === "number") {
-        net += cell;
-        n += 1;
-      } else if (typeof cell === "object") {
-        const c = Number(cell.CALL ?? cell.call ?? 0);
-        const p = Number(cell.PUT ?? cell.put ?? 0);
-        net += c + p;
-        n += 1;
-      }
-    }
-  }
-  return n ? net : null;
+  for (const v of byExp.values()) net += v.net;
+  return net;
 }
 
 function earlyExpansion({ rth, open }) {
@@ -243,15 +316,20 @@ export function buildFatCandidates({ sessionDate, ticker, bars, feeds }) {
 
   const flow = netFlowSeries(feeds.net_flow);
   const drift = driftSeries(feeds.net_drift);
-  const netGex = parseNetGex(feeds.gex);
-  const blocks = rowsOf(feeds.order_flow)
-    .map(([, row]) => {
+  const netGex = parseNetGex(feeds.gex, sessionDate);
+  // Paginated flow stores rows at data.rows; single-page cache uses data.data.
+  const rawBlocks = Array.isArray(feeds.order_flow?.data?.rows)
+    ? feeds.order_flow.data.rows
+    : rowsOf(feeds.order_flow).map(([, row]) => row);
+  const blocks = rawBlocks
+    .map((row) => {
       const ts = row?.tradeTime ?? row?.timestamp;
       const min = ts != null ? etMin(ts) : null;
+      const type = String(row?.contractType || "").toUpperCase();
       return {
         min,
         premium: Number(row?.premium || 0),
-        type: String(row?.contractType || "").toUpperCase(),
+        type: type.startsWith("P") ? "PUT" : (type.startsWith("C") ? "CALL" : type),
         strike: Number(row?.strikePrice),
         expiration: row?.expirationDate ? String(row.expirationDate).slice(0, 10) : null,
         sentiment: String(row?.sentimentType || ""),
@@ -290,42 +368,41 @@ export function buildFatCandidates({ sessionDate, ticker, bars, feeds }) {
     }
   }
 
-  // --- BLOCK_FOLLOW: largest aggressive same-session block, prefer 0DTE ---
+  // --- BLOCK_FOLLOW: largest RTH block → always trade SAME-DAY 0DTE in that direction ---
   let bestBlock = null;
   for (const b of blocks) {
     if (b.min < ENTRY_AFTER_EXP || b.min > WINDOW_END) continue;
     if (b.premium < BLOCK_MIN_USD) continue;
-    if (b.sentiment && !/BULL|BEAR|NEUTRAL/i.test(b.sentiment)) continue;
     const is0 = b.expiration === sessionDate;
-    const score = b.premium * (is0 ? 1.5 : 1);
+    const score = b.premium * (is0 ? 1.4 : 1);
     if (!bestBlock || score > bestBlock.score) {
       bestBlock = { ...b, score, is0 };
     }
   }
-  if (bestBlock && bestBlock.strike > 0) {
+  if (bestBlock) {
     const direction = bestBlock.type;
-    const useStrike = bestBlock.is0;
     const bar = barAt(withVwap, bestBlock.min);
     const spot = bar ? Number(bar.close) : null;
-    const level = spot > 0
-      ? (direction === "CALL" ? Math.floor(spot) : Math.ceil(spot))
-      : bestBlock.strike;
-    out.BLOCK_FOLLOW_30 = [fireBase(sessionDate, ticker, {
-      etMinute: bestBlock.min,
-      direction,
-      level,
-      levelType: useStrike ? "FLOW" : "SPOT",
-      scan: "BLOCK_FOLLOW_30",
-      tpMult: 1.30,
-      slMult: 0.85,
-      strike: useStrike ? bestBlock.strike : null,
-      useFireStrike: useStrike,
-      barTs: bar?.ts,
-    })];
-    if (useStrike) out.BLOCK_FOLLOW_30[0].expiration = bestBlock.expiration;
-    out.BLOCK_FOLLOW_30[0].featuresExtra = {
-      premium: bestBlock.premium, is0: bestBlock.is0, rangePct: exp.rangePct,
-    };
+    if (spot > 0) {
+      // Prefer the printed 0DTE strike when available; else 1-OTM from spot.
+      const useStrike = bestBlock.is0 && bestBlock.strike > 0;
+      const level = direction === "CALL" ? Math.floor(spot) : Math.ceil(spot);
+      out.BLOCK_FOLLOW_30 = [fireBase(sessionDate, ticker, {
+        etMinute: bestBlock.min,
+        direction,
+        level,
+        levelType: useStrike ? "FLOW" : "SPOT",
+        scan: "BLOCK_FOLLOW_30",
+        tpMult: 1.30,
+        slMult: 0.85,
+        strike: useStrike ? bestBlock.strike : null,
+        useFireStrike: useStrike,
+        barTs: bar.ts,
+      })];
+      out.BLOCK_FOLLOW_30[0].featuresExtra = {
+        premium: bestBlock.premium, is0: bestBlock.is0, rangePct: exp.rangePct,
+      };
+    }
   }
 
   // --- DRIFT_ALIGN: same-minute net_drift + net_flow same sign ---
@@ -389,15 +466,21 @@ export function buildFatCandidates({ sessionDate, ticker, bars, feeds }) {
   return out;
 }
 
-async function loadFeeds(ticker, sessionDate) {
-  const [net_flow, net_drift, order_flow, gex, price] = await Promise.all([
+async function loadCheapFeeds(ticker, sessionDate) {
+  const [net_flow, net_drift, gex, price] = await Promise.all([
     fetchEndpointCached(netFlowEp, { ticker, sessionDate }),
     fetchEndpointCached(netDriftEp, { ticker, sessionDate }),
-    fetchEndpointCached(flowEp, { ticker, sessionDate }),
     fetchEndpointCached(gexEp, { ticker, sessionDate }),
     fetchEndpointCached(priceEp, { ticker, sessionDate }),
   ]);
-  return { net_flow, net_drift, order_flow, gex, price };
+  return { net_flow, net_drift, gex, price, order_flow: { ok: true, data: { rows: [] } } };
+}
+
+async function loadFeeds(ticker, sessionDate, { needBlocks = true } = {}) {
+  const cheap = await loadCheapFeeds(ticker, sessionDate);
+  if (!needBlocks) return cheap;
+  const order_flow = await fetchRthFlow({ ticker, sessionDate });
+  return { ...cheap, order_flow };
 }
 
 async function simulateLong(sessionDate, fire) {
@@ -484,9 +567,15 @@ async function main() {
         console.warn(`\n[fat-eval] bars fail ${ticker} ${sessionDate}: ${err.message}`);
         continue;
       }
+      // Skip QD spend on quiet days (expansion filter on underlying only).
+      const rthPre = sessionRthBars(bars, sessionDate);
+      const openPre = rthPre[0]?.open ?? rthPre[0]?.close;
+      const expPre = earlyExpansion({ rth: rthPre, open: openPre });
+      if (!expPre.ok) continue;
+
       let feeds;
       try {
-        feeds = await loadFeeds(ticker, sessionDate);
+        feeds = await loadFeeds(ticker, sessionDate, { needBlocks: true });
       } catch (err) {
         console.warn(`\n[fat-eval] QD fail ${ticker} ${sessionDate}: ${err.message}`);
         continue;
