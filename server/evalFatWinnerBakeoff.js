@@ -42,6 +42,7 @@ const EXP_RANGE_PCT = Number(process.env.FAT_EVAL_EXP_RANGE || 0.50); // early r
 const FLOW_SPIKE_USD = Number(process.env.FAT_EVAL_FLOW_SPIKE || 120_000);
 const BLOCK_MIN_USD = Number(process.env.FAT_EVAL_BLOCK_MIN || 100_000);
 const FLOW_MAX_PAGES = Number(process.env.FAT_EVAL_FLOW_PAGES || 120);
+const SKIP_BLOCKS = process.env.FAT_EVAL_SKIP_BLOCKS === "1";
 const WINDOW_END = 840;   // 14:00 ET
 const ENTRY_AFTER_EXP = 600; // expansion measured through 10:00; fires after
 
@@ -139,9 +140,9 @@ async function fetchRthFlow({ ticker, sessionDate }) {
 const STRATEGY_IDS = [
   "FLOW_SPIKE_25",
   "FLOW_SPIKE_30",
-  "BLOCK_FOLLOW_30",
   "DRIFT_ALIGN_30",
   "NEG_GEX_FLOW_30",
+  ...(SKIP_BLOCKS ? [] : ["BLOCK_FOLLOW_30"]),
 ];
 
 function etMin(ts) {
@@ -575,7 +576,7 @@ async function main() {
 
       let feeds;
       try {
-        feeds = await loadFeeds(ticker, sessionDate, { needBlocks: true });
+        feeds = await loadFeeds(ticker, sessionDate, { needBlocks: !SKIP_BLOCKS });
       } catch (err) {
         console.warn(`\n[fat-eval] QD fail ${ticker} ${sessionDate}: ${err.message}`);
         continue;
